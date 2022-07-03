@@ -26,6 +26,8 @@
               nixpkgs-fmt
 
               # Rust env
+              openssl.dev
+              pkgconfig
               (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
               cargo-watch
               rust-analyzer
