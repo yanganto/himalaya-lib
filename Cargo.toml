@@ -8,10 +8,10 @@ license-file = "COPYING"
 readme = "README.md"
 
 [features]
+default = []
 imap-backend = ["imap", "imap-proto"]
 maildir-backend = ["maildir", "md5"]
 notmuch-backend = ["notmuch", "maildir-backend"]
-default = ["imap-backend", "maildir-backend", "notmuch-backend"]
 
 [dependencies]
 ammonia = "3.1.2"
