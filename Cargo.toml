@@ -7,7 +7,7 @@ edition = "2021"
 license-file = "COPYING"
 
 [features]
-default = []
+default = ["imap-backend"]
 imap-backend = ["imap", "imap-proto"]
 maildir-backend = ["maildir", "md5"]
 notmuch-backend = ["notmuch", "maildir-backend"]

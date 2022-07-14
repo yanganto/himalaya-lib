@@ -19,16 +19,13 @@
 //! This module contains the representation of the user account.
 
 use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
-use log::{debug, info, trace};
 use mailparse::MailAddr;
 use serde::Deserialize;
 use shellexpand;
-use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf};
+use std::{collections::HashMap, env, ffi::OsStr, path::PathBuf};
 use thiserror::Error;
 
 use crate::process::{self, ProcessError};
-
-use super::*;
 
 pub const DEFAULT_PAGE_SIZE: usize = 10;
 pub const DEFAULT_SIG_DELIM: &str = "-- \n";
@@ -142,162 +139,6 @@ pub struct Account {
 }
 
 impl<'a> Account {
-    /// Tries to create an account from a config and an optional
-    /// account name.
-    pub fn from_config_and_opt_account_name(
-        config: &'a DeserializedConfig,
-        account_name: Option<&str>,
-    ) -> Result<(Account, BackendConfig), AccountError> {
-        info!("begin: parsing account and backend configs from config and account name");
-
-        debug!("account name: {:?}", account_name.unwrap_or("default"));
-        let (name, account) = match account_name.map(|name| name.trim()) {
-            Some("default") | Some("") | None => config
-                .accounts
-                .iter()
-                .find(|(_, account)| match account {
-                    #[cfg(feature = "imap-backend")]
-                    DeserializedAccountConfig::Imap(account) => account.default.unwrap_or_default(),
-                    #[cfg(feature = "maildir-backend")]
-                    DeserializedAccountConfig::Maildir(account) => {
-                        account.default.unwrap_or_default()
-                    }
-                    #[cfg(feature = "notmuch-backend")]
-                    DeserializedAccountConfig::Notmuch(account) => {
-                        account.default.unwrap_or_default()
-                    }
-                })
-                .map(|(name, account)| (name.to_owned(), account))
-                .ok_or_else(|| AccountError::FindDefaultAccountError),
-            Some(name) => config
-                .accounts
-                .get(name)
-                .map(|account| (name.to_owned(), account))
-                .ok_or_else(|| AccountError::FindAccountError(name.to_owned())),
-        }?;
-
-        let base_account = account.to_base();
-        let downloads_dir = base_account
-            .downloads_dir
-            .as_ref()
-            .and_then(|dir| dir.to_str())
-            .and_then(|dir| shellexpand::full(dir).ok())
-            .map(|dir| PathBuf::from(dir.to_string()))
-            .or_else(|| {
-                config
-                    .downloads_dir
-                    .as_ref()
-                    .and_then(|dir| dir.to_str())
-                    .and_then(|dir| shellexpand::full(dir).ok())
-                    .map(|dir| PathBuf::from(dir.to_string()))
-            })
-            .unwrap_or_else(env::temp_dir);
-
-        let default_page_size = base_account
-            .default_page_size
-            .as_ref()
-            .or_else(|| config.default_page_size.as_ref())
-            .unwrap_or(&DEFAULT_PAGE_SIZE)
-            .to_owned();
-
-        let default_sig_delim = DEFAULT_SIG_DELIM.to_string();
-        let sig_delim = base_account
-            .signature_delimiter
-            .as_ref()
-            .or_else(|| config.signature_delimiter.as_ref())
-            .unwrap_or(&default_sig_delim);
-        let sig = base_account
-            .signature
-            .as_ref()
-            .or_else(|| config.signature.as_ref());
-        let sig = sig
-            .and_then(|sig| shellexpand::full(sig).ok())
-            .map(String::from)
-            .and_then(|sig| fs::read_to_string(sig).ok())
-            .or_else(|| sig.map(|sig| sig.to_owned()))
-            .map(|sig| format!("{}{}", sig_delim, sig.trim_end()));
-
-        let account_config = Account {
-            name,
-            display_name: base_account
-                .name
-                .as_ref()
-                .unwrap_or(&config.name)
-                .to_owned(),
-            downloads_dir,
-            sig,
-            default_page_size,
-            notify_cmd: base_account
-                .notify_cmd
-                .as_ref()
-                .or_else(|| config.notify_cmd.as_ref())
-                .cloned(),
-            notify_query: base_account
-                .notify_query
-                .as_ref()
-                .or_else(|| config.notify_query.as_ref())
-                .unwrap_or(&String::from("NEW"))
-                .to_owned(),
-            watch_cmds: base_account
-                .watch_cmds
-                .as_ref()
-                .or_else(|| config.watch_cmds.as_ref())
-                .unwrap_or(&vec![])
-                .to_owned(),
-            format: base_account.format.unwrap_or_default(),
-            read_headers: base_account.read_headers,
-            mailboxes: base_account.mailboxes.clone(),
-            hooks: base_account.hooks.unwrap_or_default(),
-            default: base_account.default.unwrap_or_default(),
-            email: base_account.email.to_owned(),
-
-            smtp_host: base_account.smtp_host.to_owned(),
-            smtp_port: base_account.smtp_port,
-            smtp_starttls: base_account.smtp_starttls.unwrap_or_default(),
-            smtp_insecure: base_account.smtp_insecure.unwrap_or_default(),
-            smtp_login: base_account.smtp_login.to_owned(),
-            smtp_passwd_cmd: base_account.smtp_passwd_cmd.to_owned(),
-
-            pgp_encrypt_cmd: base_account.pgp_encrypt_cmd.to_owned(),
-            pgp_decrypt_cmd: base_account.pgp_decrypt_cmd.to_owned(),
-        };
-        trace!("account config: {:?}", account_config);
-
-        let backend_config = match account {
-            #[cfg(feature = "imap-backend")]
-            DeserializedAccountConfig::Imap(config) => BackendConfig::Imap(ImapBackendConfig {
-                imap_host: config.imap_host.clone(),
-                imap_port: config.imap_port.clone(),
-                imap_starttls: config.imap_starttls.unwrap_or_default(),
-                imap_insecure: config.imap_insecure.unwrap_or_default(),
-                imap_login: config.imap_login.clone(),
-                imap_passwd_cmd: config.imap_passwd_cmd.clone(),
-            }),
-            #[cfg(feature = "maildir-backend")]
-            DeserializedAccountConfig::Maildir(config) => {
-                BackendConfig::Maildir(MaildirBackendConfig {
-                    maildir_dir: shellexpand::full(&config.maildir_dir)
-                        .map_err(AccountError::ExpandMaildirPathError)?
-                        .to_string()
-                        .into(),
-                })
-            }
-            #[cfg(feature = "notmuch-backend")]
-            DeserializedAccountConfig::Notmuch(config) => {
-                BackendConfig::Notmuch(NotmuchBackendConfig {
-                    notmuch_database_dir: shellexpand::full(&config.notmuch_database_dir)
-                        .map_err(AccountError::ExpandNotmuchDatabasePathError)?
-                        .to_string()
-                        .into(),
-                })
-            }
-        };
-        trace!("backend config: {:?}", backend_config);
-
-        info!("end: parsing account and backend configs from config and account name");
-        Ok((account_config, backend_config))
-    }
-
     /// Builds the full RFC822 compliant address of the user account.
     pub fn address(&self) -> Result<MailAddr, AccountError> {
         let has_special_chars = "()<>[]:;@.,".contains(|c| self.display_name.contains(c));
