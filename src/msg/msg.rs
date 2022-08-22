@@ -33,7 +33,8 @@ use tree_magic;
 use uuid::Uuid;
 
 use crate::{
-    account::{Account, DEFAULT_SIG_DELIM},
+    account::DEFAULT_SIG_DELIM,
+    config::Config,
     msg::{
         from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs, Addr,
         Addrs, BinaryPart, Error, Part, Parts, Result, TextPlainPart, TplOverride,
@@ -182,8 +183,8 @@ impl Msg {
         }
     }
 
-    pub fn into_reply(mut self, all: bool, account: &Account) -> Result<Self> {
-        let account_addr = account.address()?;
+    pub fn into_reply(mut self, all: bool, config: &Config) -> Result<Self> {
+        let account_addr = config.address()?;
 
         // In-Reply-To
         self.in_reply_to = self.message_id.to_owned();
@@ -280,8 +281,8 @@ impl Msg {
         Ok(self)
     }
 
-    pub fn into_forward(mut self, account: &Account) -> Result<Self> {
-        let account_addr = account.address()?;
+    pub fn into_forward(mut self, config: &Config) -> Result<Self> {
+        let account_addr = config.address()?;
 
         let prev_subject = self.subject.to_owned();
         let prev_date = self.date.to_owned();
@@ -396,8 +397,8 @@ impl Msg {
         }
     }
 
-    pub fn to_tpl(&self, opts: TplOverride, account: &Account) -> Result<String> {
-        let account_addr: Addrs = vec![account.address()?].into();
+    pub fn to_tpl(&self, opts: TplOverride, config: &Config) -> Result<String> {
+        let account_addr: Addrs = vec![config.address()?].into();
         let mut tpl = String::default();
 
         tpl.push_str("Content-Type: text/plain; charset=utf-8\n");
@@ -461,7 +462,7 @@ impl Msg {
         if let Some(sig) = opts.sig {
             tpl.push_str("\n\n");
             tpl.push_str(sig);
-        } else if let Some(ref sig) = account.sig {
+        } else if let Some(ref sig) = config.signature() {
             tpl.push_str("\n\n");
             tpl.push_str(sig);
         }
@@ -479,10 +480,10 @@ impl Msg {
         let parsed_mail = mailparse::parse_mail(tpl.as_bytes()).map_err(Error::ParseTplError)?;
 
         info!("end: building message from template");
-        Self::from_parsed_mail(parsed_mail, &Account::default())
+        Self::from_parsed_mail(parsed_mail, &Config::default())
     }
 
-    pub fn into_sendable_msg(&self, account: &Account) -> Result<lettre::Message> {
+    pub fn into_sendable_msg(&self, config: &Config) -> Result<lettre::Message> {
         let mut msg_builder = lettre::Message::builder()
             .message_id(self.message_id.to_owned())
             .subject(self.subject.to_owned());
@@ -545,7 +546,7 @@ impl Msg {
                 .and_then(|addrs| addrs.clone().extract_single_info())
                 .map(|addr| addr.addr)
                 .ok_or_else(|| Error::ParseRecipientError)?;
-            let encrypted_multipart = account.pgp_encrypt_file(&addr, multipart_buffer.clone())?;
+            let encrypted_multipart = config.pgp_encrypt_file(&addr, multipart_buffer.clone())?;
             trace!("encrypted multipart: {:#?}", encrypted_multipart);
             multipart = MultiPart::encrypted(String::from("application/pgp-encrypted"))
                 .singlepart(
@@ -567,7 +568,7 @@ impl Msg {
 
     pub fn from_parsed_mail(
         parsed_mail: mailparse::ParsedMail<'_>,
-        config: &Account,
+        config: &Config,
     ) -> Result<Self> {
         trace!(">> build message from parsed mail");
         trace!("parsed mail: {:?}", parsed_mail);
@@ -639,10 +640,10 @@ impl Msg {
         &self,
         text_mime: &str,
         headers: Vec<&str>,
-        config: &Account,
+        config: &Config,
     ) -> Result<String> {
         let mut all_headers = vec![];
-        for h in config.read_headers.iter() {
+        for h in config.email_reading_headers().iter() {
             let h = h.to_lowercase();
             if !all_headers.contains(&h) {
                 all_headers.push(h)
@@ -760,16 +761,20 @@ mod tests {
     use mailparse::SingleInfo;
     use std::iter::FromIterator;
 
-    use crate::msg::Addr;
+    use crate::{config::AccountConfig, msg::Addr};
 
     use super::*;
 
     #[test]
     fn test_into_reply() {
-        let config = Account {
-            display_name: "Test".into(),
+        let account = AccountConfig {
+            display_name: Some("Test".into()),
             email: "test-account@local".into(),
-            ..Account::default()
+            ..AccountConfig::default()
+        };
+        let config = Config {
+            account,
+            ..Config::default()
         };
 
         // Checks that:
@@ -905,7 +910,7 @@ mod tests {
 
     #[test]
     fn test_to_readable() {
-        let config = Account::default();
+        let config = Config::default();
         let msg = Msg {
             parts: Parts(vec![Part::TextPlain(TextPlainPart {
                 content: String::from("hello, world!"),
@@ -968,14 +973,18 @@ mod tests {
                 .unwrap()
         );
 
-        let config = Account {
-            read_headers: vec![
+        let account = AccountConfig {
+            email_reading_headers: Some(vec![
                 "CusTOM-heaDER".into(),
                 "Subject".into(),
                 "from".into(),
                 "cc".into(),
-            ],
-            ..Account::default()
+            ]),
+            ..AccountConfig::default()
+        };
+        let config = Config {
+            account,
+            ..Config::default()
         };
         // header present but empty in msg headers, empty config
         assert_eq!(

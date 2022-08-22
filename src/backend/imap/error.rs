@@ -19,6 +19,7 @@ use thiserror::Error;
 
 use crate::{
     account,
+    config::ConfigError,
     msg::{self, Flags},
 };
 
@@ -95,6 +96,8 @@ pub enum Error {
 
     #[error(transparent)]
     AccountError(#[from] account::AccountError),
+    #[error(transparent)]
+    ConfigError(#[from] ConfigError),
     #[error(transparent)]
     MsgError(#[from] msg::Error),
 }

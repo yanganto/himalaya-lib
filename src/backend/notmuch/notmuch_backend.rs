@@ -18,36 +18,36 @@ use log::{debug, info, trace};
 use std::fs;
 
 use crate::{
-    account::{Account, NotmuchBackendConfig},
     backend::{
         backend::Result, notmuch_envelopes, Backend, IdMapper, MaildirBackend, NotmuchError,
     },
+    config::{Config, NotmuchConfig},
     mbox::{Mbox, Mboxes},
     msg::{Envelopes, Msg},
 };
 
 /// Represents the Notmuch backend.
 pub struct NotmuchBackend<'a> {
-    account_config: &'a Account,
-    notmuch_config: &'a NotmuchBackendConfig,
+    config: &'a Config,
+    notmuch_config: &'a NotmuchConfig,
     pub mdir: &'a mut MaildirBackend<'a>,
     db: notmuch::Database,
 }
 
 impl<'a> NotmuchBackend<'a> {
     pub fn new(
-        account_config: &'a Account,
-        notmuch_config: &'a NotmuchBackendConfig,
+        config: &'a Config,
+        notmuch_config: &'a NotmuchConfig,
         mdir: &'a mut MaildirBackend<'a>,
     ) -> Result<NotmuchBackend<'a>> {
         info!(">> create new notmuch backend");
 
         let backend = Self {
-            account_config,
+            config,
             notmuch_config,
             mdir,
             db: notmuch::Database::open(
-                notmuch_config.notmuch_database_dir.clone(),
+                notmuch_config.db_path.clone(),
                 notmuch::DatabaseMode::ReadWrite,
             )
             .map_err(NotmuchError::OpenDbError)?,
@@ -96,7 +96,7 @@ impl<'a> NotmuchBackend<'a> {
         // represents the minimum hash length possible to avoid
         // conflicts.
         let short_hash_len = {
-            let mut mapper = IdMapper::new(&self.notmuch_config.notmuch_database_dir)?;
+            let mut mapper = IdMapper::new(&self.notmuch_config.db_path)?;
             let entries = envelopes
                 .iter()
                 .map(|env| (env.id.to_owned(), env.internal_id.to_owned()))
@@ -125,7 +125,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         trace!(">> get notmuch virtual mailboxes");
 
         let mut mboxes = Mboxes::default();
-        for (name, desc) in &self.account_config.mailboxes {
+        for (name, desc) in &self.config.folder_aliases() {
             mboxes.push(Mbox {
                 name: name.into(),
                 desc: desc.into(),
@@ -157,13 +157,11 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         debug!("page: {:?}", page);
 
         let query = self
-            .account_config
-            .mailboxes
-            .get(virt_mbox)
-            .map(|s| s.as_str())
-            .unwrap_or("all");
+            .config
+            .folder_alias(virt_mbox)
+            .unwrap_or_else(|_| String::from("all"));
         debug!("query: {:?}", query);
-        let envelopes = self._search_envelopes(query, page_size, page)?;
+        let envelopes = self._search_envelopes(&query, page_size, page)?;
 
         info!("<< get notmuch envelopes");
         Ok(envelopes)
@@ -184,16 +182,14 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         debug!("page: {:?}", page);
 
         let query = if query.is_empty() {
-            self.account_config
-                .mailboxes
-                .get(virt_mbox)
-                .map(|s| s.as_str())
-                .unwrap_or("all")
+            self.config
+                .folder_alias(virt_mbox)
+                .unwrap_or_else(|_| String::from("all"))
         } else {
-            query
+            query.to_owned()
         };
         debug!("final query: {:?}", query);
-        let envelopes = self._search_envelopes(query, page_size, page)?;
+        let envelopes = self._search_envelopes(&query, page_size, page)?;
 
         info!("<< search notmuch envelopes");
         Ok(envelopes)
@@ -203,7 +199,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         info!(">> add notmuch envelopes");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.notmuch_database_dir;
+        let dir = &self.notmuch_config.db_path;
 
         // Adds the message to the maildir folder and gets its hash.
         let hash = self.mdir.add_msg("", msg, "seen")?;
@@ -240,7 +236,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         info!(">> add notmuch envelopes");
         debug!("short hash: {:?}", short_hash);
 
-        let dir = &self.notmuch_config.notmuch_database_dir;
+        let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let msg_file_path = self
@@ -253,7 +249,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         debug!("message file path: {:?}", msg_file_path);
         let raw_msg = fs::read(&msg_file_path).map_err(NotmuchError::ReadMsgError)?;
         let msg = mailparse::parse_mail(&raw_msg).map_err(NotmuchError::ParseMsgError)?;
-        let msg = Msg::from_parsed_mail(msg, &self.account_config)?;
+        let msg = Msg::from_parsed_mail(msg, &self.config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get notmuch message");
@@ -276,7 +272,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         info!(">> delete notmuch message");
         debug!("short hash: {:?}", short_hash);
 
-        let dir = &self.notmuch_config.notmuch_database_dir;
+        let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let msg_file_path = self
@@ -299,7 +295,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         info!(">> add notmuch message flags");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.notmuch_database_dir;
+        let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let query = format!("id:{}", id);
@@ -327,7 +323,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         info!(">> set notmuch message flags");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.notmuch_database_dir;
+        let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let query = format!("id:{}", id);
@@ -356,7 +352,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         info!(">> delete notmuch message flags");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.notmuch_database_dir;
+        let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let query = format!("id:{}", id);

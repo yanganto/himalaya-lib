@@ -21,7 +21,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::account;
+use crate::{account, config::ConfigError};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -51,6 +51,8 @@ pub enum Error {
 
     #[error(transparent)]
     AccountError(#[from] account::AccountError),
+    #[error(transparent)]
+    ConfigError(#[from] ConfigError),
 
     #[error("cannot get content type of multipart")]
     GetMultipartContentTypeError,
@@ -63,7 +65,7 @@ pub enum Error {
     #[error("cannot write encrypted part to temporary file")]
     WriteEncryptedPartBodyError(#[source] io::Error),
     #[error("cannot write encrypted part to temporary file")]
-    DecryptPartError(#[source] account::AccountError),
+    DecryptPartError(#[source] ConfigError),
 
     #[error("cannot delete local draft: {1}")]
     DeleteLocalDraftError(#[source] io::Error, path::PathBuf),

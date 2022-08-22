@@ -23,8 +23,8 @@ use log::{debug, info, trace};
 use std::{env, ffi::OsStr, fs, path::PathBuf};
 
 use crate::{
-    account::{Account, MaildirBackendConfig},
     backend::{backend::Result, maildir_envelopes, maildir_flags, Backend, IdMapper},
+    config::{Config, MaildirConfig},
     mbox::{Mbox, Mboxes},
     msg::{Envelopes, Flags, Msg},
 };
@@ -33,15 +33,15 @@ use super::MaildirError;
 
 /// Represents the maildir backend.
 pub struct MaildirBackend<'a> {
-    account_config: &'a Account,
+    config: &'a Config,
     mdir: maildir::Maildir,
 }
 
 impl<'a> MaildirBackend<'a> {
-    pub fn new(account_config: &'a Account, maildir_config: &'a MaildirBackendConfig) -> Self {
+    pub fn new(config: &'a Config, maildir_config: &'a MaildirConfig) -> Self {
         Self {
-            account_config,
-            mdir: maildir_config.maildir_dir.clone().into(),
+            config,
+            mdir: maildir_config.root_dir.to_owned().into(),
         }
     }
 
@@ -56,7 +56,7 @@ impl<'a> MaildirBackend<'a> {
 
     /// Creates a maildir instance from a string slice.
     pub fn get_mdir_from_dir(&self, dir: &str) -> Result<maildir::Maildir> {
-        let dir = self.account_config.get_mbox_alias(dir)?;
+        let dir = self.config.folder_alias(dir)?;
 
         // If the dir points to the inbox folder, creates a maildir
         // instance from the root folder.
@@ -110,7 +110,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         trace!(">> get maildir mailboxes");
 
         let mut mboxes = Mboxes::default();
-        for (name, desc) in &self.account_config.mailboxes {
+        for (name, desc) in &self.config.folder_aliases() {
             mboxes.push(Mbox {
                 delim: String::from("/"),
                 name: name.into(),
@@ -251,7 +251,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
             .find(&id)
             .ok_or_else(|| MaildirError::GetMsgError(id.to_owned()))?;
         let parsed_mail = mail_entry.parsed().map_err(MaildirError::ParseMsgError)?;
-        let msg = Msg::from_parsed_mail(parsed_mail, self.account_config)?;
+        let msg = Msg::from_parsed_mail(parsed_mail, self.config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get maildir message");
