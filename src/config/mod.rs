@@ -1,6 +1,9 @@
 pub mod global;
 pub use global::*;
 
+pub mod backend;
+pub use backend::*;
+
 #[cfg(feature = "imap-backend")]
 pub mod imap;
 #[cfg(feature = "imap-backend")]

@@ -17,6 +17,7 @@ pub enum ImapConfigError {
 /// Represents the IMAP backend config.
 #[cfg(feature = "imap-backend")]
 #[derive(Debug, Default, Clone, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct ImapConfig {
     /// Represents the IMAP server host.
     pub host: String,

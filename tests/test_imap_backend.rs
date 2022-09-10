@@ -1,31 +1,43 @@
 #[cfg(feature = "imap-backend")]
-use himalaya_lib::{
-    account::{Account, ImapBackendConfig},
-    backend::{Backend, ImapBackend},
-};
+use himalaya_lib::backend::{Backend, ImapBackend};
 
 #[cfg(feature = "imap-backend")]
 #[test]
 fn test_imap_backend() {
-    // configure accounts
-    let account_config = Account {
-        smtp_host: "localhost".into(),
-        smtp_port: 3465,
-        smtp_starttls: false,
-        smtp_insecure: true,
-        smtp_login: "inbox@localhost".into(),
-        smtp_passwd_cmd: "echo 'password'".into(),
-        ..Account::default()
+    use himalaya_lib::config::{
+        AccountConfig, BackendConfig, BaseAccountConfig, Config, EmailSender, ImapConfig,
+        SmtpConfig,
     };
-    let imap_config = ImapBackendConfig {
-        imap_host: "localhost".into(),
-        imap_port: 3993,
-        imap_starttls: false,
-        imap_insecure: true,
-        imap_login: "inbox@localhost".into(),
-        imap_passwd_cmd: "echo 'password'".into(),
+
+    let imap_config = ImapConfig {
+        host: "localhost".into(),
+        port: 3993,
+        starttls: Some(false),
+        insecure: Some(true),
+        login: "inbox@localhost".into(),
+        passwd_cmd: "echo 'password'".into(),
+        ..ImapConfig::default()
     };
-    let mut imap = ImapBackend::new(&account_config, &imap_config);
+
+    let config = Config {
+        account: AccountConfig {
+            base: BaseAccountConfig {
+                email_sender: Some(EmailSender::Internal(SmtpConfig {
+                    host: "localhost".into(),
+                    port: 3465,
+                    starttls: Some(false),
+                    insecure: Some(true),
+                    login: "inbox@localhost".into(),
+                    passwd_cmd: "echo 'password'".into(),
+                })),
+                ..BaseAccountConfig::default()
+            },
+            backend: BackendConfig::Imap(imap_config.clone()),
+        },
+        ..Config::default()
+    };
+
+    let mut imap = ImapBackend::new(&config, &imap_config);
     imap.connect().unwrap();
 
     // set up mailboxes

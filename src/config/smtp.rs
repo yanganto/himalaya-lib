@@ -45,4 +45,12 @@ impl SmtpConfig {
             passwd.to_owned(),
         ))
     }
+
+    pub fn starttls(&self) -> bool {
+        self.starttls.unwrap_or_default()
+    }
+
+    pub fn insecure(&self) -> bool {
+        self.insecure.unwrap_or_default()
+    }
 }

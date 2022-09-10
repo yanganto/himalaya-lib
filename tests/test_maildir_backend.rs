@@ -2,8 +2,8 @@ use maildir::Maildir;
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 use himalaya_lib::{
-    account::{Account, MaildirBackendConfig},
     backend::{Backend, MaildirBackend},
+    config::{AccountConfig, BackendConfig, BaseAccountConfig, Config, MaildirConfig},
     msg::Flag,
 };
 
@@ -18,19 +18,28 @@ fn test_maildir_backend() {
     if let Err(_) = fs::remove_dir_all(mdir_sub.path()) {}
     mdir_sub.create_dirs().unwrap();
 
-    // configure accounts
-    let account_config = Account {
-        mailboxes: HashMap::from_iter([("subdir".into(), "Subdir".into())]),
-        ..Account::default()
+    let mdir_config = MaildirConfig {
+        root_dir: mdir.path().to_owned(),
     };
-    let mdir_config = MaildirBackendConfig {
-        maildir_dir: mdir.path().to_owned(),
+
+    let config = Config {
+        account: AccountConfig {
+            base: BaseAccountConfig {
+                folder_aliases: Some(HashMap::from_iter([("subdir".into(), "Subdir".into())])),
+                ..BaseAccountConfig::default()
+            },
+            backend: BackendConfig::Maildir(mdir_config.clone()),
+        },
+        ..Config::default()
     };
-    let mut mdir = MaildirBackend::new(&account_config, &mdir_config);
-    let mdir_sub_config = MaildirBackendConfig {
-        maildir_dir: mdir_sub.path().to_owned(),
+
+    let mut mdir = MaildirBackend::new(&config, &mdir_config);
+
+    let mdir_sub_config = MaildirConfig {
+        root_dir: mdir_sub.path().to_owned(),
     };
-    let mut mdir_subdir = MaildirBackend::new(&account_config, &mdir_sub_config);
+
+    let mut mdir_subdir = MaildirBackend::new(&config, &mdir_sub_config);
 
     // check that a message can be added
     let msg = include_bytes!("./emails/alice-to-patrick.eml");

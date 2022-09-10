@@ -761,15 +761,21 @@ mod tests {
     use mailparse::SingleInfo;
     use std::iter::FromIterator;
 
-    use crate::{config::AccountConfig, msg::Addr};
+    use crate::{
+        config::{AccountConfig, BaseAccountConfig},
+        msg::Addr,
+    };
 
     use super::*;
 
     #[test]
     fn test_into_reply() {
         let account = AccountConfig {
-            display_name: Some("Test".into()),
-            email: "test-account@local".into(),
+            base: BaseAccountConfig {
+                display_name: Some("Test".into()),
+                email: "test-account@local".into(),
+                ..BaseAccountConfig::default()
+            },
             ..AccountConfig::default()
         };
         let config = Config {
@@ -974,12 +980,15 @@ mod tests {
         );
 
         let account = AccountConfig {
-            email_reading_headers: Some(vec![
-                "CusTOM-heaDER".into(),
-                "Subject".into(),
-                "from".into(),
-                "cc".into(),
-            ]),
+            base: BaseAccountConfig {
+                email_reading_headers: Some(vec![
+                    "CusTOM-heaDER".into(),
+                    "Subject".into(),
+                    "from".into(),
+                    "cc".into(),
+                ]),
+                ..BaseAccountConfig::default()
+            },
             ..AccountConfig::default()
         };
         let config = Config {

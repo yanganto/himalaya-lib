@@ -24,7 +24,7 @@ use std::{env, ffi::OsStr, fs, path::PathBuf};
 
 use crate::{
     backend::{backend::Result, maildir_envelopes, maildir_flags, Backend, IdMapper},
-    config::{Config, MaildirConfig},
+    config::{Config, MaildirConfig, DEFAULT_INBOX_FOLDER},
     mbox::{Mbox, Mboxes},
     msg::{Envelopes, Flags, Msg},
 };
@@ -60,7 +60,7 @@ impl<'a> MaildirBackend<'a> {
 
         // If the dir points to the inbox folder, creates a maildir
         // instance from the root folder.
-        if &dir == "inbox" {
+        if dir == DEFAULT_INBOX_FOLDER {
             return self
                 .validate_mdir_path(self.mdir.path().to_owned())
                 .map(maildir::Maildir::from);
