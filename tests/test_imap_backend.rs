@@ -4,9 +4,10 @@ use himalaya_lib::backend::{Backend, ImapBackend};
 #[cfg(feature = "imap-backend")]
 #[test]
 fn test_imap_backend() {
+    use std::collections::HashMap;
+
     use himalaya_lib::config::{
-        AccountConfig, BackendConfig, BaseAccountConfig, Config, EmailSender, ImapConfig,
-        SmtpConfig,
+        AccountConfig, BackendConfig, Config, EmailSender, ImapConfig, SmtpConfig,
     };
 
     let imap_config = ImapConfig {
@@ -20,8 +21,10 @@ fn test_imap_backend() {
     };
 
     let config = Config {
-        account: AccountConfig {
-            base: BaseAccountConfig {
+        accounts: HashMap::from_iter([(
+            String::new(),
+            AccountConfig {
+                default: Some(true),
                 email_sender: Some(EmailSender::Internal(SmtpConfig {
                     host: "localhost".into(),
                     port: 3465,
@@ -30,10 +33,10 @@ fn test_imap_backend() {
                     login: "inbox@localhost".into(),
                     passwd_cmd: "echo 'password'".into(),
                 })),
-                ..BaseAccountConfig::default()
+                backend: BackendConfig::Imap(imap_config.clone()),
+                ..AccountConfig::default()
             },
-            backend: BackendConfig::Imap(imap_config.clone()),
-        },
+        )]),
         ..Config::default()
     };
 

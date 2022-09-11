@@ -3,7 +3,7 @@ use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 use himalaya_lib::{
     backend::{Backend, MaildirBackend},
-    config::{AccountConfig, BackendConfig, BaseAccountConfig, Config, MaildirConfig},
+    config::{AccountConfig, BackendConfig, Config, MaildirConfig},
     msg::Flag,
 };
 
@@ -23,13 +23,15 @@ fn test_maildir_backend() {
     };
 
     let config = Config {
-        account: AccountConfig {
-            base: BaseAccountConfig {
+        accounts: HashMap::from_iter([(
+            String::new(),
+            AccountConfig {
+                default: Some(true),
                 folder_aliases: Some(HashMap::from_iter([("subdir".into(), "Subdir".into())])),
-                ..BaseAccountConfig::default()
+                backend: BackendConfig::Maildir(mdir_config.clone()),
+                ..AccountConfig::default()
             },
-            backend: BackendConfig::Maildir(mdir_config.clone()),
-        },
+        )]),
         ..Config::default()
     };
 

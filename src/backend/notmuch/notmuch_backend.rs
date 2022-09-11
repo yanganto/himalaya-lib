@@ -125,7 +125,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         trace!(">> get notmuch virtual mailboxes");
 
         let mut mboxes = Mboxes::default();
-        for (name, desc) in &self.config.folder_aliases() {
+        for (name, desc) in &self.config.folder_aliases()? {
             mboxes.push(Mbox {
                 name: name.into(),
                 desc: desc.into(),

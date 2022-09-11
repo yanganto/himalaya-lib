@@ -21,7 +21,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{account, config::ConfigError};
+use crate::config::ConfigError;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -49,8 +49,6 @@ pub enum Error {
     #[error("cannot parse message or address")]
     ParseAddressError(#[from] lettre::address::AddressError),
 
-    #[error(transparent)]
-    AccountError(#[from] account::AccountError),
     #[error(transparent)]
     ConfigError(#[from] ConfigError),
 

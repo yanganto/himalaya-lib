@@ -18,7 +18,6 @@ use std::result;
 use thiserror::Error;
 
 use crate::{
-    account,
     config::ConfigError,
     msg::{self, Flags},
 };
@@ -94,8 +93,6 @@ pub enum Error {
     #[error("cannot logout from imap server")]
     LogoutError(#[source] imap::Error),
 
-    #[error(transparent)]
-    AccountError(#[from] account::AccountError),
     #[error(transparent)]
     ConfigError(#[from] ConfigError),
     #[error(transparent)]

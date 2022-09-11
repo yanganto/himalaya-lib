@@ -33,8 +33,7 @@ use tree_magic;
 use uuid::Uuid;
 
 use crate::{
-    account::DEFAULT_SIG_DELIM,
-    config::Config,
+    config::{Config, DEFAULT_SIGNATURE_DELIM},
     msg::{
         from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs, Addr,
         Addrs, BinaryPart, Error, Part, Parts, Result, TextPlainPart, TplOverride,
@@ -255,7 +254,7 @@ impl Msg {
 
             let mut glue = "";
             for line in self.fold_text_parts("plain").trim().lines() {
-                if line == DEFAULT_SIG_DELIM {
+                if line == DEFAULT_SIGNATURE_DELIM {
                     break;
                 }
                 content.push_str(glue);
@@ -462,7 +461,7 @@ impl Msg {
         if let Some(sig) = opts.sig {
             tpl.push_str("\n\n");
             tpl.push_str(sig);
-        } else if let Some(ref sig) = config.signature() {
+        } else if let Some(ref sig) = config.signature()? {
             tpl.push_str("\n\n");
             tpl.push_str(sig);
         }
@@ -643,7 +642,7 @@ impl Msg {
         config: &Config,
     ) -> Result<String> {
         let mut all_headers = vec![];
-        for h in config.email_reading_headers().iter() {
+        for h in config.email_reading_headers()?.iter() {
             let h = h.to_lowercase();
             if !all_headers.contains(&h) {
                 all_headers.push(h)
@@ -761,25 +760,20 @@ mod tests {
     use mailparse::SingleInfo;
     use std::iter::FromIterator;
 
-    use crate::{
-        config::{AccountConfig, BaseAccountConfig},
-        msg::Addr,
-    };
+    use crate::{config::AccountConfig, msg::Addr};
 
     use super::*;
 
     #[test]
     fn test_into_reply() {
         let account = AccountConfig {
-            base: BaseAccountConfig {
-                display_name: Some("Test".into()),
-                email: "test-account@local".into(),
-                ..BaseAccountConfig::default()
-            },
+            default: Some(true),
+            display_name: Some("Test".into()),
+            email: "test-account@local".into(),
             ..AccountConfig::default()
         };
         let config = Config {
-            account,
+            accounts: HashMap::from_iter([(String::new(), account)]),
             ..Config::default()
         };
 
@@ -916,7 +910,16 @@ mod tests {
 
     #[test]
     fn test_to_readable() {
-        let config = Config::default();
+        let config = Config {
+            accounts: HashMap::from_iter([(
+                String::new(),
+                AccountConfig {
+                    default: Some(true),
+                    ..AccountConfig::default()
+                },
+            )]),
+            ..Config::default()
+        };
         let msg = Msg {
             parts: Parts(vec![Part::TextPlain(TextPlainPart {
                 content: String::from("hello, world!"),
@@ -980,19 +983,17 @@ mod tests {
         );
 
         let account = AccountConfig {
-            base: BaseAccountConfig {
-                email_reading_headers: Some(vec![
-                    "CusTOM-heaDER".into(),
-                    "Subject".into(),
-                    "from".into(),
-                    "cc".into(),
-                ]),
-                ..BaseAccountConfig::default()
-            },
+            default: Some(true),
+            email_reading_headers: Some(vec![
+                "CusTOM-heaDER".into(),
+                "Subject".into(),
+                "from".into(),
+                "cc".into(),
+            ]),
             ..AccountConfig::default()
         };
         let config = Config {
-            account,
+            accounts: HashMap::from_iter([(String::new(), account)]),
             ..Config::default()
         };
         // header present but empty in msg headers, empty config

@@ -8,9 +8,7 @@ use himalaya_lib::backend::{Backend, MaildirBackend, NotmuchBackend};
 #[test]
 fn test_notmuch_backend() {
     use himalaya_lib::{
-        config::{
-            AccountConfig, BackendConfig, BaseAccountConfig, Config, MaildirConfig, NotmuchConfig,
-        },
+        config::{AccountConfig, BackendConfig, Config, MaildirConfig, NotmuchConfig},
         msg::Flag,
     };
 
@@ -25,13 +23,15 @@ fn test_notmuch_backend() {
     };
 
     let config = Config {
-        account: AccountConfig {
-            base: BaseAccountConfig {
+        accounts: HashMap::from_iter([(
+            String::new(),
+            AccountConfig {
+                default: Some(true),
                 folder_aliases: Some(HashMap::from_iter([("inbox".into(), "*".into())])),
-                ..BaseAccountConfig::default()
+                backend: BackendConfig::Notmuch(notmuch_config.clone()),
+                ..AccountConfig::default()
             },
-            backend: BackendConfig::Notmuch(notmuch_config.clone()),
-        },
+        )]),
         ..Config::default()
     };
 

@@ -14,18 +14,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Global config module.
+//! Account config module.
 //!
-//! This module contains the representation of the global
-//! configuration of the user.
+//! This module contains the representation of the configuration of
+//! the user account(s).
 
 use std::{collections::HashMap, path::PathBuf};
 
-use super::{EmailHooks, EmailSender, EmailTextPlainFormat};
+use super::{BackendConfig, EmailHooks, EmailSender, EmailTextPlainFormat};
 
-/// Represents the global configuration of the user.
+/// Represents the configuration of all the user accounts.
+pub type AccountsConfig = HashMap<String, AccountConfig>;
+
+/// Represents the configuration of the user account.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct GlobalConfig {
+pub struct AccountConfig {
+    /// Represents the name of the account.
+    pub name: String,
+    /// Represents the email address of the user.
+    pub email: String,
+    /// Represents the defaultness of the account.
+    pub default: Option<bool>,
     /// Represents the display name of the user.
     pub display_name: Option<String>,
     /// Represents the email signature delimiter of the user.
@@ -56,4 +65,13 @@ pub struct GlobalConfig {
     pub email_sender: Option<EmailSender>,
     /// Represents the email hooks.
     pub email_hooks: Option<EmailHooks>,
+
+    /// Represents the backend configuration of the account.
+    pub backend: BackendConfig,
+}
+
+impl AccountConfig {
+    pub fn is_default(&self) -> bool {
+        self.default.unwrap_or_default()
+    }
 }

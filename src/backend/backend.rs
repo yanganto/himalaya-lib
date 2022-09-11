@@ -23,7 +23,6 @@ use std::result;
 use thiserror::Error;
 
 use crate::{
-    account,
     config::{ConfigError, ImapConfigError},
     mbox::Mboxes,
     msg::{self, Envelopes, Msg},
@@ -42,8 +41,6 @@ pub enum Error {
     #[error(transparent)]
     ImapError(#[from] super::imap::Error),
 
-    #[error(transparent)]
-    AccountError(#[from] account::AccountError),
     #[error(transparent)]
     ConfigError(#[from] ConfigError),
     #[cfg(feature = "imap-backend")]

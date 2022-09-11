@@ -110,7 +110,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         trace!(">> get maildir mailboxes");
 
         let mut mboxes = Mboxes::default();
-        for (name, desc) in &self.config.folder_aliases() {
+        for (name, desc) in &self.config.folder_aliases()? {
             mboxes.push(Mbox {
                 delim: String::from("/"),
                 name: name.into(),
