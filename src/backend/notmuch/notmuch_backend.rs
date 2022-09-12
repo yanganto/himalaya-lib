@@ -21,9 +21,10 @@ use crate::{
     backend::{
         backend::Result, notmuch_envelopes, Backend, IdMapper, MaildirBackend, NotmuchError,
     },
-    config::{Config, NotmuchConfig},
+    config::Config,
     mbox::{Mbox, Mboxes},
     msg::{Envelopes, Msg},
+    NotmuchConfig,
 };
 
 /// Represents the Notmuch backend.

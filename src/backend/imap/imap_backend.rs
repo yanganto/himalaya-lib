@@ -28,10 +28,10 @@ use crate::{
         backend::Result, from_imap_fetch, from_imap_fetches,
         imap::msg_sort_criterion::SortCriteria, imap::Error, into_imap_flags, Backend,
     },
-    config::{Config, ImapConfig},
+    config::Config,
     mbox::{Mbox, Mboxes},
     msg::{Envelopes, Flags, Msg},
-    process,
+    process, ImapConfig,
 };
 
 type ImapSess = imap::Session<TlsStream<TcpStream>>;

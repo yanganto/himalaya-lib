@@ -23,18 +23,21 @@ use std::result;
 use thiserror::Error;
 
 use crate::{
-    config::{ConfigError, ImapConfigError},
+    config::ConfigError,
     mbox::Mboxes,
     msg::{self, Envelopes, Msg},
 };
 
 use super::id_mapper;
 
+#[cfg(feature = "imap-backend")]
+use crate::ImapConfigError;
+
 #[cfg(feature = "maildir-backend")]
-use super::MaildirError;
+use crate::MaildirError;
 
 #[cfg(feature = "notmuch-backend")]
-use super::NotmuchError;
+use crate::NotmuchError;
 
 #[derive(Error, Debug)]
 pub enum Error {

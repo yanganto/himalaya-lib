@@ -8,8 +8,9 @@ use himalaya_lib::backend::{Backend, MaildirBackend, NotmuchBackend};
 #[test]
 fn test_notmuch_backend() {
     use himalaya_lib::{
-        config::{AccountConfig, BackendConfig, Config, MaildirConfig, NotmuchConfig},
+        config::{AccountConfig, Config},
         msg::Flag,
+        BackendConfig, MaildirConfig, NotmuchConfig,
     };
 
     // set up maildir folders and notmuch database

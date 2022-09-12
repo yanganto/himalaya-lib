@@ -3,8 +3,9 @@ use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 use himalaya_lib::{
     backend::{Backend, MaildirBackend},
-    config::{AccountConfig, BackendConfig, Config, MaildirConfig},
+    config::{AccountConfig, Config},
     msg::Flag,
+    BackendConfig, MaildirConfig,
 };
 
 #[test]

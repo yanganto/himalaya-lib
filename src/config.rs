@@ -14,19 +14,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Config module.
+//! Global config module.
 //!
-//! This module contains the representation of the user configuration.
+//! This module contains the representation of the global
+//! configuration of the user.
 
 use mailparse::MailAddr;
 use shellexpand;
 use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf};
 use thiserror::Error;
 
-use crate::process::{self, ProcessError};
-
-use super::{
-    AccountConfig, AccountsConfig, EmailHooks, EmailSender, EmailTextPlainFormat, GlobalConfig,
+use crate::{
+    process::{self, ProcessError},
+    BackendConfig, EmailHooks, EmailSender, EmailTextPlainFormat,
 };
 
 pub const DEFAULT_PAGE_SIZE: usize = 10;
@@ -302,6 +302,92 @@ impl Config {
 
     pub fn email_sender(&self) -> Result<&EmailSender, ConfigError> {
         Ok(&self.account()?.email_sender)
+    }
+}
+
+/// Represents the global configuration of the user.
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct GlobalConfig {
+    /// Represents the display name of the user.
+    pub display_name: Option<String>,
+    /// Represents the email signature delimiter of the user.
+    pub signature_delim: Option<String>,
+    /// Represents the email signature of the user.
+    pub signature: Option<String>,
+    /// Represents the downloads directory (mostly for attachments).
+    pub downloads_dir: Option<PathBuf>,
+
+    /// Represents the page size when listing folders.
+    pub folder_listing_page_size: Option<usize>,
+    /// Represents the folder aliases map.
+    pub folder_aliases: Option<HashMap<String, String>>,
+
+    /// Represents the page size when listing emails.
+    pub email_listing_page_size: Option<usize>,
+    /// Represents the user downloads directory (mostly for
+    /// attachments).
+    pub email_reading_headers: Option<Vec<String>>,
+    /// Represents the text/plain format as defined in the
+    /// [RFC2646](https://www.ietf.org/rfc/rfc2646.txt)
+    pub email_reading_format: Option<EmailTextPlainFormat>,
+    /// Represents the command used to decrypt an email.
+    pub email_reading_decrypt_cmd: Option<String>,
+    /// Represents the command used to encrypt an email.
+    pub email_writing_encrypt_cmd: Option<String>,
+    /// Represents the email hooks.
+    pub email_hooks: Option<EmailHooks>,
+}
+
+/// Represents the configuration of all the user accounts.
+pub type AccountsConfig = HashMap<String, AccountConfig>;
+
+/// Represents the configuration of the user account.
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct AccountConfig {
+    /// Represents the name of the account.
+    pub name: String,
+    /// Represents the email address of the user.
+    pub email: String,
+    /// Represents the defaultness of the account.
+    pub default: Option<bool>,
+    /// Represents the display name of the user.
+    pub display_name: Option<String>,
+    /// Represents the email signature delimiter of the user.
+    pub signature_delim: Option<String>,
+    /// Represents the email signature of the user.
+    pub signature: Option<String>,
+    /// Represents the downloads directory (mostly for attachments).
+    pub downloads_dir: Option<PathBuf>,
+
+    /// Represents the page size when listing folders.
+    pub folder_listing_page_size: Option<usize>,
+    /// Represents the folder aliases map.
+    pub folder_aliases: Option<HashMap<String, String>>,
+
+    /// Represents the page size when listing emails.
+    pub email_listing_page_size: Option<usize>,
+    /// Represents the user downloads directory (mostly for
+    /// attachments).
+    pub email_reading_headers: Option<Vec<String>>,
+    /// Represents the text/plain format as defined in the
+    /// [RFC2646](https://www.ietf.org/rfc/rfc2646.txt)
+    pub email_reading_format: Option<EmailTextPlainFormat>,
+    /// Represents the command used to decrypt an email.
+    pub email_reading_decrypt_cmd: Option<String>,
+    /// Represents the command used to encrypt an email.
+    pub email_writing_encrypt_cmd: Option<String>,
+    /// Represents the email sender provider.
+    pub email_sender: EmailSender,
+    /// Represents the email hooks.
+    pub email_hooks: Option<EmailHooks>,
+
+    /// Represents the backend configuration of the account.
+    pub backend: BackendConfig,
+}
+
+impl AccountConfig {
+    pub fn is_default(&self) -> bool {
+        self.default.unwrap_or_default()
     }
 }
 

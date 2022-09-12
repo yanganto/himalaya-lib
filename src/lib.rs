@@ -17,9 +17,15 @@
 mod process;
 
 pub mod backend;
-pub mod config;
+pub use backend::*;
+
 pub mod mbox;
+
+pub mod config;
+pub use config::*;
+
 pub mod msg;
+pub use msg::*;
 
 pub mod sender;
-pub use sender::{Sender, Smtp, SmtpConfig, SmtpConfigError, SmtpError};
+pub use sender::*;

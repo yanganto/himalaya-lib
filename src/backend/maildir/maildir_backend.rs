@@ -24,9 +24,10 @@ use std::{env, ffi::OsStr, fs, path::PathBuf};
 
 use crate::{
     backend::{backend::Result, maildir_envelopes, maildir_flags, Backend, IdMapper},
-    config::{Config, MaildirConfig, DEFAULT_INBOX_FOLDER},
+    config::{Config, DEFAULT_INBOX_FOLDER},
     mbox::{Mbox, Mboxes},
     msg::{Envelopes, Flags, Msg},
+    MaildirConfig,
 };
 
 use super::MaildirError;

@@ -18,6 +18,9 @@
 //!
 //! This module contains everything related to messages.
 
+pub mod config;
+pub use config::{EmailHooks, EmailSendCmd, EmailSender, EmailTextPlainFormat};
+
 pub mod error;
 pub use error::*;
 
