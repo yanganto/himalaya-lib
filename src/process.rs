@@ -20,16 +20,29 @@
 //! `std::process` crate.
 
 use log::{debug, trace};
-use std::{io, process::Command, string};
+use std::{
+    io::{self, prelude::*},
+    process::{Command, Stdio},
+    string,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProcessError {
     #[error("cannot run command {1:?}")]
     RunCmdError(#[source] io::Error, String),
-
     #[error("cannot parse command output")]
     ParseCmdOutputError(#[source] string::FromUtf8Error),
+    #[error("cannot spawn process for command {1:?}")]
+    SpawnProcessError(#[source] io::Error, String),
+    #[error("cannot get standard input")]
+    GetStdinError,
+    #[error("cannot write data to standard input")]
+    WriteStdinError(#[source] io::Error),
+    #[error("cannot get standard output")]
+    GetStdoutError,
+    #[error("cannot read data from standard output")]
+    ReadStdoutError(#[source] io::Error),
 }
 
 pub fn run(cmd: &str) -> Result<String, ProcessError> {
@@ -47,4 +60,26 @@ pub fn run(cmd: &str) -> Result<String, ProcessError> {
     trace!("command output: {}", output);
     debug!("<< run command");
     Ok(output)
+}
+
+pub fn pipe(cmd: &str, data: &[u8]) -> Result<Vec<u8>, ProcessError> {
+    let mut res = Vec::new();
+
+    let process = Command::new(cmd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|err| ProcessError::SpawnProcessError(err, cmd.to_string()))?;
+    process
+        .stdin
+        .ok_or_else(|| ProcessError::GetStdinError)?
+        .write_all(data)
+        .map_err(ProcessError::WriteStdinError)?;
+    process
+        .stdout
+        .ok_or_else(|| ProcessError::GetStdoutError)?
+        .read_to_end(&mut res)
+        .map_err(ProcessError::ReadStdoutError)?;
+
+    Ok(res)
 }

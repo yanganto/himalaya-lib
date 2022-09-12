@@ -18,7 +18,7 @@
 //!
 //! This module contains everything related to messages.
 
-mod error;
+pub mod error;
 pub use error::*;
 
 mod flag;

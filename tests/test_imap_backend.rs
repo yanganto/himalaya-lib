@@ -6,8 +6,9 @@ use himalaya_lib::backend::{Backend, ImapBackend};
 fn test_imap_backend() {
     use std::collections::HashMap;
 
-    use himalaya_lib::config::{
-        AccountConfig, BackendConfig, Config, EmailSender, ImapConfig, SmtpConfig,
+    use himalaya_lib::{
+        config::{AccountConfig, BackendConfig, Config, EmailSender, ImapConfig},
+        SmtpConfig,
     };
 
     let imap_config = ImapConfig {

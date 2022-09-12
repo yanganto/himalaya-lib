@@ -18,7 +18,7 @@
 //!
 //! This module contains structures related to email configuration.
 
-use super::SmtpConfig;
+use crate::SmtpConfig;
 
 /// Represents the email sender provider.
 #[derive(Debug, Clone, Eq, PartialEq)]

@@ -20,3 +20,6 @@ pub mod backend;
 pub mod config;
 pub mod mbox;
 pub mod msg;
+
+pub mod sender;
+pub use sender::{Sender, Smtp, SmtpConfig, SmtpConfigError, SmtpError};

@@ -24,7 +24,6 @@ use thiserror::Error;
 
 use crate::process::{self, ProcessError};
 
-#[cfg(feature = "internal-sender")]
 #[derive(Debug, Error)]
 pub enum SmtpConfigError {
     #[error("cannot get smtp password")]
@@ -34,7 +33,6 @@ pub enum SmtpConfigError {
 }
 
 /// Represents the internal sender config.
-#[cfg(feature = "internal-sender")]
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct SmtpConfig {
     /// Represents the SMTP server host.
@@ -51,7 +49,6 @@ pub struct SmtpConfig {
     pub passwd_cmd: String,
 }
 
-#[cfg(feature = "internal-sender")]
 impl SmtpConfig {
     /// Builds the internal SMTP sender credentials.
     pub fn credentials(&self) -> Result<SmtpCredentials, SmtpConfigError> {

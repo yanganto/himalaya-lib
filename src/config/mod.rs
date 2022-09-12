@@ -43,8 +43,3 @@ pub use self::maildir::*;
 pub mod notmuch;
 #[cfg(feature = "notmuch-backend")]
 pub use self::notmuch::*;
-
-#[cfg(feature = "internal-sender")]
-pub mod smtp;
-#[cfg(feature = "internal-sender")]
-pub use smtp::*;
