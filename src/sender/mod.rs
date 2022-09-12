@@ -1,5 +1,5 @@
 pub mod sender;
-pub use sender::Sender;
+pub use sender::*;
 
 pub mod smtp;
-pub use smtp::{Smtp, SmtpConfig, SmtpConfigError, SmtpError};
+pub use smtp::*;

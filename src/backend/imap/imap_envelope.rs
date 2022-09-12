@@ -26,7 +26,7 @@ use crate::{
         from_imap_flags,
         imap::{Error, Result},
     },
-    msg::Envelope,
+    email::Envelope,
 };
 
 /// Represents the raw envelope returned by the `imap` crate.

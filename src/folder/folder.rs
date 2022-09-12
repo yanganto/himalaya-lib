@@ -14,32 +14,26 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Mailboxes module.
+//! Folder module.
 //!
-//! This module contains the representation of the mailboxes.
+//! This module contains the representation of the email folder.
 
 use serde::Serialize;
-use std::ops;
+use std::fmt;
 
-use super::Mbox;
-
-/// Represents the list of mailboxes.
-#[derive(Debug, Default, Serialize)]
-pub struct Mboxes {
-    #[serde(rename = "response")]
-    pub mboxes: Vec<Mbox>,
+/// Represents the folder.
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Folder {
+    /// Represents the folder hierarchie delimiter.
+    pub delim: String,
+    /// Represents the folder name.
+    pub name: String,
+    /// Represents the folder description.
+    pub desc: String,
 }
 
-impl ops::Deref for Mboxes {
-    type Target = Vec<Mbox>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.mboxes
-    }
-}
-
-impl ops::DerefMut for Mboxes {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.mboxes
+impl fmt::Display for Folder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.name)
     }
 }

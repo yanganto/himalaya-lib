@@ -14,27 +14,39 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use log::{debug, trace};
-use std::{env, fs, path};
+//! Message module.
+//!
+//! This module contains everything related to messages.
 
-use crate::msg::{Error, Result};
+pub mod config;
+pub use config::{EmailHooks, EmailSendCmd, EmailSender, EmailTextPlainFormat};
 
-pub fn local_draft_path() -> path::PathBuf {
-    trace!(">> get local draft path");
+pub mod error;
+pub use error::*;
 
-    let path = env::temp_dir().join("himalaya-draft.eml");
-    debug!("local draft path: {:?}", path);
+mod flag;
+pub use flag::*;
 
-    trace!("<< get local draft path");
-    path
-}
+mod flags;
+pub use flags::*;
 
-pub fn remove_local_draft() -> Result<()> {
-    trace!(">> remove local draft");
+mod envelope;
+pub use envelope::*;
 
-    let path = local_draft_path();
-    fs::remove_file(&path).map_err(|err| Error::DeleteLocalDraftError(err, path))?;
+mod envelopes;
+pub use envelopes::*;
 
-    trace!("<< remove local draft");
-    Ok(())
-}
+mod parts;
+pub use parts::*;
+
+mod addr;
+pub use addr::*;
+
+mod tpl;
+pub use tpl::*;
+
+mod email;
+pub use email::*;
+
+mod email_utils;
+pub use email_utils::*;

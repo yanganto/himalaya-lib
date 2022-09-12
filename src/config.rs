@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Global config module.
+//! Config module.
 //!
-//! This module contains the representation of the global
-//! configuration of the user.
+//! This module contains everything related to the user's
+//! configuration.
 
 use mailparse::MailAddr;
 use shellexpand;
@@ -50,7 +50,7 @@ pub enum ConfigError {
     ParseAccountAddrError(#[source] mailparse::MailParseError, String),
     #[error("cannot find account address in {0}")]
     ParseAccountAddrNotFoundError(String),
-    #[error("cannot expand mailbox alias {1}")]
+    #[error("cannot expand folder alias {1}")]
     ExpandFolderAliasError(#[source] shellexpand::LookupError<env::VarError>, String),
     #[error("cannot parse download file name from {0}")]
     ParseDownloadFileNameError(PathBuf),

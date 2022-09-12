@@ -19,13 +19,13 @@ mod process;
 pub mod backend;
 pub use backend::*;
 
-pub mod mbox;
+pub mod folder;
 
 pub mod config;
 pub use config::*;
 
-pub mod msg;
-pub use msg::*;
+pub mod email;
+pub use email::*;
 
 pub mod sender;
 pub use sender::*;

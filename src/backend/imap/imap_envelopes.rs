@@ -19,7 +19,7 @@ use crate::{
         imap::{from_imap_fetch, Result},
         ImapFetch,
     },
-    msg::Envelopes,
+    email::Envelopes,
 };
 
 /// Represents the list of raw envelopes returned by the `imap` crate.

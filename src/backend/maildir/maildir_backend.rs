@@ -25,8 +25,8 @@ use std::{env, ffi::OsStr, fs, path::PathBuf};
 use crate::{
     backend::{backend::Result, maildir_envelopes, maildir_flags, Backend, IdMapper},
     config::{Config, DEFAULT_INBOX_FOLDER},
-    mbox::{Mbox, Mboxes},
-    msg::{Envelopes, Flags, Msg},
+    email::{Email, Envelopes, Flags},
+    folder::{Folder, Folders},
     MaildirConfig,
 };
 
@@ -107,12 +107,12 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn get_mboxes(&mut self) -> Result<Mboxes> {
+    fn get_mboxes(&mut self) -> Result<Folders> {
         trace!(">> get maildir mailboxes");
 
-        let mut mboxes = Mboxes::default();
+        let mut mboxes = Folders::default();
         for (name, desc) in &self.config.folder_aliases()? {
-            mboxes.push(Mbox {
+            mboxes.push(Folder {
                 delim: String::from("/"),
                 name: name.into(),
                 desc: desc.into(),
@@ -121,14 +121,14 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         for entry in self.mdir.list_subdirs() {
             let dir = entry.map_err(MaildirError::DecodeSubdirError)?;
             let dirname = dir.path().file_name();
-            mboxes.push(Mbox {
+            mboxes.push(Folder {
                 delim: String::from("/"),
                 name: dirname
                     .and_then(OsStr::to_str)
                     .and_then(|s| if s.len() < 2 { None } else { Some(&s[1..]) })
                     .ok_or_else(|| MaildirError::ParseSubdirError(dir.path().to_owned()))?
                     .into(),
-                ..Mbox::default()
+                ..Folder::default()
             });
         }
 
@@ -240,7 +240,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(hash)
     }
 
-    fn get_msg(&mut self, dir: &str, short_hash: &str) -> Result<Msg> {
+    fn get_msg(&mut self, dir: &str, short_hash: &str) -> Result<Email> {
         info!(">> get maildir message");
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
@@ -252,7 +252,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
             .find(&id)
             .ok_or_else(|| MaildirError::GetMsgError(id.to_owned()))?;
         let parsed_mail = mail_entry.parsed().map_err(MaildirError::ParseMsgError)?;
-        let msg = Msg::from_parsed_mail(parsed_mail, self.config)?;
+        let msg = Email::from_parsed_mail(parsed_mail, self.config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get maildir message");

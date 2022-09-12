@@ -4,7 +4,7 @@ use std::{collections::HashMap, env, fs, iter::FromIterator};
 use himalaya_lib::{
     backend::{Backend, MaildirBackend},
     config::{AccountConfig, Config},
-    msg::Flag,
+    email::Flag,
     BackendConfig, MaildirConfig,
 };
 

@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use crate::{
     config::ConfigError,
-    msg::{self, Flags},
+    email::{self, Flags},
 };
 
 #[derive(Error, Debug)]
@@ -96,7 +96,7 @@ pub enum Error {
     #[error(transparent)]
     ConfigError(#[from] ConfigError),
     #[error(transparent)]
-    MsgError(#[from] msg::Error),
+    MsgError(#[from] email::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;

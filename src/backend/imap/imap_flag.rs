@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::msg::Flag;
+use crate::email::Flag;
 
 pub fn from_imap_flag(imap_flag: &imap::types::Flag<'_>) -> Flag {
     match imap_flag {

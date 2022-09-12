@@ -22,8 +22,8 @@ use crate::{
         backend::Result, notmuch_envelopes, Backend, IdMapper, MaildirBackend, NotmuchError,
     },
     config::Config,
-    mbox::{Mbox, Mboxes},
-    msg::{Envelopes, Msg},
+    email::{Email, Envelopes},
+    folder::{Folder, Folders},
     NotmuchConfig,
 };
 
@@ -117,32 +117,27 @@ impl<'a> NotmuchBackend<'a> {
 
 impl<'a> Backend<'a> for NotmuchBackend<'a> {
     fn add_mbox(&mut self, _mbox: &str) -> Result<()> {
-        info!(">> add notmuch mailbox");
-        info!("<< add notmuch mailbox");
         Err(NotmuchError::AddMboxUnimplementedError)?
     }
 
-    fn get_mboxes(&mut self) -> Result<Mboxes> {
-        trace!(">> get notmuch virtual mailboxes");
+    fn get_mboxes(&mut self) -> Result<Folders> {
+        trace!(">> get notmuch virtual folders");
 
-        let mut mboxes = Mboxes::default();
+        let mut mboxes = Folders::default();
         for (name, desc) in &self.config.folder_aliases()? {
-            mboxes.push(Mbox {
+            mboxes.push(Folder {
                 name: name.into(),
                 desc: desc.into(),
-                ..Mbox::default()
+                ..Folder::default()
             })
         }
         mboxes.sort_by(|a, b| b.name.partial_cmp(&a.name).unwrap());
 
-        trace!("notmuch virtual mailboxes: {:?}", mboxes);
-        trace!("<< get notmuch virtual mailboxes");
+        trace!("notmuch virtual folders: {:?}", mboxes);
         Ok(mboxes)
     }
 
     fn del_mbox(&mut self, _mbox: &str) -> Result<()> {
-        info!(">> delete notmuch mailbox");
-        info!("<< delete notmuch mailbox");
         Err(NotmuchError::DelMboxUnimplementedError)?
     }
 
@@ -153,7 +148,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         page: usize,
     ) -> Result<Envelopes> {
         info!(">> get notmuch envelopes");
-        debug!("virtual mailbox: {:?}", virt_mbox);
+        debug!("virtual folder: {:?}", virt_mbox);
         debug!("page size: {:?}", page_size);
         debug!("page: {:?}", page);
 
@@ -177,7 +172,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         page: usize,
     ) -> Result<Envelopes> {
         info!(">> search notmuch envelopes");
-        debug!("virtual mailbox: {:?}", virt_mbox);
+        debug!("virtual folder: {:?}", virt_mbox);
         debug!("query: {:?}", query);
         debug!("page size: {:?}", page_size);
         debug!("page: {:?}", page);
@@ -233,7 +228,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         Ok(hash)
     }
 
-    fn get_msg(&mut self, _: &str, short_hash: &str) -> Result<Msg> {
+    fn get_msg(&mut self, _: &str, short_hash: &str) -> Result<Email> {
         info!(">> add notmuch envelopes");
         debug!("short hash: {:?}", short_hash);
 
@@ -250,7 +245,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         debug!("message file path: {:?}", msg_file_path);
         let raw_msg = fs::read(&msg_file_path).map_err(NotmuchError::ReadMsgError)?;
         let msg = mailparse::parse_mail(&raw_msg).map_err(NotmuchError::ParseMsgError)?;
-        let msg = Msg::from_parsed_mail(msg, &self.config)?;
+        let msg = Email::from_parsed_mail(msg, &self.config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get notmuch message");

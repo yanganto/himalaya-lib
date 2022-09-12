@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Notmuch mailbox module.
+//! Notmuch folder module.
 //!
 //! This module provides Notmuch types and conversion utilities
 //! related to the envelope
@@ -24,7 +24,7 @@ use log::{info, trace};
 
 use crate::{
     backend::{backend::Result, NotmuchError},
-    msg::{from_slice_to_addrs, Addr, Envelope, Flag},
+    email::{from_slice_to_addrs, Addr, Envelope, Flag},
 };
 
 /// Represents the raw envelope returned by the `notmuch` crate.

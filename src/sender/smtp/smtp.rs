@@ -11,9 +11,9 @@ use thiserror::Error;
 
 use crate::{
     config::{Config, ConfigError},
-    msg::{self, Msg},
+    email::{self, Email},
     process::{self, ProcessError},
-    Sender,
+    Sender, SenderError,
 };
 
 use super::{SmtpConfig, SmtpConfigError};
@@ -36,7 +36,7 @@ pub enum SmtpError {
     #[error(transparent)]
     ConfigError(#[from] ConfigError),
     #[error(transparent)]
-    MsgError(#[from] msg::error::Error),
+    MsgError(#[from] email::error::Error),
 }
 
 pub struct Smtp<'a> {
@@ -82,8 +82,7 @@ impl Smtp<'_> {
 }
 
 impl Sender for Smtp<'_> {
-    type Error = SmtpError;
-    fn send(&mut self, config: &Config, msg: &Msg) -> Result<Vec<u8>, SmtpError> {
+    fn send(&mut self, config: &Config, msg: &Email) -> Result<Vec<u8>, SenderError> {
         let mut raw_msg = msg.into_sendable_msg(config)?.formatted();
 
         let envelope: lettre::address::Envelope =
@@ -94,7 +93,7 @@ impl Sender for Smtp<'_> {
                 }
                 let parsed_mail =
                     mailparse::parse_mail(&raw_msg).map_err(SmtpError::ParseEmailError)?;
-                Msg::from_parsed_mail(parsed_mail, config)?.try_into()
+                Email::from_parsed_mail(parsed_mail, config)?.try_into()
             } else {
                 msg.try_into()
             }?;

@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{backend::backend::Result, msg::Envelopes};
+use crate::{backend::backend::Result, email::Envelopes};
 
 use super::notmuch_envelope;
 

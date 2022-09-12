@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::{
     config::{Config, DEFAULT_SIGNATURE_DELIM},
-    msg::{
+    email::{
         from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs, Addr,
         Addrs, BinaryPart, Error, Part, Parts, Result, TextPlainPart, TplOverride,
     },
@@ -42,7 +42,7 @@ use crate::{
 
 /// Representation of a message.
 #[derive(Debug, Clone, Default)]
-pub struct Msg {
+pub struct Email {
     /// The sequence number of the message.
     ///
     /// [RFC3501]: https://datatracker.ietf.org/doc/html/rfc3501#section-2.3.1.2
@@ -71,7 +71,7 @@ pub struct Msg {
     pub raw: Vec<u8>,
 }
 
-impl Msg {
+impl Email {
     pub fn attachments(&self) -> Vec<BinaryPart> {
         self.parts
             .iter()
@@ -365,23 +365,23 @@ impl Msg {
         Ok(self)
     }
 
-    pub fn merge_with(&mut self, msg: Msg) {
-        self.from = msg.from;
-        self.reply_to = msg.reply_to;
-        self.to = msg.to;
-        self.cc = msg.cc;
-        self.bcc = msg.bcc;
-        self.subject = msg.subject;
+    pub fn merge_with(&mut self, email: Email) {
+        self.from = email.from;
+        self.reply_to = email.reply_to;
+        self.to = email.to;
+        self.cc = email.cc;
+        self.bcc = email.bcc;
+        self.subject = email.subject;
 
-        if msg.message_id.is_some() {
-            self.message_id = msg.message_id;
+        if email.message_id.is_some() {
+            self.message_id = email.message_id;
         }
 
-        if msg.in_reply_to.is_some() {
-            self.in_reply_to = msg.in_reply_to;
+        if email.in_reply_to.is_some() {
+            self.in_reply_to = email.in_reply_to;
         }
 
-        for part in msg.parts.0.into_iter() {
+        for part in email.parts.0.into_iter() {
             match part {
                 Part::Binary(_) => self.parts.push(part),
                 Part::TextPlain(_) => {
@@ -572,7 +572,7 @@ impl Msg {
         trace!(">> build message from parsed mail");
         trace!("parsed mail: {:?}", parsed_mail);
 
-        let mut msg = Msg::default();
+        let mut email = Email::default();
         for header in parsed_mail.get_headers() {
             trace!(">> parse header {:?}", header);
 
@@ -583,14 +583,14 @@ impl Msg {
             trace!("header value: {:?}", val);
 
             match key.to_lowercase().as_str() {
-                "message-id" => msg.message_id = Some(val),
-                "in-reply-to" => msg.in_reply_to = Some(val),
+                "message-id" => email.message_id = Some(val),
+                "in-reply-to" => email.in_reply_to = Some(val),
                 "subject" => {
-                    msg.subject = val;
+                    email.subject = val;
                 }
                 "date" => match mailparse::dateparse(&val) {
                     Ok(timestamp) => {
-                        msg.date = Some(Utc.timestamp(timestamp, 0).with_timezone(&Local))
+                        email.date = Some(Utc.timestamp(timestamp, 0).with_timezone(&Local))
                     }
                     Err(err) => {
                         warn!("cannot parse message date {:?}, skipping it", val);
@@ -598,37 +598,37 @@ impl Msg {
                     }
                 },
                 "from" => {
-                    msg.from = from_slice_to_addrs(&val)
+                    email.from = from_slice_to_addrs(&val)
                         .map_err(|err| Error::ParseHeaderError(err, key, val.to_owned()))?
                 }
                 "to" => {
-                    msg.to = from_slice_to_addrs(&val)
+                    email.to = from_slice_to_addrs(&val)
                         .map_err(|err| Error::ParseHeaderError(err, key, val.to_owned()))?
                 }
                 "reply-to" => {
-                    msg.reply_to = from_slice_to_addrs(&val)
+                    email.reply_to = from_slice_to_addrs(&val)
                         .map_err(|err| Error::ParseHeaderError(err, key, val.to_owned()))?
                 }
                 "cc" => {
-                    msg.cc = from_slice_to_addrs(&val)
+                    email.cc = from_slice_to_addrs(&val)
                         .map_err(|err| Error::ParseHeaderError(err, key, val.to_owned()))?
                 }
                 "bcc" => {
-                    msg.bcc = from_slice_to_addrs(&val)
+                    email.bcc = from_slice_to_addrs(&val)
                         .map_err(|err| Error::ParseHeaderError(err, key, val.to_owned()))?
                 }
                 key => {
-                    msg.headers.insert(key.to_lowercase(), val);
+                    email.headers.insert(key.to_lowercase(), val);
                 }
             }
             trace!("<< parse header");
         }
 
-        msg.parts = Parts::from_parsed_mail(config, &parsed_mail)?;
-        trace!("message: {:?}", msg);
+        email.parts = Parts::from_parsed_mail(config, &parsed_mail)?;
+        trace!("message: {:?}", email);
 
         info!("<< build message from parsed mail");
-        Ok(msg)
+        Ok(email)
     }
 
     /// Transforms a message into a readable string. A readable
@@ -655,78 +655,82 @@ impl Msg {
             }
         }
 
-        let mut readable_msg = String::new();
+        let mut readable_email = String::new();
         for h in all_headers {
             match h.as_str() {
                 "message-id" => match self.message_id {
                     Some(ref message_id) if !message_id.is_empty() => {
-                        readable_msg.push_str(&format!("Message-Id: {}\n", message_id));
+                        readable_email.push_str(&format!("Message-Id: {}\n", message_id));
                     }
                     _ => (),
                 },
                 "in-reply-to" => match self.in_reply_to {
                     Some(ref in_reply_to) if !in_reply_to.is_empty() => {
-                        readable_msg.push_str(&format!("In-Reply-To: {}\n", in_reply_to));
+                        readable_email.push_str(&format!("In-Reply-To: {}\n", in_reply_to));
                     }
                     _ => (),
                 },
                 "subject" => {
-                    readable_msg.push_str(&format!("Subject: {}\n", self.subject));
+                    readable_email.push_str(&format!("Subject: {}\n", self.subject));
                 }
                 "date" => {
                     if let Some(ref date) = self.date {
-                        readable_msg.push_str(&format!("Date: {}\n", date.to_rfc2822()));
+                        readable_email.push_str(&format!("Date: {}\n", date.to_rfc2822()));
                     }
                 }
                 "from" => match self.from {
                     Some(ref addrs) if !addrs.is_empty() => {
-                        readable_msg.push_str(&format!("From: {}\n", addrs));
+                        readable_email.push_str(&format!("From: {}\n", addrs));
                     }
                     _ => (),
                 },
                 "to" => match self.to {
                     Some(ref addrs) if !addrs.is_empty() => {
-                        readable_msg.push_str(&format!("To: {}\n", addrs));
+                        readable_email.push_str(&format!("To: {}\n", addrs));
                     }
                     _ => (),
                 },
                 "reply-to" => match self.reply_to {
                     Some(ref addrs) if !addrs.is_empty() => {
-                        readable_msg.push_str(&format!("Reply-To: {}\n", addrs));
+                        readable_email.push_str(&format!("Reply-To: {}\n", addrs));
                     }
                     _ => (),
                 },
                 "cc" => match self.cc {
                     Some(ref addrs) if !addrs.is_empty() => {
-                        readable_msg.push_str(&format!("Cc: {}\n", addrs));
+                        readable_email.push_str(&format!("Cc: {}\n", addrs));
                     }
                     _ => (),
                 },
                 "bcc" => match self.bcc {
                     Some(ref addrs) if !addrs.is_empty() => {
-                        readable_msg.push_str(&format!("Bcc: {}\n", addrs));
+                        readable_email.push_str(&format!("Bcc: {}\n", addrs));
                     }
                     _ => (),
                 },
                 key => match self.headers.get(key) {
                     Some(ref val) if !val.is_empty() => {
-                        readable_msg.push_str(&format!("{}: {}\n", key.to_case(Case::Train), val));
+                        readable_email.push_str(&format!(
+                            "{}: {}\n",
+                            key.to_case(Case::Train),
+                            val
+                        ));
                     }
                     _ => (),
                 },
             };
         }
 
-        if !readable_msg.is_empty() {
-            readable_msg.push_str("\n");
+        if !readable_email.is_empty() {
+            readable_email.push_str("\n");
         }
 
-        readable_msg.push_str(&self.fold_text_parts(text_mime));
-        Ok(readable_msg)
+        readable_email.push_str(&self.fold_text_parts(text_mime));
+        Ok(readable_email)
     }
 }
 
-impl TryInto<lettre::address::Envelope> for Msg {
+impl TryInto<lettre::address::Envelope> for Email {
     type Error = Error;
 
     fn try_into(self) -> Result<lettre::address::Envelope> {
@@ -734,7 +738,7 @@ impl TryInto<lettre::address::Envelope> for Msg {
     }
 }
 
-impl TryInto<lettre::address::Envelope> for &Msg {
+impl TryInto<lettre::address::Envelope> for &Email {
     type Error = Error;
 
     fn try_into(self) -> Result<lettre::address::Envelope> {
@@ -760,7 +764,7 @@ mod tests {
     use mailparse::SingleInfo;
     use std::iter::FromIterator;
 
-    use crate::{config::AccountConfig, msg::Addr};
+    use crate::{config::AccountConfig, email::Addr};
 
     use super::*;
 
@@ -783,8 +787,8 @@ mod tests {
         //  - "to" is replaced by "from"
         //  - "from" is replaced by the address from the account config
 
-        let msg = Msg {
-            message_id: Some("msg-id".into()),
+        let email = Email {
+            message_id: Some("email-id".into()),
             subject: "subject".into(),
             from: Some(
                 vec![Addr::Single(SingleInfo {
@@ -793,19 +797,19 @@ mod tests {
                 })]
                 .into(),
             ),
-            ..Msg::default()
+            ..Email::default()
         }
         .into_reply(false, &config)
         .unwrap();
 
-        assert_eq!(msg.message_id, None);
-        assert_eq!(msg.in_reply_to.unwrap(), "msg-id");
-        assert_eq!(msg.subject, "Re: subject");
+        assert_eq!(email.message_id, None);
+        assert_eq!(email.in_reply_to.unwrap(), "email-id");
+        assert_eq!(email.subject, "Re: subject");
         assert_eq!(
-            msg.from.unwrap().to_string(),
+            email.from.unwrap().to_string(),
             "\"Test\" <test-account@local>"
         );
-        assert_eq!(msg.to.unwrap().to_string(), "test-sender@local");
+        assert_eq!(email.to.unwrap().to_string(), "test-sender@local");
 
         // Checks that:
         //  - "subject" does not contains additional "Re: "
@@ -813,7 +817,7 @@ mod tests {
         //  - "to" contains one address when "all" is false
         //  - "cc" are empty when "all" is false
 
-        let msg = Msg {
+        let email = Email {
             subject: "Re: subject".into(),
             from: Some(
                 vec![Addr::Single(SingleInfo {
@@ -842,23 +846,23 @@ mod tests {
                 })]
                 .into(),
             ),
-            ..Msg::default()
+            ..Email::default()
         }
         .into_reply(false, &config)
         .unwrap();
 
-        assert_eq!(msg.subject, "Re: subject");
+        assert_eq!(email.subject, "Re: subject");
         assert_eq!(
-            msg.to.unwrap().to_string(),
+            email.to.unwrap().to_string(),
             "\"Sender\" <test-sender-to-reply@local>"
         );
-        assert_eq!(msg.cc, None);
+        assert_eq!(email.cc, None);
 
         // Checks that:
         //  - "to" contains all addresses except for the sender when "all" is true
         //  - "cc" contains all addresses except for the sender when "all" is true
 
-        let msg = Msg {
+        let email = Email {
             from: Some(
                 vec![
                     Addr::Single(SingleInfo {
@@ -893,17 +897,17 @@ mod tests {
                 ]
                 .into(),
             ),
-            ..Msg::default()
+            ..Email::default()
         }
         .into_reply(true, &config)
         .unwrap();
 
         assert_eq!(
-            msg.to.unwrap().to_string(),
+            email.to.unwrap().to_string(),
             "\"Sender 1\" <test-sender-1@local>, \"Sender 2\" <test-sender-2@local>"
         );
         assert_eq!(
-            msg.cc.unwrap().to_string(),
+            email.cc.unwrap().to_string(),
             "\"Sender 1\" <test-sender-1@local>, \"Sender 2\" <test-sender-2@local>"
         );
     }
@@ -920,32 +924,34 @@ mod tests {
             )]),
             ..Config::default()
         };
-        let msg = Msg {
+        let email = Email {
             parts: Parts(vec![Part::TextPlain(TextPlainPart {
                 content: String::from("hello, world!"),
             })]),
-            ..Msg::default()
+            ..Email::default()
         };
 
-        // empty msg headers, empty headers, empty config
+        // empty email headers, empty headers, empty config
         assert_eq!(
             "hello, world!",
-            msg.to_readable_string("plain", vec![], &config).unwrap()
+            email.to_readable_string("plain", vec![], &config).unwrap()
         );
-        // empty msg headers, basic headers
+        // empty email headers, basic headers
         assert_eq!(
             "hello, world!",
-            msg.to_readable_string("plain", vec!["From", "DATE", "custom-hEader"], &config)
+            email
+                .to_readable_string("plain", vec!["From", "DATE", "custom-hEader"], &config)
                 .unwrap()
         );
-        // empty msg headers, multiple subject headers
+        // empty email headers, multiple subject headers
         assert_eq!(
             "Subject: \n\nhello, world!",
-            msg.to_readable_string("plain", vec!["subject", "Subject", "SUBJECT"], &config)
+            email
+                .to_readable_string("plain", vec!["subject", "Subject", "SUBJECT"], &config)
                 .unwrap()
         );
 
-        let msg = Msg {
+        let email = Email {
             headers: HashMap::from_iter([("custom-header".into(), "custom value".into())]),
             message_id: Some("<message-id>".into()),
             from: Some(
@@ -959,26 +965,29 @@ mod tests {
             parts: Parts(vec![Part::TextPlain(TextPlainPart {
                 content: String::from("hello, world!"),
             })]),
-            ..Msg::default()
+            ..Email::default()
         };
 
-        // header present in msg headers, empty config
+        // header present in email headers, empty config
         assert_eq!(
             "From: \"Test\" <test@local>\n\nhello, world!",
-            msg.to_readable_string("plain", vec!["from"], &config)
+            email
+                .to_readable_string("plain", vec!["from"], &config)
                 .unwrap()
         );
-        // header present but empty in msg headers, empty config
+        // header present but empty in email headers, empty config
         assert_eq!(
             "hello, world!",
-            msg.to_readable_string("plain", vec!["cc"], &config)
+            email
+                .to_readable_string("plain", vec!["cc"], &config)
                 .unwrap()
         );
-        // multiple same custom headers present in msg headers, empty
+        // multiple same custom headers present in email headers, empty
         // config
         assert_eq!(
             "Custom-Header: custom value\n\nhello, world!",
-            msg.to_readable_string("plain", vec!["custom-header", "cuSTom-HeaDer"], &config)
+            email
+                .to_readable_string("plain", vec!["custom-header", "cuSTom-HeaDer"], &config)
                 .unwrap()
         );
 
@@ -996,10 +1005,10 @@ mod tests {
             accounts: HashMap::from_iter([(String::new(), account)]),
             ..Config::default()
         };
-        // header present but empty in msg headers, empty config
+        // header present but empty in email headers, empty config
         assert_eq!(
             "Custom-Header: custom value\nSubject: \nFrom: \"Test\" <test@local>\nMessage-Id: <message-id>\n\nhello, world!",
-            msg.to_readable_string("plain", vec!["cc", "message-ID"], &config)
+            email.to_readable_string("plain", vec!["cc", "message-ID"], &config)
                 .unwrap()
         );
     }

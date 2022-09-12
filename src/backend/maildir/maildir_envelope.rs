@@ -19,7 +19,7 @@ use log::trace;
 
 use crate::{
     backend::{backend::Result, maildir_flags},
-    msg::{from_slice_to_addrs, Addr, Envelope},
+    email::{from_slice_to_addrs, Addr, Envelope},
 };
 
 use super::MaildirError;

@@ -14,39 +14,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Message module.
+//! Folder module.
 //!
-//! This module contains everything related to messages.
+//! This module contains everything related to email folders.
 
-pub mod config;
-pub use config::{EmailHooks, EmailSendCmd, EmailSender, EmailTextPlainFormat};
+pub mod folder;
+pub use folder::*;
 
-pub mod error;
-pub use error::*;
-
-mod flag;
-pub use flag::*;
-
-mod flags;
-pub use flags::*;
-
-mod envelope;
-pub use envelope::*;
-
-mod envelopes;
-pub use envelopes::*;
-
-mod parts;
-pub use parts::*;
-
-mod addr;
-pub use addr::*;
-
-mod tpl;
-pub use tpl::*;
-
-mod msg;
-pub use msg::*;
-
-mod msg_utils;
-pub use msg_utils::*;
+pub mod folders;
+pub use folders::*;

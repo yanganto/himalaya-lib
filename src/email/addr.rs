@@ -21,7 +21,7 @@
 use mailparse;
 use std::{fmt, result};
 
-use crate::msg::Result;
+use crate::email::Result;
 
 /// Defines a single email address.
 pub type Addr = mailparse::MailAddr;

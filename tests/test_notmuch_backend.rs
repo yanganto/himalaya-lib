@@ -9,7 +9,7 @@ use himalaya_lib::backend::{Backend, MaildirBackend, NotmuchBackend};
 fn test_notmuch_backend() {
     use himalaya_lib::{
         config::{AccountConfig, Config},
-        msg::Flag,
+        email::Flag,
         BackendConfig, MaildirConfig, NotmuchConfig,
     };
 

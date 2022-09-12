@@ -19,7 +19,7 @@
 //! This module provides Maildir types and conversion utilities
 //! related to the envelope.
 
-use crate::{backend::backend::Result, msg::Envelopes};
+use crate::{backend::backend::Result, email::Envelopes};
 
 use super::{maildir_envelope, MaildirError};
 

@@ -24,8 +24,8 @@ use thiserror::Error;
 
 use crate::{
     config::ConfigError,
-    mbox::Mboxes,
-    msg::{self, Envelopes, Msg},
+    email::{self, Email, Envelopes},
+    folder::Folders,
 };
 
 use super::id_mapper;
@@ -51,7 +51,7 @@ pub enum Error {
     ImapConfigError(#[from] ImapConfigError),
 
     #[error(transparent)]
-    MsgError(#[from] msg::Error),
+    MsgError(#[from] email::Error),
 
     #[error(transparent)]
     IdMapperError(#[from] id_mapper::Error),
@@ -73,7 +73,7 @@ pub trait Backend<'a> {
     }
 
     fn add_mbox(&mut self, mbox: &str) -> Result<()>;
-    fn get_mboxes(&mut self) -> Result<Mboxes>;
+    fn get_mboxes(&mut self) -> Result<Folders>;
     fn del_mbox(&mut self, mbox: &str) -> Result<()>;
     fn get_envelopes(&mut self, mbox: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn search_envelopes(
@@ -85,7 +85,7 @@ pub trait Backend<'a> {
         page: usize,
     ) -> Result<Envelopes>;
     fn add_msg(&mut self, mbox: &str, msg: &[u8], flags: &str) -> Result<String>;
-    fn get_msg(&mut self, mbox: &str, id: &str) -> Result<Msg>;
+    fn get_msg(&mut self, mbox: &str, id: &str) -> Result<Email>;
     fn copy_msg(&mut self, mbox_src: &str, mbox_dst: &str, ids: &str) -> Result<()>;
     fn move_msg(&mut self, mbox_src: &str, mbox_dst: &str, ids: &str) -> Result<()>;
     fn del_msg(&mut self, mbox: &str, ids: &str) -> Result<()>;

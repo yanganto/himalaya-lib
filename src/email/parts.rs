@@ -22,7 +22,7 @@ use std::{
 };
 use uuid::Uuid;
 
-use crate::{config::Config, msg};
+use crate::{config::Config, email};
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TextPlainPart {
@@ -68,7 +68,7 @@ impl Parts {
     pub fn from_parsed_mail<'a>(
         config: &'a Config,
         part: &'a mailparse::ParsedMail<'a>,
-    ) -> msg::Result<Self> {
+    ) -> email::Result<Self> {
         let mut parts = vec![];
         if part.subparts.is_empty() && part.get_headers().get_first_value("content-type").is_none()
         {
@@ -99,7 +99,7 @@ fn build_parts_map_rec(
     config: &Config,
     parsed_mail: &mailparse::ParsedMail,
     parts: &mut Vec<Part>,
-) -> msg::Result<()> {
+) -> email::Result<()> {
     if parsed_mail.subparts.is_empty() {
         let cdisp = parsed_mail.get_content_disposition();
         match cdisp.disposition {
@@ -133,15 +133,15 @@ fn build_parts_map_rec(
         let ctype = parsed_mail
             .get_headers()
             .get_first_value("content-type")
-            .ok_or_else(|| msg::Error::GetMultipartContentTypeError)?;
+            .ok_or_else(|| email::Error::GetMultipartContentTypeError)?;
         if ctype.starts_with("multipart/encrypted") {
             let decrypted_part = parsed_mail
                 .subparts
                 .get(1)
-                .ok_or_else(|| msg::Error::GetEncryptedPartMultipartError)
+                .ok_or_else(|| email::Error::GetEncryptedPartMultipartError)
                 .and_then(|part| decrypt_part(config, part))?;
             let parsed_mail = mailparse::parse_mail(decrypted_part.as_bytes())
-                .map_err(msg::Error::ParseEncryptedPartError)?;
+                .map_err(email::Error::ParseEncryptedPartError)?;
             build_parts_map_rec(config, &parsed_mail, parts)?;
         } else {
             for part in parsed_mail.subparts.iter() {
@@ -153,14 +153,15 @@ fn build_parts_map_rec(
     Ok(())
 }
 
-fn decrypt_part(config: &Config, msg: &mailparse::ParsedMail) -> msg::Result<String> {
-    let msg_path = env::temp_dir().join(Uuid::new_v4().to_string());
-    let msg_body = msg
+fn decrypt_part(config: &Config, email: &mailparse::ParsedMail) -> email::Result<String> {
+    let email_path = env::temp_dir().join(Uuid::new_v4().to_string());
+    let email_body = email
         .get_body()
-        .map_err(msg::Error::GetEncryptedPartBodyError)?;
-    fs::write(msg_path.clone(), &msg_body).map_err(msg::Error::WriteEncryptedPartBodyError)?;
+        .map_err(email::Error::GetEncryptedPartBodyError)?;
+    fs::write(email_path.clone(), &email_body)
+        .map_err(email::Error::WriteEncryptedPartBodyError)?;
     let content = config
-        .pgp_decrypt_file(msg_path.clone())
-        .map_err(msg::Error::DecryptPartError)?;
+        .pgp_decrypt_file(email_path.clone())
+        .map_err(email::Error::DecryptPartError)?;
     Ok(content)
 }

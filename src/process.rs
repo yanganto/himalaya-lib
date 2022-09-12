@@ -46,8 +46,7 @@ pub enum ProcessError {
 }
 
 pub fn run(cmd: &str) -> Result<String, ProcessError> {
-    debug!(">> run command");
-    debug!("command: {}", cmd);
+    debug!("running command: {}", cmd);
 
     let output = if cfg!(target_os = "windows") {
         Command::new("cmd").args(&["/C", cmd]).output()
@@ -56,9 +55,8 @@ pub fn run(cmd: &str) -> Result<String, ProcessError> {
     };
     let output = output.map_err(|err| ProcessError::RunCmdError(err, cmd.to_string()))?;
     let output = String::from_utf8(output.stdout).map_err(ProcessError::ParseCmdOutputError)?;
-
     trace!("command output: {}", output);
-    debug!("<< run command");
+
     Ok(output)
 }
 

@@ -29,8 +29,8 @@ use crate::{
         imap::msg_sort_criterion::SortCriteria, imap::Error, into_imap_flags, Backend,
     },
     config::Config,
-    mbox::{Mbox, Mboxes},
-    msg::{Envelopes, Flags, Msg},
+    email::{Email, Envelopes, Flags},
+    folder::{Folder, Folders},
     process, ImapConfig,
 };
 
@@ -107,7 +107,7 @@ impl<'a> ImapBackend<'a> {
     pub fn notify(&mut self, keepalive: u64, mbox: &str) -> Result<()> {
         debug!("notify");
 
-        debug!("examine mailbox {:?}", mbox);
+        debug!("examine folder {:?}", mbox);
         self.sess()?
             .examine(mbox)
             .map_err(|err| Error::ExamineMboxError(err, mbox.to_owned()))?;
@@ -174,7 +174,7 @@ impl<'a> ImapBackend<'a> {
     }
 
     pub fn watch(&mut self, keepalive: u64, mbox: &str) -> Result<()> {
-        debug!("examine mailbox: {}", mbox);
+        debug!("examine folder: {}", mbox);
 
         self.sess()?
             .examine(mbox)
@@ -211,27 +211,27 @@ impl<'a> ImapBackend<'a> {
 
 impl<'a> Backend<'a> for ImapBackend<'a> {
     fn add_mbox(&mut self, mbox: &str) -> Result<()> {
-        trace!(">> add mailbox");
+        trace!(">> add folder");
 
         self.sess()?
             .create(mbox)
             .map_err(|err| Error::CreateMboxError(err, mbox.to_owned()))?;
 
-        trace!("<< add mailbox");
+        trace!("<< add folder");
         Ok(())
     }
 
-    fn get_mboxes(&mut self) -> Result<Mboxes> {
-        trace!(">> get imap mailboxes");
+    fn get_mboxes(&mut self) -> Result<Folders> {
+        trace!(">> get imap folders");
 
         let imap_mboxes = self
             .sess()?
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
-        let mboxes = Mboxes {
-            mboxes: imap_mboxes
+        let mboxes = Folders {
+            folders: imap_mboxes
                 .iter()
-                .map(|imap_mbox| Mbox {
+                .map(|imap_mbox| Folder {
                     delim: imap_mbox.delimiter().unwrap_or_default().into(),
                     name: imap_mbox.name().into(),
                     desc: imap_mbox
@@ -250,19 +250,19 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
                 .collect(),
         };
 
-        trace!("imap mailboxes: {:?}", mboxes);
-        trace!("<< get imap mailboxes");
+        trace!("imap folders: {:?}", mboxes);
+        trace!("<< get imap folders");
         Ok(mboxes)
     }
 
     fn del_mbox(&mut self, mbox: &str) -> Result<()> {
-        trace!(">> delete imap mailbox");
+        trace!(">> delete imap folder");
 
         self.sess()?
             .delete(mbox)
             .map_err(|err| Error::DeleteMboxError(err, mbox.to_owned()))?;
 
-        trace!("<< delete imap mailbox");
+        trace!("<< delete imap folder");
         Ok(())
     }
 
@@ -362,7 +362,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(last_seq.to_string())
     }
 
-    fn get_msg(&mut self, mbox: &str, seq: &str) -> Result<Msg> {
+    fn get_msg(&mut self, mbox: &str, seq: &str) -> Result<Email> {
         self.sess()?
             .select(mbox)
             .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
@@ -374,7 +374,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
             .first()
             .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?;
         let msg_raw = fetch.body().unwrap_or_default().to_owned();
-        let mut msg = Msg::from_parsed_mail(
+        let mut msg = Email::from_parsed_mail(
             mailparse::parse_mail(&msg_raw)
                 .map_err(|err| Error::ParseMsgError(err, seq.to_owned()))?,
             self.config,

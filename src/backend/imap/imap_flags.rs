@@ -16,7 +16,7 @@
 
 use crate::{
     backend::from_imap_flag,
-    msg::{Flag, Flags},
+    email::{Flag, Flags},
 };
 
 pub fn into_imap_flags<'a>(flags: &'a Flags) -> Vec<imap::types::Flag<'a>> {
