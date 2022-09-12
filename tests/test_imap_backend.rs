@@ -25,14 +25,14 @@ fn test_imap_backend() {
             String::new(),
             AccountConfig {
                 default: Some(true),
-                email_sender: Some(EmailSender::Internal(SmtpConfig {
+                email_sender: EmailSender::Internal(SmtpConfig {
                     host: "localhost".into(),
                     port: 3465,
                     starttls: Some(false),
                     insecure: Some(true),
                     login: "inbox@localhost".into(),
                     passwd_cmd: "echo 'password'".into(),
-                })),
+                }),
                 backend: BackendConfig::Imap(imap_config.clone()),
                 ..AccountConfig::default()
             },

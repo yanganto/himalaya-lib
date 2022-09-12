@@ -62,7 +62,7 @@ pub struct AccountConfig {
     /// Represents the command used to encrypt an email.
     pub email_writing_encrypt_cmd: Option<String>,
     /// Represents the email sender provider.
-    pub email_sender: Option<EmailSender>,
+    pub email_sender: EmailSender,
     /// Represents the email hooks.
     pub email_hooks: Option<EmailHooks>,
 

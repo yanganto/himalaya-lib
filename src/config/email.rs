@@ -24,16 +24,24 @@ use super::SmtpConfig;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EmailSender {
     None,
+    #[cfg(feature = "internal-sender")]
     /// Represents the internal SMTP mailer library.
     Internal(SmtpConfig),
     /// Represents the system command.
-    Cmd(String),
+    External(EmailSendCmd),
 }
 
 impl Default for EmailSender {
     fn default() -> Self {
         Self::None
     }
+}
+
+/// Represents the external sender config.
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct EmailSendCmd {
+    /// Represents the send command.
+    pub cmd: String,
 }
 
 /// Represents the text/plain format as defined in the [RFC2646].

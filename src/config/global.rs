@@ -21,7 +21,7 @@
 
 use std::{collections::HashMap, path::PathBuf};
 
-use super::{EmailHooks, EmailSender, EmailTextPlainFormat};
+use super::{EmailHooks, EmailTextPlainFormat};
 
 /// Represents the global configuration of the user.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -52,8 +52,6 @@ pub struct GlobalConfig {
     pub email_reading_decrypt_cmd: Option<String>,
     /// Represents the command used to encrypt an email.
     pub email_writing_encrypt_cmd: Option<String>,
-    /// Represents the email sender provider.
-    pub email_sender: Option<EmailSender>,
     /// Represents the email hooks.
     pub email_hooks: Option<EmailHooks>,
 }

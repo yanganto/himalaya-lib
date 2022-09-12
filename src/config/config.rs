@@ -300,12 +300,8 @@ impl Config {
             .map(|sig| format!("{}{}", delim, sig.trim_end())))
     }
 
-    pub fn email_sender(&self) -> Result<Option<&EmailSender>, ConfigError> {
-        Ok(self
-            .global
-            .email_sender
-            .as_ref()
-            .or(self.account()?.email_sender.as_ref()))
+    pub fn email_sender(&self) -> Result<&EmailSender, ConfigError> {
+        Ok(&self.account()?.email_sender)
     }
 }
 
