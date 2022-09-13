@@ -12,8 +12,7 @@ use thiserror::Error;
 use crate::{
     config::{Config, ConfigError},
     email::{self, Email},
-    process::{self, ProcessError},
-    Sender, SenderError,
+    process, Sender, SenderError,
 };
 
 use super::{SmtpConfig, SmtpConfigError};
@@ -29,7 +28,7 @@ pub enum SmtpError {
     #[error("cannot send email")]
     SendError(#[source] lettre::transport::smtp::Error),
     #[error("cannot execute pre-send hook")]
-    ExecutePreSendHookError(#[source] ProcessError),
+    ExecutePreSendHookError(#[source] process::Error),
 
     #[error(transparent)]
     SmtpConfigError(#[from] SmtpConfigError),

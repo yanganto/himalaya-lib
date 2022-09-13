@@ -21,17 +21,17 @@
 
 use thiserror::Error;
 
-use crate::process::{self, ProcessError};
+use crate::process;
 
 #[cfg(feature = "imap-backend")]
 #[derive(Debug, Error)]
 pub enum ImapConfigError {
     #[error("cannot get imap password")]
-    GetPasswdError(#[source] ProcessError),
+    GetPasswdError(#[source] process::Error),
     #[error("cannot get imap password: password is empty")]
     GetPasswdEmptyError,
     #[error("cannot start the notify mode")]
-    StartNotifyModeError(#[source] ProcessError),
+    StartNotifyModeError(#[source] process::Error),
 }
 
 /// Represents the IMAP backend configuration.

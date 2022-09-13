@@ -22,12 +22,12 @@
 use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
 use thiserror::Error;
 
-use crate::process::{self, ProcessError};
+use crate::process;
 
 #[derive(Debug, Error)]
 pub enum SmtpConfigError {
     #[error("cannot get smtp password")]
-    GetPasswdError(#[source] ProcessError),
+    GetPasswdError(#[source] process::Error),
     #[error("cannot get smtp password: password is empty")]
     GetPasswdEmptyError,
 }

@@ -23,12 +23,12 @@ use log::{debug, trace};
 use std::{
     io::{self, prelude::*},
     process::{Command, Stdio},
-    string,
+    result, string,
 };
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum ProcessError {
+pub enum Error {
     #[error("cannot run command {1:?}")]
     RunCmdError(#[source] io::Error, String),
     #[error("cannot parse command output")]
@@ -45,7 +45,10 @@ pub enum ProcessError {
     ReadStdoutError(#[source] io::Error),
 }
 
-pub fn run(cmd: &str) -> Result<String, ProcessError> {
+pub type Result<T> = result::Result<T, Error>;
+
+/// Runs the given command and returns the output as UTF8 string.
+pub fn run(cmd: &str) -> Result<String> {
     debug!("running command: {}", cmd);
 
     let output = if cfg!(target_os = "windows") {
@@ -53,31 +56,32 @@ pub fn run(cmd: &str) -> Result<String, ProcessError> {
     } else {
         Command::new("sh").arg("-c").arg(cmd).output()
     };
-    let output = output.map_err(|err| ProcessError::RunCmdError(err, cmd.to_string()))?;
-    let output = String::from_utf8(output.stdout).map_err(ProcessError::ParseCmdOutputError)?;
+    let output = output.map_err(|err| Error::RunCmdError(err, cmd.to_string()))?;
+    let output = String::from_utf8(output.stdout).map_err(Error::ParseCmdOutputError)?;
     trace!("command output: {}", output);
 
     Ok(output)
 }
 
-pub fn pipe(cmd: &str, data: &[u8]) -> Result<Vec<u8>, ProcessError> {
-    let mut res = Vec::new();
+/// Runs the given command in a pipeline and returns the raw output.
+pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
 
-    let process = Command::new(cmd)
+    let pipeline = Command::new(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .map_err(|err| ProcessError::SpawnProcessError(err, cmd.to_string()))?;
-    process
+        .map_err(|err| Error::SpawnProcessError(err, cmd.to_string()))?;
+    pipeline
         .stdin
-        .ok_or_else(|| ProcessError::GetStdinError)?
-        .write_all(data)
-        .map_err(ProcessError::WriteStdinError)?;
-    process
+        .ok_or_else(|| Error::GetStdinError)?
+        .write_all(input)
+        .map_err(Error::WriteStdinError)?;
+    pipeline
         .stdout
-        .ok_or_else(|| ProcessError::GetStdoutError)?
-        .read_to_end(&mut res)
-        .map_err(ProcessError::ReadStdoutError)?;
+        .ok_or_else(|| Error::GetStdoutError)?
+        .read_to_end(&mut output)
+        .map_err(Error::ReadStdoutError)?;
 
-    Ok(res)
+    Ok(output)
 }

@@ -24,10 +24,7 @@ use shellexpand;
 use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf};
 use thiserror::Error;
 
-use crate::{
-    process::{self, ProcessError},
-    BackendConfig, EmailHooks, EmailSender, EmailTextPlainFormat,
-};
+use crate::{process, BackendConfig, EmailHooks, EmailSender, EmailTextPlainFormat};
 
 pub const DEFAULT_PAGE_SIZE: usize = 10;
 pub const DEFAULT_SIGNATURE_DELIM: &str = "-- \n";
@@ -39,11 +36,11 @@ pub const DEFAULT_DRAFT_FOLDER: &str = "Drafts";
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("cannot encrypt file using pgp")]
-    EncryptFileError(#[source] ProcessError),
+    EncryptFileError(#[source] process::Error),
     #[error("cannot find encrypt file command from config file")]
     EncryptFileMissingCmdError,
     #[error("cannot decrypt file using pgp")]
-    DecryptFileError(#[source] ProcessError),
+    DecryptFileError(#[source] process::Error),
     #[error("cannot find decrypt file command from config file")]
     DecryptFileMissingCmdError,
     #[error("cannot parse account address {0}")]
