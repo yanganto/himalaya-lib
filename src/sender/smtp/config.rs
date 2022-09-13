@@ -19,18 +19,22 @@
 //! This module contains the representation of the SMTP email sender
 //! configuration of the user account.
 
+use std::result;
+
 use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
 use thiserror::Error;
 
 use crate::process;
 
 #[derive(Debug, Error)]
-pub enum SmtpConfigError {
+pub enum Error {
     #[error("cannot get smtp password")]
     GetPasswdError(#[source] process::Error),
     #[error("cannot get smtp password: password is empty")]
     GetPasswdEmptyError,
 }
+
+pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the internal sender config.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -51,12 +55,12 @@ pub struct SmtpConfig {
 
 impl SmtpConfig {
     /// Builds the internal SMTP sender credentials.
-    pub fn credentials(&self) -> Result<SmtpCredentials, SmtpConfigError> {
-        let passwd = process::run(&self.passwd_cmd).map_err(SmtpConfigError::GetPasswdError)?;
+    pub fn credentials(&self) -> Result<SmtpCredentials> {
+        let passwd = process::run(&self.passwd_cmd).map_err(Error::GetPasswdError)?;
         let passwd = passwd
             .lines()
             .next()
-            .ok_or_else(|| SmtpConfigError::GetPasswdEmptyError)?;
+            .ok_or_else(|| Error::GetPasswdEmptyError)?;
         Ok(SmtpCredentials::new(
             self.login.to_owned(),
             passwd.to_owned(),
