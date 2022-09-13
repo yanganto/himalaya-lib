@@ -23,7 +23,7 @@ use std::result;
 use thiserror::Error;
 
 use crate::{
-    config::ConfigError,
+    config,
     email::{self, Email, Envelopes},
     folder::Folders,
 };
@@ -45,7 +45,7 @@ pub enum Error {
     ImapError(#[from] super::imap::Error),
 
     #[error(transparent)]
-    ConfigError(#[from] ConfigError),
+    ConfigError(#[from] config::Error),
     #[cfg(feature = "imap-backend")]
     #[error(transparent)]
     ImapConfigError(#[from] ImapConfigError),

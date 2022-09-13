@@ -21,7 +21,7 @@
 
 use mailparse::MailAddr;
 use shellexpand;
-use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf};
+use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf, result};
 use thiserror::Error;
 
 use crate::{process, BackendConfig, EmailHooks, EmailSender, EmailTextPlainFormat};
@@ -34,7 +34,7 @@ pub const DEFAULT_SENT_FOLDER: &str = "Sent";
 pub const DEFAULT_DRAFT_FOLDER: &str = "Drafts";
 
 #[derive(Debug, Error)]
-pub enum ConfigError {
+pub enum Error {
     #[error("cannot encrypt file using pgp")]
     EncryptFileError(#[source] process::Error),
     #[error("cannot find encrypt file command from config file")]
@@ -57,6 +57,8 @@ pub enum ConfigError {
     FindAccountError(String),
 }
 
+pub type Result<T> = result::Result<T, Error>;
+
 /// Represents the user configuration.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Config {
@@ -72,7 +74,7 @@ impl Config {
     /// Gets the account configuration matching the account name. If
     /// the account name is not defined, gets the first default
     /// account from the accounts map.
-    pub fn account(&self) -> Result<&AccountConfig, ConfigError> {
+    pub fn account(&self) -> Result<&AccountConfig> {
         match self.account_name.as_ref().map(|s| s.as_str()) {
             Some("default") | Some("") | None => self
                 .accounts
@@ -84,16 +86,16 @@ impl Config {
                         None
                     }
                 })
-                .ok_or_else(|| ConfigError::FindDefaultAccountError),
+                .ok_or_else(|| Error::FindDefaultAccountError),
             Some(name) => self
                 .accounts
                 .get(name)
-                .ok_or_else(|| ConfigError::FindAccountError(name.to_owned())),
+                .ok_or_else(|| Error::FindAccountError(name.to_owned())),
         }
     }
 
     /// Builds the full RFC822 compliant user address email.
-    pub fn address(&self) -> Result<MailAddr, ConfigError> {
+    pub fn address(&self) -> Result<MailAddr> {
         let display_name = &self
             .account()?
             .display_name
@@ -112,9 +114,9 @@ impl Config {
             format!("{} <{}>", display_name, &self.account()?.email)
         };
         let addr = mailparse::addrparse(&addr)
-            .map_err(|err| ConfigError::ParseAccountAddrError(err, addr.to_owned()))?
+            .map_err(|err| Error::ParseAccountAddrError(err, addr.to_owned()))?
             .first()
-            .ok_or_else(|| ConfigError::ParseAccountAddrNotFoundError(addr.to_owned()))?
+            .ok_or_else(|| Error::ParseAccountAddrNotFoundError(addr.to_owned()))?
             .to_owned();
 
         Ok(addr)
@@ -122,32 +124,32 @@ impl Config {
 
     // TODO: move this function to a better location.
     /// Encrypts a file.
-    pub fn pgp_encrypt_file(&self, addr: &str, path: PathBuf) -> Result<String, ConfigError> {
+    pub fn pgp_encrypt_file(&self, addr: &str, path: PathBuf) -> Result<String> {
         let cmd = self
             .account()?
             .email_writing_encrypt_cmd
             .as_ref()
             .or_else(|| self.global.email_writing_encrypt_cmd.as_ref())
-            .ok_or_else(|| ConfigError::EncryptFileMissingCmdError)?;
+            .ok_or_else(|| Error::EncryptFileMissingCmdError)?;
         let cmd = &format!("{} {} {:?}", cmd, addr, path);
-        process::run(cmd).map_err(ConfigError::EncryptFileError)
+        process::run(cmd).map_err(Error::EncryptFileError)
     }
 
     // TODO: move this function to a better location.
     /// Decrypts a file.
-    pub fn pgp_decrypt_file(&self, path: PathBuf) -> Result<String, ConfigError> {
+    pub fn pgp_decrypt_file(&self, path: PathBuf) -> Result<String> {
         let cmd = self
             .account()?
             .email_reading_decrypt_cmd
             .as_ref()
             .or_else(|| self.global.email_reading_decrypt_cmd.as_ref())
-            .ok_or_else(|| ConfigError::DecryptFileMissingCmdError)?;
+            .ok_or_else(|| Error::DecryptFileMissingCmdError)?;
         let cmd = &format!("{} {:?}", cmd, path);
-        process::run(cmd).map_err(ConfigError::DecryptFileError)
+        process::run(cmd).map_err(Error::DecryptFileError)
     }
 
     /// Gets the downloads directory path.
-    pub fn downloads_dir(&self) -> Result<PathBuf, ConfigError> {
+    pub fn downloads_dir(&self) -> Result<PathBuf> {
         Ok(self
             .account()?
             .downloads_dir
@@ -166,10 +168,7 @@ impl Config {
     }
 
     /// Gets the download path from a file name.
-    pub fn get_download_file_path<S: AsRef<str>>(
-        &self,
-        file_name: S,
-    ) -> Result<PathBuf, ConfigError> {
+    pub fn get_download_file_path<S: AsRef<str>>(&self, file_name: S) -> Result<PathBuf> {
         let file_path = self.downloads_dir()?.join(file_name.as_ref());
         self.get_unique_download_file_path(&file_path, |path, _count| path.is_file())
     }
@@ -180,7 +179,7 @@ impl Config {
         &self,
         original_file_path: &PathBuf,
         is_file: impl Fn(&PathBuf, u8) -> bool,
-    ) -> Result<PathBuf, ConfigError> {
+    ) -> Result<PathBuf> {
         let mut count = 0;
         let file_ext = original_file_path
             .extension()
@@ -196,7 +195,7 @@ impl Config {
                     .file_stem()
                     .and_then(OsStr::to_str)
                     .map(|fstem| format!("{}_{}{}", fstem, count, file_ext))
-                    .ok_or_else(|| ConfigError::ParseDownloadFileNameError(file_path.to_owned()))?,
+                    .ok_or_else(|| Error::ParseDownloadFileNameError(file_path.to_owned()))?,
             ));
         }
 
@@ -206,7 +205,7 @@ impl Config {
     /// Gets the alias of the given folder if exists, otherwise
     /// returns the folder itself. Also tries to expand shell
     /// variables.
-    pub fn folder_alias(&self, folder: &str) -> Result<String, ConfigError> {
+    pub fn folder_alias(&self, folder: &str) -> Result<String> {
         let aliases = self.folder_aliases()?;
         let folder = folder.trim().to_lowercase();
         let alias =
@@ -221,17 +220,17 @@ impl Config {
                 });
         let alias = shellexpand::full(alias)
             .map(String::from)
-            .map_err(|err| ConfigError::ExpandFolderAliasError(err, alias.to_owned()))?;
+            .map_err(|err| Error::ExpandFolderAliasError(err, alias.to_owned()))?;
         Ok(alias)
     }
 
-    pub fn folder_aliases(&self) -> Result<HashMap<String, String>, ConfigError> {
+    pub fn folder_aliases(&self) -> Result<HashMap<String, String>> {
         let mut folder_aliases = self.global.folder_aliases.clone().unwrap_or_default();
         folder_aliases.extend(self.account()?.folder_aliases.clone().unwrap_or_default());
         Ok(folder_aliases)
     }
 
-    pub fn email_hooks(&self) -> Result<EmailHooks, ConfigError> {
+    pub fn email_hooks(&self) -> Result<EmailHooks> {
         Ok(EmailHooks {
             pre_send: self
                 .account()?
@@ -248,7 +247,7 @@ impl Config {
         })
     }
 
-    pub fn email_listing_page_size(&self) -> Result<usize, ConfigError> {
+    pub fn email_listing_page_size(&self) -> Result<usize> {
         Ok(self
             .account()?
             .email_listing_page_size
@@ -256,7 +255,7 @@ impl Config {
             .unwrap_or(DEFAULT_PAGE_SIZE))
     }
 
-    pub fn email_reading_format(&self) -> Result<EmailTextPlainFormat, ConfigError> {
+    pub fn email_reading_format(&self) -> Result<EmailTextPlainFormat> {
         Ok(self
             .account()?
             .email_reading_format
@@ -266,7 +265,7 @@ impl Config {
             .unwrap_or_default())
     }
 
-    pub fn email_reading_headers(&self) -> Result<Vec<String>, ConfigError> {
+    pub fn email_reading_headers(&self) -> Result<Vec<String>> {
         Ok(self
             .account()?
             .email_reading_headers
@@ -276,7 +275,7 @@ impl Config {
             .unwrap_or_default())
     }
 
-    pub fn signature(&self) -> Result<Option<String>, ConfigError> {
+    pub fn signature(&self) -> Result<Option<String>> {
         let delim = self
             .account()?
             .signature_delim
@@ -297,12 +296,12 @@ impl Config {
             .map(|sig| format!("{}{}", delim, sig.trim_end())))
     }
 
-    pub fn email_sender(&self) -> Result<&EmailSender, ConfigError> {
+    pub fn email_sender(&self) -> Result<&EmailSender> {
         Ok(&self.account()?.email_sender)
     }
 }
 
-/// Represents the global configuration of the user.
+/// Represents the use top level configuration.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct GlobalConfig {
     /// Represents the display name of the user.

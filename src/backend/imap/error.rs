@@ -18,7 +18,7 @@ use std::result;
 use thiserror::Error;
 
 use crate::{
-    config::ConfigError,
+    config,
     email::{self, Flags},
 };
 
@@ -94,7 +94,7 @@ pub enum Error {
     LogoutError(#[source] imap::Error),
 
     #[error(transparent)]
-    ConfigError(#[from] ConfigError),
+    ConfigError(#[from] config::Error),
     #[error(transparent)]
     MsgError(#[from] email::Error),
 }

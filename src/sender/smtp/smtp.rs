@@ -10,9 +10,9 @@ use std::convert::TryInto;
 use thiserror::Error;
 
 use crate::{
-    config::{Config, ConfigError},
+    config::{Config, Error},
     email::{self, Email},
-    process, Sender, SenderError,
+    process, Sender,
 };
 
 use super::{SmtpConfig, SmtpConfigError};
@@ -33,7 +33,7 @@ pub enum SmtpError {
     #[error(transparent)]
     SmtpConfigError(#[from] SmtpConfigError),
     #[error(transparent)]
-    ConfigError(#[from] ConfigError),
+    ConfigError(#[from] Error),
     #[error(transparent)]
     MsgError(#[from] email::error::Error),
 }
@@ -81,7 +81,8 @@ impl Smtp<'_> {
 }
 
 impl Sender for Smtp<'_> {
-    fn send(&mut self, config: &Config, msg: &Email) -> Result<Vec<u8>, SenderError> {
+    type Error = SmtpError;
+    fn send(&mut self, config: &Config, msg: &Email) -> Result<Vec<u8>, Self::Error> {
         let mut raw_msg = msg.into_sendable_msg(config)?.formatted();
 
         let envelope: lettre::address::Envelope =

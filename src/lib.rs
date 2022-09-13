@@ -22,7 +22,10 @@ pub use backend::*;
 pub mod folder;
 
 pub mod config;
-pub use config::*;
+pub use config::{
+    AccountConfig, AccountsConfig, Config, GlobalConfig, DEFAULT_DRAFT_FOLDER,
+    DEFAULT_INBOX_FOLDER, DEFAULT_PAGE_SIZE, DEFAULT_SENT_FOLDER, DEFAULT_SIGNATURE_DELIM,
+};
 
 pub mod email;
 pub use email::*;
