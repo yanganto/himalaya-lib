@@ -18,15 +18,13 @@
 //!
 //! This module contains the representation of the email folders.
 
-use serde::Serialize;
 use std::ops;
 
 use super::Folder;
 
 /// Represents the list of folders.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Folders {
-    #[serde(rename = "response")]
     pub folders: Vec<Folder>,
 }
 

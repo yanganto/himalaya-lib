@@ -18,11 +18,10 @@
 //!
 //! This module contains the representation of the email folder.
 
-use serde::Serialize;
 use std::fmt;
 
 /// Represents the folder.
-#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Folder {
     /// Represents the folder hierarchie delimiter.
     pub delim: String,
