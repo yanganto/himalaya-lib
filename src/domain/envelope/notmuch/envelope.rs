@@ -29,19 +29,19 @@ use crate::{
 };
 
 /// Represents the raw envelope returned by the `notmuch` crate.
-pub type RawNotmuchEnvelope = notmuch::Message;
+pub type RawEnvelope = notmuch::Message;
 
-pub fn from_notmuch_msg(raw_envelope: RawNotmuchEnvelope) -> Result<Envelope> {
+pub fn from_raw(raw: RawEnvelope) -> Result<Envelope> {
     info!("begin: try building envelope from notmuch parsed mail");
 
-    let internal_id = raw_envelope.id().to_string();
+    let internal_id = raw.id().to_string();
     let id = format!("{:x}", md5::compute(&internal_id));
-    let subject = raw_envelope
+    let subject = raw
         .header("subject")
         .map_err(|err| Error::ParseMsgHeaderError(err, String::from("subject")))?
         .unwrap_or_default()
         .to_string();
-    let sender = raw_envelope
+    let sender = raw
         .header("from")
         .map_err(|err| Error::ParseMsgHeaderError(err, String::from("from")))?
         .ok_or_else(|| Error::FindMsgHeaderError(String::from("from")))?
@@ -62,7 +62,7 @@ pub fn from_notmuch_msg(raw_envelope: RawNotmuchEnvelope) -> Result<Envelope> {
             Addr::Group(mailparse::GroupInfo { group_name, .. }) => group_name.to_owned(),
         })
         .ok_or_else(|| Error::FindSenderError)?;
-    let date = raw_envelope
+    let date = raw
         .header("date")
         .map_err(|err| Error::ParseMsgHeaderError(err, String::from("date")))?
         .ok_or_else(|| Error::FindMsgHeaderError(String::from("date")))?
@@ -75,7 +75,7 @@ pub fn from_notmuch_msg(raw_envelope: RawNotmuchEnvelope) -> Result<Envelope> {
     let envelope = Envelope {
         id,
         internal_id,
-        flags: raw_envelope
+        flags: raw
             .tags()
             .map(|tag| Flag::Custom(tag.to_string()))
             .collect(),

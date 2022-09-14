@@ -28,13 +28,13 @@ use super::envelope;
 
 /// Represents a list of raw envelopees returned by the `maildir`
 /// crate.
-pub type MaildirEnvelopes = maildir::MailEntries;
+pub type RawEnvelopes = maildir::MailEntries;
 
-pub fn from_maildir_entries(mail_entries: MaildirEnvelopes) -> Result<Envelopes> {
+pub fn from_raws(entries: RawEnvelopes) -> Result<Envelopes> {
     let mut envelopes = Envelopes::default();
-    for entry in mail_entries {
+    for entry in entries {
         let entry = entry.map_err(Error::DecodeEntryError)?;
-        envelopes.push(envelope::from_maildir_entry(entry)?);
+        envelopes.push(envelope::from_raw(entry)?);
     }
     Ok(envelopes)
 }

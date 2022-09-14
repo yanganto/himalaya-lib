@@ -29,23 +29,22 @@ use crate::{
 };
 
 /// Represents the raw envelope returned by the `imap` crate.
-pub type ImapFetch = imap::types::Fetch;
+pub type RawEnvelope = imap::types::Fetch;
 
-pub fn from_imap_fetch(fetch: &ImapFetch) -> Result<Envelope> {
-    let envelope = fetch
+pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
+    let envelope = raw
         .envelope()
-        .ok_or_else(|| Error::GetEnvelopeError(fetch.message))?;
+        .ok_or_else(|| Error::GetEnvelopeError(raw.message))?;
 
-    let id = fetch.message.to_string();
+    let id = raw.message.to_string();
 
-    let flags = flags::from_imap_flags(fetch.flags());
+    let flags = flags::from_raws(raw.flags());
 
     let subject = envelope
         .subject
         .as_ref()
         .map(|subj| {
-            rfc2047_decoder::decode(subj)
-                .map_err(|err| Error::DecodeSubjectError(err, fetch.message))
+            rfc2047_decoder::decode(subj).map_err(|err| Error::DecodeSubjectError(err, raw.message))
         })
         .unwrap_or_else(|| Ok(String::default()))?;
 
@@ -54,31 +53,31 @@ pub fn from_imap_fetch(fetch: &ImapFetch) -> Result<Envelope> {
         .as_ref()
         .and_then(|addrs| addrs.get(0))
         .or_else(|| envelope.from.as_ref().and_then(|addrs| addrs.get(0)))
-        .ok_or_else(|| Error::GetSenderError(fetch.message))?;
+        .ok_or_else(|| Error::GetSenderError(raw.message))?;
     let sender = if let Some(ref name) = sender.name {
         rfc2047_decoder::decode(&name.to_vec())
-            .map_err(|err| Error::DecodeSenderNameError(err, fetch.message))?
+            .map_err(|err| Error::DecodeSenderNameError(err, raw.message))?
     } else {
         let mbox = sender
             .mailbox
             .as_ref()
-            .ok_or_else(|| Error::GetSenderError(fetch.message))
+            .ok_or_else(|| Error::GetSenderError(raw.message))
             .and_then(|mbox| {
                 rfc2047_decoder::decode(&mbox.to_vec())
-                    .map_err(|err| Error::DecodeSenderNameError(err, fetch.message))
+                    .map_err(|err| Error::DecodeSenderNameError(err, raw.message))
             })?;
         let host = sender
             .host
             .as_ref()
-            .ok_or_else(|| Error::GetSenderError(fetch.message))
+            .ok_or_else(|| Error::GetSenderError(raw.message))
             .and_then(|host| {
                 rfc2047_decoder::decode(&host.to_vec())
-                    .map_err(|err| Error::DecodeSenderNameError(err, fetch.message))
+                    .map_err(|err| Error::DecodeSenderNameError(err, raw.message))
             })?;
         format!("{}@{}", mbox, host)
     };
 
-    let date = fetch
+    let date = raw
         .internal_date()
         .map(|date| date.naive_local().to_string());
 

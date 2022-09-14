@@ -18,9 +18,9 @@ use imap;
 
 use crate::Flag;
 
-pub type ImapFlag<'a> = imap::types::Flag<'a>;
+pub type RawFlag<'a> = imap::types::Flag<'a>;
 
-pub fn from_imap_flag(imap_flag: &ImapFlag<'_>) -> Flag {
+pub fn from_raw(imap_flag: &RawFlag<'_>) -> Flag {
     match imap_flag {
         imap::types::Flag::Seen => Flag::Seen,
         imap::types::Flag::Answered => Flag::Answered,

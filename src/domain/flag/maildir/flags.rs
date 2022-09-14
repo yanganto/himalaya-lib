@@ -18,7 +18,7 @@ use crate::Flags;
 
 use super::flag;
 
-pub fn from_maildir_entry(entry: &maildir::MailEntry) -> Flags {
+pub fn from_raw(entry: &maildir::MailEntry) -> Flags {
     entry.flags().chars().map(flag::from_char).collect()
 }
 

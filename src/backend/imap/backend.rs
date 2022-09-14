@@ -230,7 +230,7 @@ impl<'a> ImapBackend<'a> {
                     .map_err(Error::FetchNewMsgsEnvelopeError)?;
 
                 for fetch in fetches.iter() {
-                    let msg = envelope::from_imap_fetch(fetch)?;
+                    let msg = envelope::imap::from_raw(fetch)?;
                     let uid = fetch.uid.ok_or_else(|| Error::GetUidError(fetch.message))?;
 
                     let from = msg.sender.to_owned().into();
@@ -370,7 +370,7 @@ impl<'a> Backend for ImapBackend<'a> {
             .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
-        let envelopes = envelope::from_imap_fetches(fetches)?;
+        let envelopes = envelope::imap::from_raws(fetches)?;
         Ok(envelopes)
     }
 
@@ -420,7 +420,7 @@ impl<'a> Backend for ImapBackend<'a> {
             .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
-        let envelopes = envelope::from_imap_fetches(fetches)?;
+        let envelopes = envelope::imap::from_raws(fetches)?;
         Ok(envelopes)
     }
 
@@ -428,7 +428,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let flags: Flags = flags.into();
         self.sess()?
             .append(mbox, msg)
-            .flags(flag::into_imap_flags(&flags))
+            .flags(flag::imap::into_raws(&flags))
             .finish()
             .map_err(|err| Error::AppendMsgError(err, mbox.to_owned()))?;
         let last_seq = self

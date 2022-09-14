@@ -218,7 +218,7 @@ impl<'a> Backend for MaildirBackend<'a> {
 
         // Reads envelopes from the "cur" folder of the selected
         // maildir.
-        let mut envelopes = envelopes::from_maildir_entries(mdir.list_cur())?;
+        let mut envelopes = envelopes::from_raws(mdir.list_cur())?;
         debug!("envelopes len: {:?}", envelopes.len());
         trace!("envelopes: {:?}", envelopes);
 

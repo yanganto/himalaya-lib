@@ -35,11 +35,8 @@ use tree_magic;
 use uuid::Uuid;
 
 use crate::{
-    config::{self, Config, DEFAULT_SIGNATURE_DELIM},
-    email::{
-        from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs, Addr,
-        Addrs, BinaryPart, Part, Parts, TextPlainPart, TplOverride,
-    },
+    config, from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs, Addr,
+    Addrs, BinaryPart, Config, Part, Parts, TextPlainPart, TplOverride, DEFAULT_SIGNATURE_DELIM,
 };
 
 #[derive(Error, Debug)]

@@ -20,12 +20,12 @@ use super::envelope;
 
 /// Represents a list of raw envelopees returned by the `notmuch`
 /// crate.
-pub type RawNotmuchEnvelopes = notmuch::Messages;
+pub type RawEnvelopes = notmuch::Messages;
 
-pub fn from_notmuch_msgs(msgs: RawNotmuchEnvelopes) -> Result<Envelopes> {
+pub fn from_raws(raws: RawEnvelopes) -> Result<Envelopes> {
     let mut envelopes = Envelopes::default();
-    for msg in msgs {
-        let envelope = envelope::from_notmuch_msg(msg)?;
+    for msg in raws {
+        let envelope = envelope::from_raw(msg)?;
         envelopes.push(envelope);
     }
     Ok(envelopes)

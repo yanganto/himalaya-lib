@@ -24,16 +24,16 @@ use crate::{
 };
 
 /// Represents the raw envelope returned by the `maildir` crate.
-pub type MaildirEnvelope = maildir::MailEntry;
+pub type RawEnvelope = maildir::MailEntry;
 
-pub fn from_maildir_entry(mut entry: MaildirEnvelope) -> Result<Envelope> {
+pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
     trace!(">> build envelope from maildir parsed mail");
 
     let mut envelope = Envelope::default();
 
     envelope.internal_id = entry.id().to_owned();
     envelope.id = format!("{:x}", md5::compute(&envelope.internal_id));
-    envelope.flags = flags::from_maildir_entry(&entry);
+    envelope.flags = flags::from_raw(&entry);
 
     let parsed_mail = entry.parsed().map_err(Error::ParseMsgError)?;
 

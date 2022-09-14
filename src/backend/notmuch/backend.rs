@@ -122,7 +122,7 @@ impl<'a> NotmuchBackend<'a> {
             .db
             .create_query(query)
             .map_err(Error::BuildQueryError)?;
-        let mut envelopes = envelopes::from_notmuch_msgs(
+        let mut envelopes = envelopes::from_raws(
             query_builder
                 .search_messages()
                 .map_err(Error::SearchEnvelopesError)?,
