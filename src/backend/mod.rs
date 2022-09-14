@@ -14,26 +14,22 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod config;
-pub use config::BackendConfig;
-
 pub mod backend;
-pub use backend::*;
-
+pub mod config;
 pub mod id_mapper;
-pub use id_mapper::*;
-
 #[cfg(feature = "imap-backend")]
 pub mod imap;
-#[cfg(feature = "imap-backend")]
-pub use self::imap::*;
-
 #[cfg(feature = "maildir-backend")]
 pub mod maildir;
-#[cfg(feature = "maildir-backend")]
-pub use self::maildir::*;
-
 #[cfg(feature = "notmuch-backend")]
 pub mod notmuch;
+
+pub use self::backend::*;
+pub use self::config::BackendConfig;
+pub use self::id_mapper::*;
+#[cfg(feature = "imap-backend")]
+pub use self::imap::{ImapBackend, ImapConfig};
+#[cfg(feature = "maildir-backend")]
+pub use self::maildir::{MaildirBackend, MaildirConfig};
 #[cfg(feature = "notmuch-backend")]
-pub use self::notmuch::*;
+pub use self::notmuch::{NotmuchBackend, NotmuchConfig};

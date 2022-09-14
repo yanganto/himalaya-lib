@@ -30,8 +30,9 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    config, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper, Backend, Config,
-    Email, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig, DEFAULT_INBOX_FOLDER,
+    backend, config, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper, Backend,
+    Config, Email, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
+    DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
@@ -150,9 +151,7 @@ impl<'a> MaildirBackend<'a> {
 }
 
 impl<'a> Backend for MaildirBackend<'a> {
-    type Error = Error;
-
-    fn folder_add(&mut self, subdir: &str) -> Result<()> {
+    fn folder_add(&mut self, subdir: &str) -> backend::Result<()> {
         info!(">> add maildir subdir");
         debug!("subdir: {:?}", subdir);
 
@@ -165,7 +164,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn folder_list(&mut self) -> Result<Folders> {
+    fn folder_list(&mut self) -> backend::Result<Folders> {
         trace!(">> get maildir mailboxes");
 
         let mut mboxes = Folders::default();
@@ -195,7 +194,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(mboxes)
     }
 
-    fn folder_delete(&mut self, dir: &str) -> Result<()> {
+    fn folder_delete(&mut self, dir: &str) -> backend::Result<()> {
         info!(">> delete maildir dir");
         debug!("dir: {:?}", dir);
 
@@ -208,7 +207,12 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn envelope_list(&mut self, dir: &str, page_size: usize, page: usize) -> Result<Envelopes> {
+    fn envelope_list(
+        &mut self,
+        dir: &str,
+        page_size: usize,
+        page: usize,
+    ) -> backend::Result<Envelopes> {
         info!(">> get maildir envelopes");
         debug!("dir: {:?}", dir);
         debug!("page size: {:?}", page_size);
@@ -267,13 +271,13 @@ impl<'a> Backend for MaildirBackend<'a> {
         _sort: &str,
         _page_size: usize,
         _page: usize,
-    ) -> Result<Envelopes> {
+    ) -> backend::Result<Envelopes> {
         info!(">> search maildir envelopes");
         info!("<< search maildir envelopes");
         Err(Error::SearchEnvelopesUnimplementedError)?
     }
 
-    fn email_add(&mut self, dir: &str, msg: &[u8], flags: &str) -> Result<String> {
+    fn email_add(&mut self, dir: &str, msg: &[u8], flags: &str) -> backend::Result<String> {
         info!(">> add maildir message");
         debug!("dir: {:?}", dir);
         debug!("flags: {:?}", flags);
@@ -297,7 +301,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(hash)
     }
 
-    fn email_get(&mut self, dir: &str, short_hash: &str) -> Result<Email> {
+    fn email_get(&mut self, dir: &str, short_hash: &str) -> backend::Result<Email> {
         info!(">> get maildir message");
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
@@ -316,7 +320,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(msg)
     }
 
-    fn email_list(&mut self, dir: &str, short_hash: &str) -> Result<Email> {
+    fn email_list(&mut self, dir: &str, short_hash: &str) -> backend::Result<Email> {
         info!(">> get maildir message");
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
@@ -335,7 +339,12 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(msg)
     }
 
-    fn email_copy(&mut self, dir_src: &str, dir_dst: &str, short_hash: &str) -> Result<()> {
+    fn email_copy(
+        &mut self,
+        dir_src: &str,
+        dir_dst: &str,
+        short_hash: &str,
+    ) -> backend::Result<()> {
         info!(">> copy maildir message");
         debug!("source dir: {:?}", dir_src);
         debug!("destination dir: {:?}", dir_dst);
@@ -358,7 +367,12 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn email_move(&mut self, dir_src: &str, dir_dst: &str, short_hash: &str) -> Result<()> {
+    fn email_move(
+        &mut self,
+        dir_src: &str,
+        dir_dst: &str,
+        short_hash: &str,
+    ) -> backend::Result<()> {
         info!(">> move maildir message");
         debug!("source dir: {:?}", dir_src);
         debug!("destination dir: {:?}", dir_dst);
@@ -381,7 +395,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn email_delete(&mut self, dir: &str, short_hash: &str) -> Result<()> {
+    fn email_delete(&mut self, dir: &str, short_hash: &str) -> backend::Result<()> {
         info!(">> delete maildir message");
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
@@ -395,7 +409,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn flags_add(&mut self, dir: &str, short_hash: &str, flags: &str) -> Result<()> {
+    fn flags_add(&mut self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         info!(">> add maildir message flags");
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
@@ -413,7 +427,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn flags_set(&mut self, dir: &str, short_hash: &str, flags: &str) -> Result<()> {
+    fn flags_set(&mut self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         info!(">> set maildir message flags");
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
@@ -430,7 +444,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn flags_delete(&mut self, dir: &str, short_hash: &str, flags: &str) -> Result<()> {
+    fn flags_delete(&mut self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         info!(">> delete maildir message flags");
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);

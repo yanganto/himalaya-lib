@@ -286,9 +286,7 @@ impl<'a> ImapBackend<'a> {
 }
 
 impl<'a> Backend for ImapBackend<'a> {
-    type Error = Error;
-
-    fn folder_add(&mut self, mbox: &str) -> Result<()> {
+    fn folder_add(&mut self, mbox: &str) -> backend::Result<()> {
         trace!(">> add folder");
 
         self.sess()?
@@ -299,7 +297,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
-    fn folder_list(&mut self) -> Result<Folders> {
+    fn folder_list(&mut self) -> backend::Result<Folders> {
         trace!(">> get imap folders");
 
         let imap_mboxes = self
@@ -333,7 +331,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(mboxes)
     }
 
-    fn folder_delete(&mut self, mbox: &str) -> Result<()> {
+    fn folder_delete(&mut self, mbox: &str) -> backend::Result<()> {
         trace!(">> delete imap folder");
 
         self.sess()?
@@ -344,7 +342,12 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
-    fn envelope_list(&mut self, mbox: &str, page_size: usize, page: usize) -> Result<Envelopes> {
+    fn envelope_list(
+        &mut self,
+        mbox: &str,
+        page_size: usize,
+        page: usize,
+    ) -> backend::Result<Envelopes> {
         let last_seq = self
             .sess()?
             .select(mbox)
@@ -381,7 +384,7 @@ impl<'a> Backend for ImapBackend<'a> {
         sort: &str,
         page_size: usize,
         page: usize,
-    ) -> Result<Envelopes> {
+    ) -> backend::Result<Envelopes> {
         let last_seq = self
             .sess()?
             .select(mbox)
@@ -424,7 +427,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(envelopes)
     }
 
-    fn email_add(&mut self, mbox: &str, msg: &[u8], flags: &str) -> Result<String> {
+    fn email_add(&mut self, mbox: &str, msg: &[u8], flags: &str) -> backend::Result<String> {
         let flags: Flags = flags.into();
         self.sess()?
             .append(mbox, msg)
@@ -439,7 +442,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(last_seq.to_string())
     }
 
-    fn email_get(&mut self, mbox: &str, seq: &str) -> Result<Email> {
+    fn email_get(&mut self, mbox: &str, seq: &str) -> backend::Result<Email> {
         self.sess()?
             .select(mbox)
             .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
@@ -460,7 +463,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(msg)
     }
 
-    fn email_list(&mut self, mbox: &str, seq: &str) -> Result<Email> {
+    fn email_list(&mut self, mbox: &str, seq: &str) -> backend::Result<Email> {
         self.sess()?
             .select(mbox)
             .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
@@ -481,24 +484,24 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(msg)
     }
 
-    fn email_copy(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> Result<()> {
+    fn email_copy(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> backend::Result<()> {
         let msg = self.email_list(&mbox_src, seq)?.raw;
         self.email_add(&mbox_dst, &msg, "seen")?;
         Ok(())
     }
 
-    fn email_move(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> Result<()> {
+    fn email_move(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> backend::Result<()> {
         let msg = self.email_list(mbox_src, seq)?.raw;
         self.flags_add(mbox_src, seq, "seen deleted")?;
         self.email_add(&mbox_dst, &msg, "seen")?;
         Ok(())
     }
 
-    fn email_delete(&mut self, mbox: &str, seq: &str) -> Result<()> {
+    fn email_delete(&mut self, mbox: &str, seq: &str) -> backend::Result<()> {
         self.flags_add(mbox, seq, "deleted")
     }
 
-    fn flags_add(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
+    fn flags_add(&mut self, mbox: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(mbox)
@@ -512,7 +515,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
-    fn flags_set(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
+    fn flags_set(&mut self, mbox: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(mbox)
@@ -523,7 +526,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
-    fn flags_delete(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
+    fn flags_delete(&mut self, mbox: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(mbox)
@@ -534,7 +537,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
-    fn disconnect(&mut self) -> Result<()> {
+    fn disconnect(&mut self) -> backend::Result<()> {
         trace!(">> imap logout");
 
         if let Some(ref mut sess) = self.sess {

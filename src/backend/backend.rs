@@ -19,28 +19,46 @@
 //! This module exposes the backend trait, which can be used to create
 //! custom backend implementations.
 
-use crate::{Email, Envelopes, Folders};
+use std::result;
+use thiserror::Error;
+
+use crate::{backend, config, email, id_mapper, Email, Envelopes, Folders};
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error(transparent)]
+    EmailError(#[from] email::Error),
+    #[error(transparent)]
+    IdMapper(#[from] id_mapper::Error),
+    #[error(transparent)]
+    ConfigError(#[from] config::Error),
+
+    #[cfg(feature = "imap-backend")]
+    #[error(transparent)]
+    ImapBackendError(#[from] backend::imap::Error),
+    #[cfg(feature = "maildir-backend")]
+    #[error(transparent)]
+    MaildirBackendError(#[from] backend::maildir::Error),
+    #[cfg(feature = "notmuch-backend")]
+    #[error(transparent)]
+    NotmuchBackendError(#[from] backend::notmuch::Error),
+}
+
+pub type Result<T> = result::Result<T, Error>;
 
 pub trait Backend {
-    type Error;
-
-    fn connect(&mut self) -> Result<(), Self::Error> {
+    fn connect(&mut self) -> Result<()> {
         Ok(())
     }
-    fn disconnect(&mut self) -> Result<(), Self::Error> {
+    fn disconnect(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn folder_add(&mut self, folder: &str) -> Result<(), Self::Error>;
-    fn folder_list(&mut self) -> Result<Folders, Self::Error>;
-    fn folder_delete(&mut self, folder: &str) -> Result<(), Self::Error>;
+    fn folder_add(&mut self, folder: &str) -> Result<()>;
+    fn folder_list(&mut self) -> Result<Folders>;
+    fn folder_delete(&mut self, folder: &str) -> Result<()>;
 
-    fn envelope_list(
-        &mut self,
-        folder: &str,
-        page_size: usize,
-        page: usize,
-    ) -> Result<Envelopes, Self::Error>;
+    fn envelope_list(&mut self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn envelope_search(
         &mut self,
         folder: &str,
@@ -48,26 +66,16 @@ pub trait Backend {
         sort: &str,
         page_size: usize,
         page: usize,
-    ) -> Result<Envelopes, Self::Error>;
+    ) -> Result<Envelopes>;
 
-    fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> Result<String, Self::Error>;
-    fn email_get(&mut self, folder: &str, id: &str) -> Result<Email, Self::Error>;
-    fn email_list(&mut self, folder: &str, id: &str) -> Result<Email, Self::Error>;
-    fn email_copy(
-        &mut self,
-        folder_src: &str,
-        folder_dst: &str,
-        ids: &str,
-    ) -> Result<(), Self::Error>;
-    fn email_move(
-        &mut self,
-        folder_src: &str,
-        folder_dst: &str,
-        ids: &str,
-    ) -> Result<(), Self::Error>;
-    fn email_delete(&mut self, folder: &str, ids: &str) -> Result<(), Self::Error>;
+    fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> Result<String>;
+    fn email_get(&mut self, folder: &str, id: &str) -> Result<Email>;
+    fn email_list(&mut self, folder: &str, id: &str) -> Result<Email>;
+    fn email_copy(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
+    fn email_move(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
+    fn email_delete(&mut self, folder: &str, ids: &str) -> Result<()>;
 
-    fn flags_add(&mut self, folder: &str, ids: &str, flags: &str) -> Result<(), Self::Error>;
-    fn flags_set(&mut self, folder: &str, ids: &str, flags: &str) -> Result<(), Self::Error>;
-    fn flags_delete(&mut self, folder: &str, ids: &str, flags: &str) -> Result<(), Self::Error>;
+    fn flags_add(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn flags_set(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn flags_delete(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
 }

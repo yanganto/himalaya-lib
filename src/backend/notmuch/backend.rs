@@ -169,13 +169,11 @@ impl<'a> NotmuchBackend<'a> {
 }
 
 impl<'a> Backend for NotmuchBackend<'a> {
-    type Error = Error;
-
-    fn folder_add(&mut self, _mbox: &str) -> Result<()> {
+    fn folder_add(&mut self, _mbox: &str) -> backend::Result<()> {
         Err(Error::AddMboxUnimplementedError)?
     }
 
-    fn folder_list(&mut self) -> Result<Folders> {
+    fn folder_list(&mut self) -> backend::Result<Folders> {
         trace!(">> get notmuch virtual folders");
 
         let mut mboxes = Folders::default();
@@ -192,7 +190,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(mboxes)
     }
 
-    fn folder_delete(&mut self, _mbox: &str) -> Result<()> {
+    fn folder_delete(&mut self, _mbox: &str) -> backend::Result<()> {
         Err(Error::DelMboxUnimplementedError)?
     }
 
@@ -201,7 +199,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         virt_mbox: &str,
         page_size: usize,
         page: usize,
-    ) -> Result<Envelopes> {
+    ) -> backend::Result<Envelopes> {
         info!(">> get notmuch envelopes");
         debug!("virtual folder: {:?}", virt_mbox);
         debug!("page size: {:?}", page_size);
@@ -225,7 +223,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         _sort: &str,
         page_size: usize,
         page: usize,
-    ) -> Result<Envelopes> {
+    ) -> backend::Result<Envelopes> {
         info!(">> search notmuch envelopes");
         debug!("virtual folder: {:?}", virt_mbox);
         debug!("query: {:?}", query);
@@ -246,7 +244,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(envelopes)
     }
 
-    fn email_add(&mut self, _: &str, msg: &[u8], tags: &str) -> Result<String> {
+    fn email_add(&mut self, _: &str, msg: &[u8], tags: &str) -> backend::Result<String> {
         info!(">> add notmuch envelopes");
         debug!("tags: {:?}", tags);
 
@@ -283,7 +281,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(hash)
     }
 
-    fn email_get(&mut self, _: &str, short_hash: &str) -> Result<Email> {
+    fn email_get(&mut self, _: &str, short_hash: &str) -> backend::Result<Email> {
         info!(">> add notmuch envelopes");
         debug!("short hash: {:?}", short_hash);
 
@@ -307,7 +305,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(msg)
     }
 
-    fn email_list(&mut self, _: &str, short_hash: &str) -> Result<Email> {
+    fn email_list(&mut self, _: &str, short_hash: &str) -> backend::Result<Email> {
         info!(">> add notmuch envelopes");
         debug!("short hash: {:?}", short_hash);
 
@@ -331,19 +329,29 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(msg)
     }
 
-    fn email_copy(&mut self, _dir_src: &str, _dir_dst: &str, _short_hash: &str) -> Result<()> {
+    fn email_copy(
+        &mut self,
+        _dir_src: &str,
+        _dir_dst: &str,
+        _short_hash: &str,
+    ) -> backend::Result<()> {
         info!(">> copy notmuch message");
         info!("<< copy notmuch message");
         Err(Error::CopyMsgUnimplementedError)?
     }
 
-    fn email_move(&mut self, _dir_src: &str, _dir_dst: &str, _short_hash: &str) -> Result<()> {
+    fn email_move(
+        &mut self,
+        _dir_src: &str,
+        _dir_dst: &str,
+        _short_hash: &str,
+    ) -> backend::Result<()> {
         info!(">> move notmuch message");
         info!("<< move notmuch message");
         Err(Error::MoveMsgUnimplementedError)?
     }
 
-    fn email_delete(&mut self, _virt_mbox: &str, short_hash: &str) -> Result<()> {
+    fn email_delete(&mut self, _virt_mbox: &str, short_hash: &str) -> backend::Result<()> {
         info!(">> delete notmuch message");
         debug!("short hash: {:?}", short_hash);
 
@@ -366,7 +374,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(())
     }
 
-    fn flags_add(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> Result<()> {
+    fn flags_add(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
         info!(">> add notmuch message flags");
         debug!("tags: {:?}", tags);
 
@@ -394,7 +402,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(())
     }
 
-    fn flags_set(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> Result<()> {
+    fn flags_set(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
         info!(">> set notmuch message flags");
         debug!("tags: {:?}", tags);
 
@@ -423,7 +431,12 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(())
     }
 
-    fn flags_delete(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> Result<()> {
+    fn flags_delete(
+        &mut self,
+        _virt_mbox: &str,
+        short_hash: &str,
+        tags: &str,
+    ) -> backend::Result<()> {
         info!(">> delete notmuch message flags");
         debug!("tags: {:?}", tags);
 

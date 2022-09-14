@@ -97,9 +97,7 @@ impl Smtp<'_> {
 }
 
 impl Sender for Smtp<'_> {
-    type Error = Error;
-
-    fn send(&mut self, config: &Config, msg: &Email) -> Result<Vec<u8>> {
+    fn send(&mut self, config: &Config, msg: &Email) -> sender::Result<Vec<u8>> {
         let mut raw_msg = msg.into_sendable_msg(config)?.formatted();
 
         let envelope: lettre::address::Envelope = if let Some(cmd) =

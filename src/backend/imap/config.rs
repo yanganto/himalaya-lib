@@ -20,7 +20,6 @@
 //! configuration of the user account.
 
 use std::result;
-
 use thiserror::Error;
 
 use crate::process;

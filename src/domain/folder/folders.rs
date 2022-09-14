@@ -20,10 +20,12 @@
 
 use std::ops;
 
+use serde::Serialize;
+
 use crate::Folder;
 
 /// Represents the list of folders.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Folders {
     pub folders: Vec<Folder>,
 }

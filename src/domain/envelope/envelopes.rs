@@ -22,7 +22,6 @@ use crate::Envelope;
 /// Represents the list of envelopes.
 #[derive(Debug, Default, Serialize)]
 pub struct Envelopes {
-    #[serde(rename = "response")]
     pub envelopes: Vec<Envelope>,
 }
 

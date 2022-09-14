@@ -18,9 +18,24 @@
 //!
 //! This module contains the sender interface.
 
-use crate::{Config, Email};
+use std::result;
+
+use thiserror::Error;
+
+use crate::{config, email, smtp, Config, Email};
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error(transparent)]
+    EmailError(#[from] email::Error),
+    #[error(transparent)]
+    ConfigError(#[from] config::Error),
+    #[error(transparent)]
+    SmtpError(#[from] smtp::Error),
+}
+
+pub type Result<T> = result::Result<T, Error>;
 
 pub trait Sender {
-    type Error;
-    fn send(&mut self, config: &Config, msg: &Email) -> Result<Vec<u8>, Self::Error>;
+    fn send(&mut self, config: &Config, msg: &Email) -> Result<Vec<u8>>;
 }
