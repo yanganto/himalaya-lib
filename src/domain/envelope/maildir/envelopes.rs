@@ -14,25 +14,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub(crate) mod process;
+//! Maildir mailbox module.
+//!
+//! This module provides Maildir types and conversion utilities
+//! related to the envelope.
 
-pub mod config;
-pub use config::{
-    AccountConfig, AccountsConfig, Config, GlobalConfig, DEFAULT_DRAFT_FOLDER,
-    DEFAULT_INBOX_FOLDER, DEFAULT_PAGE_SIZE, DEFAULT_SENT_FOLDER, DEFAULT_SIGNATURE_DELIM,
+use crate::{
+    backend::maildir::{Error, Result},
+    Envelopes,
 };
 
-pub mod backend;
-pub use backend::*;
+use super::envelope;
 
-pub mod sender;
-pub use sender::*;
+/// Represents a list of raw envelopees returned by the `maildir`
+/// crate.
+pub type MaildirEnvelopes = maildir::MailEntries;
 
-pub mod folder;
-pub use folder::*;
-
-pub mod email;
-pub use email::*;
-
-pub mod domain;
-pub use domain::*;
+pub fn from_maildir_entries(mail_entries: MaildirEnvelopes) -> Result<Envelopes> {
+    let mut envelopes = Envelopes::default();
+    for entry in mail_entries {
+        let entry = entry.map_err(Error::DecodeEntryError)?;
+        envelopes.push(envelope::from_maildir_entry(entry)?);
+    }
+    Ok(envelopes)
+}

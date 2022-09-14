@@ -17,7 +17,7 @@
 use serde::Serialize;
 use std::{fmt, ops};
 
-use super::Flag;
+use crate::Flag;
 
 /// Represents the list of flags.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]

@@ -19,14 +19,13 @@
 //! This module provides IMAP types and conversion utilities related
 //! to the envelope.
 
+use imap;
 use rfc2047_decoder;
 
 use crate::{
-    backend::{
-        from_imap_flags,
-        imap::{Error, Result},
-    },
-    email::Envelope,
+    backend::imap::{Error, Result},
+    domain::flag::imap::flags,
+    Envelope,
 };
 
 /// Represents the raw envelope returned by the `imap` crate.
@@ -39,7 +38,7 @@ pub fn from_imap_fetch(fetch: &ImapFetch) -> Result<Envelope> {
 
     let id = fetch.message.to_string();
 
-    let flags = from_imap_flags(fetch.flags());
+    let flags = flags::from_imap_flags(fetch.flags());
 
     let subject = envelope
         .subject

@@ -18,11 +18,10 @@ use chrono::DateTime;
 use log::trace;
 
 use crate::{
-    backend::{backend::Result, maildir_flags},
-    email::{from_slice_to_addrs, Addr, Envelope},
+    backend::maildir::{Error, Result},
+    domain::flag::maildir::flags,
+    from_slice_to_addrs, Addr, Envelope,
 };
-
-use super::MaildirError;
 
 /// Represents the raw envelope returned by the `maildir` crate.
 pub type MaildirEnvelope = maildir::MailEntry;
@@ -34,9 +33,9 @@ pub fn from_maildir_entry(mut entry: MaildirEnvelope) -> Result<Envelope> {
 
     envelope.internal_id = entry.id().to_owned();
     envelope.id = format!("{:x}", md5::compute(&envelope.internal_id));
-    envelope.flags = maildir_flags::from_maildir_entry(&entry);
+    envelope.flags = flags::from_maildir_entry(&entry);
 
-    let parsed_mail = entry.parsed().map_err(MaildirError::ParseMsgError)?;
+    let parsed_mail = entry.parsed().map_err(Error::ParseMsgError)?;
 
     trace!(">> parse headers");
     for h in parsed_mail.get_headers() {
@@ -44,7 +43,7 @@ pub fn from_maildir_entry(mut entry: MaildirEnvelope) -> Result<Envelope> {
         trace!("header key: {:?}", k);
 
         let v = rfc2047_decoder::decode(h.get_value_raw())
-            .map_err(|err| MaildirError::DecodeHeaderError(err, k.to_owned()))?;
+            .map_err(|err| Error::DecodeHeaderError(err, k.to_owned()))?;
         trace!("header value: {:?}", v);
 
         match k.to_lowercase().as_str() {
@@ -59,7 +58,7 @@ pub fn from_maildir_entry(mut entry: MaildirEnvelope) -> Result<Envelope> {
             }
             "from" => {
                 envelope.sender = from_slice_to_addrs(v)
-                    .map_err(|err| MaildirError::ParseHeaderError(err, k.to_owned()))?
+                    .map_err(|err| Error::ParseHeaderError(err, k.to_owned()))?
                     .and_then(|senders| {
                         if senders.is_empty() {
                             None
@@ -75,7 +74,7 @@ pub fn from_maildir_entry(mut entry: MaildirEnvelope) -> Result<Envelope> {
                             group_name.to_owned()
                         }
                     })
-                    .ok_or_else(|| MaildirError::FindSenderError)?;
+                    .ok_or_else(|| Error::FindSenderError)?;
             }
             _ => (),
         }

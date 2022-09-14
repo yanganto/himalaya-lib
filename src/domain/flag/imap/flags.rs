@@ -14,28 +14,25 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use serde::Serialize;
-use std::ops;
+use crate::{Flag, Flags};
 
-use super::Envelope;
+use super::flag;
 
-/// Represents the list of envelopes.
-#[derive(Debug, Default, Serialize)]
-pub struct Envelopes {
-    #[serde(rename = "response")]
-    pub envelopes: Vec<Envelope>,
+pub fn into_imap_flags<'a>(flags: &'a Flags) -> Vec<flag::ImapFlag<'a>> {
+    flags
+        .iter()
+        .map(|flag| match flag {
+            Flag::Seen => flag::ImapFlag::Seen,
+            Flag::Answered => flag::ImapFlag::Answered,
+            Flag::Flagged => flag::ImapFlag::Flagged,
+            Flag::Deleted => flag::ImapFlag::Deleted,
+            Flag::Draft => flag::ImapFlag::Draft,
+            Flag::Recent => flag::ImapFlag::Recent,
+            Flag::Custom(flag) => flag::ImapFlag::Custom(flag.into()),
+        })
+        .collect()
 }
 
-impl ops::Deref for Envelopes {
-    type Target = Vec<Envelope>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.envelopes
-    }
-}
-
-impl ops::DerefMut for Envelopes {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.envelopes
-    }
+pub fn from_imap_flags(imap_flags: &[flag::ImapFlag<'_>]) -> Flags {
+    imap_flags.iter().map(flag::from_imap_flag).collect()
 }

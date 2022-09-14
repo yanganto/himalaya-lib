@@ -15,23 +15,27 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use serde::Serialize;
+use std::ops;
 
-use super::Flags;
+use crate::Envelope;
 
-/// Represents the message envelope. The envelope is just a message
-/// subset, and is mostly used for listings.
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct Envelope {
-    /// Represents the message identifier.
-    pub id: String,
-    /// Represents the internal message identifier.
-    pub internal_id: String,
-    /// Represents the message flags.
-    pub flags: Flags,
-    /// Represents the subject of the message.
-    pub subject: String,
-    /// Represents the first sender of the message.
-    pub sender: String,
-    /// Represents the internal date of the message.
-    pub date: Option<String>,
+/// Represents the list of envelopes.
+#[derive(Debug, Default, Serialize)]
+pub struct Envelopes {
+    #[serde(rename = "response")]
+    pub envelopes: Vec<Envelope>,
+}
+
+impl ops::Deref for Envelopes {
+    type Target = Vec<Envelope>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.envelopes
+    }
+}
+
+impl ops::DerefMut for Envelopes {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.envelopes
+    }
 }

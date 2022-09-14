@@ -18,17 +18,20 @@
 //!
 //! This module regroups everything related to deserialization of
 //! message sort criteria.
+use imap;
 
 use std::{convert::TryFrom, ops::Deref};
 
 use crate::backend::imap::Error;
+
+pub type ImapSortCriterion<'a> = imap::extensions::sort::SortCriterion<'a>;
 
 /// Represents the message sort criteria. It is just a wrapper around
 /// the `imap::extensions::sort::SortCriterion`.
 pub struct SortCriteria<'a>(Vec<imap::extensions::sort::SortCriterion<'a>>);
 
 impl<'a> Deref for SortCriteria<'a> {
-    type Target = Vec<imap::extensions::sort::SortCriterion<'a>>;
+    type Target = Vec<ImapSortCriterion<'a>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0

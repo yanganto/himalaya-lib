@@ -19,7 +19,7 @@
 //! This module contains the representation of the backend
 //! configuration of the user account.
 
-use super::{ImapConfig, MaildirConfig, NotmuchConfig};
+use crate::{ImapConfig, MaildirConfig, NotmuchConfig};
 
 /// Represents the backend configuration of the user account.
 #[derive(Debug, Clone, Eq, PartialEq)]

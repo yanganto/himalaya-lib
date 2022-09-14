@@ -2,10 +2,7 @@ use maildir::Maildir;
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 use himalaya_lib::{
-    backend::{Backend, MaildirBackend},
-    config::{AccountConfig, Config},
-    email::Flag,
-    BackendConfig, MaildirConfig,
+    AccountConfig, Backend, BackendConfig, Config, Flag, MaildirBackend, MaildirConfig,
 };
 
 #[test]
@@ -46,58 +43,59 @@ fn test_maildir_backend() {
 
     // check that a message can be added
     let msg = include_bytes!("./emails/alice-to-patrick.eml");
-    let hash = mdir.add_msg("inbox", msg, "seen").unwrap();
+    let hash = mdir.email_add("inbox", msg, "seen").unwrap();
 
     // check that the added message exists
-    let msg = mdir.get_msg("inbox", &hash).unwrap();
+    let msg = mdir.email_list("inbox", &hash).unwrap();
     assert_eq!("alice@localhost", msg.from.clone().unwrap().to_string());
     assert_eq!("patrick@localhost", msg.to.clone().unwrap().to_string());
     assert_eq!("Ceci est un message.", msg.fold_text_plain_parts());
 
     // check that the envelope of the added message exists
-    let envelopes = mdir.get_envelopes("inbox", 10, 0).unwrap();
+    let envelopes = mdir.envelope_list("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert_eq!(1, envelopes.len());
     assert_eq!("alice@localhost", envelope.sender);
     assert_eq!("Plain message", envelope.subject);
 
     // check that a flag can be added to the message
-    mdir.add_flags("inbox", &envelope.id, "flagged").unwrap();
-    let envelopes = mdir.get_envelopes("inbox", 1, 0).unwrap();
+    mdir.flags_add("inbox", &envelope.id, "flagged").unwrap();
+    let envelopes = mdir.envelope_list("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(envelope.flags.contains(&Flag::Seen));
     assert!(envelope.flags.contains(&Flag::Flagged));
 
     // check that the message flags can be changed
-    mdir.set_flags("inbox", &envelope.id, "answered").unwrap();
-    let envelopes = mdir.get_envelopes("inbox", 1, 0).unwrap();
+    mdir.flags_set("inbox", &envelope.id, "answered").unwrap();
+    let envelopes = mdir.envelope_list("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(!envelope.flags.contains(&Flag::Seen));
     assert!(!envelope.flags.contains(&Flag::Flagged));
     assert!(envelope.flags.contains(&Flag::Answered));
 
     // check that a flag can be removed from the message
-    mdir.del_flags("inbox", &envelope.id, "answered").unwrap();
-    let envelopes = mdir.get_envelopes("inbox", 1, 0).unwrap();
+    mdir.flags_delete("inbox", &envelope.id, "answered")
+        .unwrap();
+    let envelopes = mdir.envelope_list("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(!envelope.flags.contains(&Flag::Seen));
     assert!(!envelope.flags.contains(&Flag::Flagged));
     assert!(!envelope.flags.contains(&Flag::Answered));
 
     // check that the message can be copied
-    mdir.copy_msg("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.get_msg("inbox", &hash).is_ok());
-    assert!(mdir.get_msg("subdir", &hash).is_ok());
-    assert!(mdir_subdir.get_msg("inbox", &hash).is_ok());
+    mdir.email_copy("inbox", "subdir", &envelope.id).unwrap();
+    assert!(mdir.email_list("inbox", &hash).is_ok());
+    assert!(mdir.email_list("subdir", &hash).is_ok());
+    assert!(mdir_subdir.email_list("inbox", &hash).is_ok());
 
     // check that the message can be moved
-    mdir.move_msg("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.get_msg("inbox", &hash).is_err());
-    assert!(mdir.get_msg("subdir", &hash).is_ok());
-    assert!(mdir_subdir.get_msg("inbox", &hash).is_ok());
+    mdir.email_move("inbox", "subdir", &envelope.id).unwrap();
+    assert!(mdir.email_list("inbox", &hash).is_err());
+    assert!(mdir.email_list("subdir", &hash).is_ok());
+    assert!(mdir_subdir.email_list("inbox", &hash).is_ok());
 
     // check that the message can be deleted
-    mdir.del_msg("subdir", &hash).unwrap();
-    assert!(mdir.get_msg("subdir", &hash).is_err());
-    assert!(mdir_subdir.get_msg("inbox", &hash).is_err());
+    mdir.email_delete("subdir", &hash).unwrap();
+    assert!(mdir.email_list("subdir", &hash).is_err());
+    assert!(mdir_subdir.email_list("inbox", &hash).is_err());
 }

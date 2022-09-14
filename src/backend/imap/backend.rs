@@ -21,18 +21,94 @@
 use imap::types::NameAttribute;
 use log::{debug, log_enabled, trace, Level};
 use native_tls::{TlsConnector, TlsStream};
-use std::{collections::HashSet, convert::TryInto, net::TcpStream, thread};
+use std::{collections::HashSet, convert::TryInto, net::TcpStream, result, thread};
+use thiserror::Error;
 
 use crate::{
-    backend::{
-        backend::Result, from_imap_fetch, from_imap_fetches,
-        imap::msg_sort_criterion::SortCriteria, imap::Error, into_imap_flags, Backend,
-    },
-    config::Config,
-    email::{Email, Envelopes, Flags},
-    folder::{Folder, Folders},
-    process, ImapConfig,
+    backend, config, email, envelope, flag, process, Backend, Config, Email, Envelopes, Flags,
+    Folder, Folders, ImapConfig,
 };
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("cannot get envelope of message {0}")]
+    GetEnvelopeError(u32),
+    #[error("cannot get sender of message {0}")]
+    GetSenderError(u32),
+    #[error("cannot get imap session")]
+    GetSessionError,
+    #[error("cannot retrieve message {0}'s uid")]
+    GetMsgUidError(u32),
+    #[error("cannot find message {0}")]
+    FindMsgError(String),
+    #[error("cannot parse sort criterion {0}")]
+    ParseSortCriterionError(String),
+
+    #[error("cannot decode subject of message {1}")]
+    DecodeSubjectError(#[source] rfc2047_decoder::Error, u32),
+    #[error("cannot decode sender name of message {1}")]
+    DecodeSenderNameError(#[source] rfc2047_decoder::Error, u32),
+    #[error("cannot decode sender mailbox of message {1}")]
+    DecodeSenderMboxError(#[source] rfc2047_decoder::Error, u32),
+    #[error("cannot decode sender host of message {1}")]
+    DecodeSenderHostError(#[source] rfc2047_decoder::Error, u32),
+
+    #[error("cannot create tls connector")]
+    CreateTlsConnectorError(#[source] native_tls::Error),
+    #[error("cannot connect to imap server")]
+    ConnectImapServerError(#[source] imap::Error),
+    #[error("cannot login to imap server")]
+    LoginImapServerError(#[source] imap::Error),
+    #[error("cannot search new messages")]
+    SearchNewMsgsError(#[source] imap::Error),
+    #[error("cannot examine mailbox {1}")]
+    ExamineMboxError(#[source] imap::Error, String),
+    #[error("cannot start the idle mode")]
+    StartIdleModeError(#[source] imap::Error),
+    #[error("cannot parse message {1}")]
+    ParseMsgError(#[source] mailparse::MailParseError, String),
+    #[error("cannot fetch new messages envelope")]
+    FetchNewMsgsEnvelopeError(#[source] imap::Error),
+    #[error("cannot get uid of message {0}")]
+    GetUidError(u32),
+    #[error("cannot create mailbox {1}")]
+    CreateMboxError(#[source] imap::Error, String),
+    #[error("cannot list mailboxes")]
+    ListMboxesError(#[source] imap::Error),
+    #[error("cannot delete mailbox {1}")]
+    DeleteMboxError(#[source] imap::Error, String),
+    #[error("cannot select mailbox {1}")]
+    SelectMboxError(#[source] imap::Error, String),
+    #[error("cannot fetch messages within range {1}")]
+    FetchMsgsByRangeError(#[source] imap::Error, String),
+    #[error("cannot fetch messages by sequence {1}")]
+    FetchMsgsBySeqError(#[source] imap::Error, String),
+    #[error("cannot append message to mailbox {1}")]
+    AppendMsgError(#[source] imap::Error, String),
+    #[error("cannot sort messages in mailbox {1} with query: {2}")]
+    SortMsgsError(#[source] imap::Error, String, String),
+    #[error("cannot search messages in mailbox {1} with query: {2}")]
+    SearchMsgsError(#[source] imap::Error, String, String),
+    #[error("cannot expunge mailbox {1}")]
+    ExpungeError(#[source] imap::Error, String),
+    #[error("cannot add flags {1} to message(s) {2}")]
+    AddFlagsError(#[source] imap::Error, Flags, String),
+    #[error("cannot set flags {1} to message(s) {2}")]
+    SetFlagsError(#[source] imap::Error, Flags, String),
+    #[error("cannot delete flags {1} to message(s) {2}")]
+    DelFlagsError(#[source] imap::Error, Flags, String),
+    #[error("cannot logout from imap server")]
+    LogoutError(#[source] imap::Error),
+
+    #[error(transparent)]
+    ConfigError(#[from] config::Error),
+    #[error(transparent)]
+    ImapConfigError(#[from] backend::imap::config::Error),
+    #[error(transparent)]
+    MsgError(#[from] email::Error),
+}
+
+pub type Result<T> = result::Result<T, Error>;
 
 type ImapSess = imap::Session<TlsStream<TcpStream>>;
 
@@ -154,7 +230,7 @@ impl<'a> ImapBackend<'a> {
                     .map_err(Error::FetchNewMsgsEnvelopeError)?;
 
                 for fetch in fetches.iter() {
-                    let msg = from_imap_fetch(fetch)?;
+                    let msg = envelope::from_imap_fetch(fetch)?;
                     let uid = fetch.uid.ok_or_else(|| Error::GetUidError(fetch.message))?;
 
                     let from = msg.sender.to_owned().into();
@@ -209,8 +285,10 @@ impl<'a> ImapBackend<'a> {
     }
 }
 
-impl<'a> Backend<'a> for ImapBackend<'a> {
-    fn add_mbox(&mut self, mbox: &str) -> Result<()> {
+impl<'a> Backend for ImapBackend<'a> {
+    type Error = Error;
+
+    fn folder_add(&mut self, mbox: &str) -> Result<()> {
         trace!(">> add folder");
 
         self.sess()?
@@ -221,7 +299,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn get_mboxes(&mut self) -> Result<Folders> {
+    fn folder_list(&mut self) -> Result<Folders> {
         trace!(">> get imap folders");
 
         let imap_mboxes = self
@@ -255,7 +333,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(mboxes)
     }
 
-    fn del_mbox(&mut self, mbox: &str) -> Result<()> {
+    fn folder_delete(&mut self, mbox: &str) -> Result<()> {
         trace!(">> delete imap folder");
 
         self.sess()?
@@ -266,7 +344,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn get_envelopes(&mut self, mbox: &str, page_size: usize, page: usize) -> Result<Envelopes> {
+    fn envelope_list(&mut self, mbox: &str, page_size: usize, page: usize) -> Result<Envelopes> {
         let last_seq = self
             .sess()?
             .select(mbox)
@@ -292,11 +370,11 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
             .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
-        let envelopes = from_imap_fetches(fetches)?;
+        let envelopes = envelope::from_imap_fetches(fetches)?;
         Ok(envelopes)
     }
 
-    fn search_envelopes(
+    fn envelope_search(
         &mut self,
         mbox: &str,
         query: &str,
@@ -324,10 +402,9 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
                 .map(|seq| seq.to_string())
                 .collect()
         } else {
-            let sort: SortCriteria = sort.try_into()?;
-            let charset = imap::extensions::sort::SortCharset::Utf8;
+            let sort: envelope::imap::SortCriteria = sort.try_into()?;
             self.sess()?
-                .sort(&sort, charset, query)
+                .sort(&sort, imap::extensions::sort::SortCharset::Utf8, query)
                 .map_err(|err| Error::SortMsgsError(err, mbox.to_owned(), query.to_owned()))?
                 .iter()
                 .map(|seq| seq.to_string())
@@ -343,15 +420,15 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
             .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
-        let envelopes = from_imap_fetches(fetches)?;
+        let envelopes = envelope::from_imap_fetches(fetches)?;
         Ok(envelopes)
     }
 
-    fn add_msg(&mut self, mbox: &str, msg: &[u8], flags: &str) -> Result<String> {
+    fn email_add(&mut self, mbox: &str, msg: &[u8], flags: &str) -> Result<String> {
         let flags: Flags = flags.into();
         self.sess()?
             .append(mbox, msg)
-            .flags(into_imap_flags(&flags))
+            .flags(flag::into_imap_flags(&flags))
             .finish()
             .map_err(|err| Error::AppendMsgError(err, mbox.to_owned()))?;
         let last_seq = self
@@ -362,7 +439,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(last_seq.to_string())
     }
 
-    fn get_msg(&mut self, mbox: &str, seq: &str) -> Result<Email> {
+    fn email_list(&mut self, mbox: &str, seq: &str) -> Result<Email> {
         self.sess()?
             .select(mbox)
             .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
@@ -383,24 +460,24 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(msg)
     }
 
-    fn copy_msg(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> Result<()> {
-        let msg = self.get_msg(&mbox_src, seq)?.raw;
-        self.add_msg(&mbox_dst, &msg, "seen")?;
+    fn email_copy(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> Result<()> {
+        let msg = self.email_list(&mbox_src, seq)?.raw;
+        self.email_add(&mbox_dst, &msg, "seen")?;
         Ok(())
     }
 
-    fn move_msg(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> Result<()> {
-        let msg = self.get_msg(mbox_src, seq)?.raw;
-        self.add_flags(mbox_src, seq, "seen deleted")?;
-        self.add_msg(&mbox_dst, &msg, "seen")?;
+    fn email_move(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> Result<()> {
+        let msg = self.email_list(mbox_src, seq)?.raw;
+        self.flags_add(mbox_src, seq, "seen deleted")?;
+        self.email_add(&mbox_dst, &msg, "seen")?;
         Ok(())
     }
 
-    fn del_msg(&mut self, mbox: &str, seq: &str) -> Result<()> {
-        self.add_flags(mbox, seq, "deleted")
+    fn email_delete(&mut self, mbox: &str, seq: &str) -> Result<()> {
+        self.flags_add(mbox, seq, "deleted")
     }
 
-    fn add_flags(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
+    fn flags_add(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(mbox)
@@ -414,7 +491,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn set_flags(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
+    fn flags_set(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(mbox)
@@ -425,7 +502,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn del_flags(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
+    fn flags_delete(&mut self, mbox: &str, seq_range: &str, flags: &str) -> Result<()> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(mbox)

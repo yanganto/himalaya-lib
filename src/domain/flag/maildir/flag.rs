@@ -14,19 +14,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{backend::backend::Result, email::Envelopes};
+use crate::Flag;
 
-use super::notmuch_envelope;
-
-/// Represents a list of raw envelopees returned by the `notmuch`
-/// crate.
-pub type RawNotmuchEnvelopes = notmuch::Messages;
-
-pub fn from_notmuch_msgs(msgs: RawNotmuchEnvelopes) -> Result<Envelopes> {
-    let mut envelopes = Envelopes::default();
-    for msg in msgs {
-        let envelope = notmuch_envelope::from_notmuch_msg(msg)?;
-        envelopes.push(envelope);
+pub fn from_char(c: char) -> Flag {
+    match c {
+        'r' | 'R' => Flag::Answered,
+        's' | 'S' => Flag::Seen,
+        't' | 'T' => Flag::Deleted,
+        'd' | 'D' => Flag::Draft,
+        'f' | 'F' => Flag::Flagged,
+        'p' | 'P' => Flag::Custom(String::from("Passed")),
+        flag => Flag::Custom(flag.to_string()),
     }
-    Ok(envelopes)
+}
+
+pub fn to_normalized_char(flag: &Flag) -> Option<char> {
+    match flag {
+        Flag::Answered => Some('R'),
+        Flag::Seen => Some('S'),
+        Flag::Deleted => Some('T'),
+        Flag::Draft => Some('D'),
+        Flag::Flagged => Some('F'),
+        _ => None,
+    }
 }

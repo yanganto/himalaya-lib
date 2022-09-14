@@ -14,14 +14,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::email::Flags;
+pub mod config;
+pub use config::ImapConfig;
 
-use super::maildir_flag;
-
-pub fn from_maildir_entry(entry: &maildir::MailEntry) -> Flags {
-    entry.flags().chars().map(maildir_flag::from_char).collect()
-}
-
-pub fn to_normalized_string(flags: &Flags) -> String {
-    String::from_iter(flags.iter().filter_map(maildir_flag::to_normalized_char))
-}
+pub mod backend;
+pub use backend::*;

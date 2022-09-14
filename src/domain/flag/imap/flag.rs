@@ -14,24 +14,22 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Maildir mailbox module.
-//!
-//! This module provides Maildir types and conversion utilities
-//! related to the envelope.
+use imap;
 
-use crate::{backend::backend::Result, email::Envelopes};
+use crate::Flag;
 
-use super::{maildir_envelope, MaildirError};
+pub type ImapFlag<'a> = imap::types::Flag<'a>;
 
-/// Represents a list of raw envelopees returned by the `maildir`
-/// crate.
-pub type MaildirEnvelopes = maildir::MailEntries;
-
-pub fn from_maildir_entries(mail_entries: MaildirEnvelopes) -> Result<Envelopes> {
-    let mut envelopes = Envelopes::default();
-    for entry in mail_entries {
-        let entry = entry.map_err(MaildirError::DecodeEntryError)?;
-        envelopes.push(maildir_envelope::from_maildir_entry(entry)?);
+pub fn from_imap_flag(imap_flag: &ImapFlag<'_>) -> Flag {
+    match imap_flag {
+        imap::types::Flag::Seen => Flag::Seen,
+        imap::types::Flag::Answered => Flag::Answered,
+        imap::types::Flag::Flagged => Flag::Flagged,
+        imap::types::Flag::Deleted => Flag::Deleted,
+        imap::types::Flag::Draft => Flag::Draft,
+        imap::types::Flag::Recent => Flag::Recent,
+        imap::types::Flag::MayCreate => Flag::Custom(String::from("MayCreate")),
+        imap::types::Flag::Custom(flag) => Flag::Custom(flag.to_string()),
+        flag => Flag::Custom(flag.to_string()),
     }
-    Ok(envelopes)
 }

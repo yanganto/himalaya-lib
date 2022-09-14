@@ -24,18 +24,6 @@ pub use config::{EmailHooks, EmailSendCmd, EmailSender, EmailTextPlainFormat};
 pub mod error;
 pub use error::*;
 
-mod flag;
-pub use flag::*;
-
-mod flags;
-pub use flags::*;
-
-mod envelope;
-pub use envelope::*;
-
-mod envelopes;
-pub use envelopes::*;
-
 mod parts;
 pub use parts::*;
 

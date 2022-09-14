@@ -14,6 +14,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+//! Id mapper module.
+//!
+//! This module contains the representation of the backend id
+//! mapper. The aim of the id mapper is to map internal email ids
+//! (which can be unfriendly to manipulate depending on the backend)
+//! to uuids (which are easier to manipulate).
+
 use std::{
     collections, fs,
     io::{self, prelude::*},
@@ -42,8 +49,13 @@ type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug, Default)]
 pub struct IdMapper {
+    /// Represents the path of the id mapper file.
     path: path::PathBuf,
+    /// Represents the actual hash map of internal ids ⋄ uuids.
     map: collections::HashMap<String, String>,
+    /// Represents the minimum size the uuids can be shown without
+    /// conflicts. This way only short hashes (uuid subset) can be
+    /// used.
     short_hash_len: usize,
 }
 

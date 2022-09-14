@@ -21,10 +21,11 @@
 
 use chrono::DateTime;
 use log::{info, trace};
+use notmuch;
 
 use crate::{
-    backend::{backend::Result, NotmuchError},
-    email::{from_slice_to_addrs, Addr, Envelope, Flag},
+    backend::notmuch::{Error, Result},
+    from_slice_to_addrs, Addr, Envelope, Flag,
 };
 
 /// Represents the raw envelope returned by the `notmuch` crate.
@@ -37,16 +38,16 @@ pub fn from_notmuch_msg(raw_envelope: RawNotmuchEnvelope) -> Result<Envelope> {
     let id = format!("{:x}", md5::compute(&internal_id));
     let subject = raw_envelope
         .header("subject")
-        .map_err(|err| NotmuchError::ParseMsgHeaderError(err, String::from("subject")))?
+        .map_err(|err| Error::ParseMsgHeaderError(err, String::from("subject")))?
         .unwrap_or_default()
         .to_string();
     let sender = raw_envelope
         .header("from")
-        .map_err(|err| NotmuchError::ParseMsgHeaderError(err, String::from("from")))?
-        .ok_or_else(|| NotmuchError::FindMsgHeaderError(String::from("from")))?
+        .map_err(|err| Error::ParseMsgHeaderError(err, String::from("from")))?
+        .ok_or_else(|| Error::FindMsgHeaderError(String::from("from")))?
         .to_string();
     let sender = from_slice_to_addrs(&sender)
-        .map_err(|err| NotmuchError::ParseSendersError(err, sender.to_owned()))?
+        .map_err(|err| Error::ParseSendersError(err, sender.to_owned()))?
         .and_then(|senders| {
             if senders.is_empty() {
                 None
@@ -60,14 +61,14 @@ pub fn from_notmuch_msg(raw_envelope: RawNotmuchEnvelope) -> Result<Envelope> {
             }
             Addr::Group(mailparse::GroupInfo { group_name, .. }) => group_name.to_owned(),
         })
-        .ok_or_else(|| NotmuchError::FindSenderError)?;
+        .ok_or_else(|| Error::FindSenderError)?;
     let date = raw_envelope
         .header("date")
-        .map_err(|err| NotmuchError::ParseMsgHeaderError(err, String::from("date")))?
-        .ok_or_else(|| NotmuchError::FindMsgHeaderError(String::from("date")))?
+        .map_err(|err| Error::ParseMsgHeaderError(err, String::from("date")))?
+        .ok_or_else(|| Error::FindMsgHeaderError(String::from("date")))?
         .to_string();
     let date = DateTime::parse_from_rfc2822(date.split_at(date.find(" (").unwrap_or(date.len())).0)
-        .map_err(|err| NotmuchError::ParseMsgDateError(err, date.to_owned()))
+        .map_err(|err| Error::ParseMsgDateError(err, date.to_owned()))
         .map(|date| date.naive_local().to_string())
         .ok();
 

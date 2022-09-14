@@ -14,25 +14,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub(crate) mod process;
+use crate::{backend::notmuch::Result, Envelopes};
 
-pub mod config;
-pub use config::{
-    AccountConfig, AccountsConfig, Config, GlobalConfig, DEFAULT_DRAFT_FOLDER,
-    DEFAULT_INBOX_FOLDER, DEFAULT_PAGE_SIZE, DEFAULT_SENT_FOLDER, DEFAULT_SIGNATURE_DELIM,
-};
+use super::envelope;
 
-pub mod backend;
-pub use backend::*;
+/// Represents a list of raw envelopees returned by the `notmuch`
+/// crate.
+pub type RawNotmuchEnvelopes = notmuch::Messages;
 
-pub mod sender;
-pub use sender::*;
-
-pub mod folder;
-pub use folder::*;
-
-pub mod email;
-pub use email::*;
-
-pub mod domain;
-pub use domain::*;
+pub fn from_notmuch_msgs(msgs: RawNotmuchEnvelopes) -> Result<Envelopes> {
+    let mut envelopes = Envelopes::default();
+    for msg in msgs {
+        let envelope = envelope::from_notmuch_msg(msg)?;
+        envelopes.push(envelope);
+    }
+    Ok(envelopes)
+}
