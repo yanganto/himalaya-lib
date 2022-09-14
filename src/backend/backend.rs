@@ -51,6 +51,7 @@ pub trait Backend {
     ) -> Result<Envelopes, Self::Error>;
 
     fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> Result<String, Self::Error>;
+    fn email_get(&mut self, folder: &str, id: &str) -> Result<Email, Self::Error>;
     fn email_list(&mut self, folder: &str, id: &str) -> Result<Email, Self::Error>;
     fn email_copy(
         &mut self,

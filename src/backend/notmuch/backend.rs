@@ -283,6 +283,30 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(hash)
     }
 
+    fn email_get(&mut self, _: &str, short_hash: &str) -> Result<Email> {
+        info!(">> add notmuch envelopes");
+        debug!("short hash: {:?}", short_hash);
+
+        let dir = &self.notmuch_config.db_path;
+        let id = IdMapper::new(dir)?.find(short_hash)?;
+        debug!("id: {:?}", id);
+        let msg_file_path = self
+            .db
+            .find_message(&id)
+            .map_err(Error::FindMsgError)?
+            .ok_or_else(|| Error::FindMsgEmptyError)?
+            .filename()
+            .to_owned();
+        debug!("message file path: {:?}", msg_file_path);
+        let raw_msg = fs::read(&msg_file_path).map_err(Error::ReadMsgError)?;
+        let msg = mailparse::parse_mail(&raw_msg).map_err(Error::ParseMsgError)?;
+        let msg = Email::from_parsed_mail(msg, &self.config)?;
+        trace!("message: {:?}", msg);
+
+        info!("<< get notmuch message");
+        Ok(msg)
+    }
+
     fn email_list(&mut self, _: &str, short_hash: &str) -> Result<Email> {
         info!(">> add notmuch envelopes");
         debug!("short hash: {:?}", short_hash);
