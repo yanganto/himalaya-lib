@@ -14,30 +14,24 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Folders module.
+//! Message module.
 //!
-//! This module contains the representation of the email folders.
+//! This module contains everything related to messages.
 
-use std::ops;
+pub mod config;
+pub use config::{EmailHooks, EmailSendCmd, EmailSender, EmailTextPlainFormat};
 
-use super::Folder;
+mod parts;
+pub use parts::*;
 
-/// Represents the list of folders.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Folders {
-    pub folders: Vec<Folder>,
-}
+mod addr;
+pub use addr::*;
 
-impl ops::Deref for Folders {
-    type Target = Vec<Folder>;
+mod tpl;
+pub use tpl::*;
 
-    fn deref(&self) -> &Self::Target {
-        &self.folders
-    }
-}
+mod email;
+pub use email::*;
 
-impl ops::DerefMut for Folders {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.folders
-    }
-}
+mod utils;
+pub use utils::*;

@@ -28,11 +28,5 @@ pub use backend::*;
 pub mod sender;
 pub use sender::*;
 
-pub mod folder;
-pub use folder::*;
-
-pub mod email;
-pub use email::*;
-
 pub mod domain;
 pub use domain::*;

@@ -24,33 +24,77 @@ use regex::Regex;
 use std::{
     collections::{HashMap, HashSet},
     convert::TryInto,
-    env::temp_dir,
+    env::{self, temp_dir},
     fmt::Debug,
-    fs,
+    fs, io,
     path::PathBuf,
+    result,
 };
+use thiserror::Error;
 use tree_magic;
 use uuid::Uuid;
 
 use crate::{
-    config::{Config, DEFAULT_SIGNATURE_DELIM},
+    config::{self, Config, DEFAULT_SIGNATURE_DELIM},
     email::{
         from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs, Addr,
-        Addrs, BinaryPart, Error, Part, Parts, Result, TextPlainPart, TplOverride,
+        Addrs, BinaryPart, Part, Parts, TextPlainPart, TplOverride,
     },
 };
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("cannot expand attachment path {1}")]
+    ExpandAttachmentPathError(#[source] shellexpand::LookupError<env::VarError>, String),
+    #[error("cannot read attachment at {1}")]
+    ReadAttachmentError(#[source] io::Error, PathBuf),
+    #[error("cannot parse template")]
+    ParseTplError(#[source] mailparse::MailParseError),
+    #[error("cannot parse content type of attachment {1}")]
+    ParseAttachmentContentTypeError(#[source] lettre::message::header::ContentTypeErr, String),
+    #[error("cannot write temporary multipart on the disk")]
+    WriteTmpMultipartError(#[source] io::Error),
+    #[error("cannot write temporary multipart on the disk")]
+    BuildSendableMsgError(#[source] lettre::error::Error),
+    #[error("cannot parse {1} value: {2}")]
+    ParseHeaderError(#[source] mailparse::MailParseError, String, String),
+    #[error("cannot build envelope")]
+    BuildEnvelopeError(#[source] lettre::error::Error),
+    #[error("cannot get file name of attachment {0}")]
+    GetAttachmentFilenameError(PathBuf),
+    #[error("cannot parse recipient")]
+    ParseRecipientError,
+
+    #[error("cannot parse message or address")]
+    ParseAddressError(#[from] lettre::address::AddressError),
+
+    #[error(transparent)]
+    ConfigError(#[from] config::Error),
+
+    #[error("cannot get content type of multipart")]
+    GetMultipartContentTypeError,
+    #[error("cannot find encrypted part of multipart")]
+    GetEncryptedPartMultipartError,
+    #[error("cannot parse encrypted part of multipart")]
+    ParseEncryptedPartError(#[source] mailparse::MailParseError),
+    #[error("cannot get body from encrypted part")]
+    GetEncryptedPartBodyError(#[source] mailparse::MailParseError),
+    #[error("cannot write encrypted part to temporary file")]
+    WriteEncryptedPartBodyError(#[source] io::Error),
+    #[error("cannot write encrypted part to temporary file")]
+    DecryptPartError(#[source] config::Error),
+
+    #[error("cannot delete local draft: {1}")]
+    DeleteLocalDraftError(#[source] io::Error, PathBuf),
+}
+
+pub type Result<T> = result::Result<T, Error>;
 
 /// Representation of a message.
 #[derive(Debug, Clone, Default)]
 pub struct Email {
-    /// The sequence number of the message.
-    ///
-    /// [RFC3501]: https://datatracker.ietf.org/doc/html/rfc3501#section-2.3.1.2
     pub id: u32,
-
-    /// The subject of the message.
     pub subject: String,
-
     pub from: Option<Addrs>,
     pub reply_to: Option<Addrs>,
     pub to: Option<Addrs>,
@@ -59,15 +103,9 @@ pub struct Email {
     pub in_reply_to: Option<String>,
     pub message_id: Option<String>,
     pub headers: HashMap<String, String>,
-
-    /// The internal date of the message.
-    ///
-    /// [RFC3501]: https://datatracker.ietf.org/doc/html/rfc3501#section-2.3.3
     pub date: Option<DateTime<Local>>,
     pub parts: Parts,
-
     pub encrypt: bool,
-
     pub raw: Vec<u8>,
 }
 
