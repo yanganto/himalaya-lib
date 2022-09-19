@@ -16,6 +16,7 @@
         let
           overlays = [ (import rust-overlay) ];
           pkgs = import nixpkgs { inherit system overlays; };
+          rust-bin = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
         in
         {
           # nix develop
@@ -28,9 +29,9 @@
               # Rust env
               openssl.dev
               pkgconfig
-              (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
-              cargo-watch
+              rust-bin
               rust-analyzer
+              cargo-watch
 
               # Notmuch
               notmuch
