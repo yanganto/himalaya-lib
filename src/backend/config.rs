@@ -19,7 +19,14 @@
 //! This module contains the representation of the backend
 //! configuration of the user account.
 
-use crate::{ImapConfig, MaildirConfig, NotmuchConfig};
+#[cfg(feature = "imap-backend")]
+use crate::ImapConfig;
+
+#[cfg(feature = "maildir-backend")]
+use crate::MaildirConfig;
+
+#[cfg(feature = "notmuch-backend")]
+use crate::NotmuchConfig;
 
 /// Represents the backend configuration of the user account.
 #[derive(Debug, Clone, Eq, PartialEq)]

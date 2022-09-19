@@ -22,7 +22,10 @@ use std::result;
 
 use thiserror::Error;
 
-use crate::{config, email, smtp, Config, Email};
+use crate::{config, email, Config, Email};
+
+#[cfg(feature = "internal-sender")]
+use crate::smtp;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -30,6 +33,7 @@ pub enum Error {
     EmailError(#[from] email::Error),
     #[error(transparent)]
     ConfigError(#[from] config::Error),
+    #[cfg(feature = "internal-sender")]
     #[error(transparent)]
     SmtpError(#[from] smtp::Error),
 }

@@ -18,6 +18,7 @@
 //!
 //! This module contains structures related to email configuration.
 
+#[cfg(feature = "internal-sender")]
 use crate::SmtpConfig;
 
 /// Represents the email sender provider.
