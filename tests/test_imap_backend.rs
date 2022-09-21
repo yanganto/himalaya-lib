@@ -4,41 +4,30 @@ use himalaya_lib::backend::{Backend, ImapBackend};
 #[cfg(feature = "imap-backend")]
 #[test]
 fn test_imap_backend() {
-    use std::collections::HashMap;
+    use himalaya_lib::{AccountConfig, EmailSender, ImapConfig, SmtpConfig};
 
-    use himalaya_lib::{AccountConfig, BackendConfig, Config, EmailSender, ImapConfig, SmtpConfig};
-
-    let imap_config = ImapConfig {
-        host: "localhost".into(),
-        port: 3993,
-        starttls: Some(false),
-        insecure: Some(true),
-        login: "inbox@localhost".into(),
-        passwd_cmd: "echo 'password'".into(),
-        ..ImapConfig::default()
-    };
-
-    let config = Config {
-        accounts: HashMap::from_iter([(
-            String::new(),
-            AccountConfig {
-                default: Some(true),
-                email_sender: EmailSender::Internal(SmtpConfig {
-                    host: "localhost".into(),
-                    port: 3465,
-                    starttls: Some(false),
-                    insecure: Some(true),
-                    login: "inbox@localhost".into(),
-                    passwd_cmd: "echo 'password'".into(),
-                }),
-                backend: BackendConfig::Imap(imap_config.clone()),
-                ..AccountConfig::default()
-            },
-        )]),
-        ..Config::default()
-    };
-
-    let mut imap = ImapBackend::new(&config, &imap_config);
+    let mut imap = ImapBackend::new(
+        AccountConfig {
+            email_sender: EmailSender::Internal(SmtpConfig {
+                host: "localhost".into(),
+                port: 3465,
+                starttls: Some(false),
+                insecure: Some(true),
+                login: "inbox@localhost".into(),
+                passwd_cmd: "echo 'password'".into(),
+            }),
+            ..AccountConfig::default()
+        },
+        ImapConfig {
+            host: "localhost".into(),
+            port: 3993,
+            starttls: Some(false),
+            insecure: Some(true),
+            login: "inbox@localhost".into(),
+            passwd_cmd: "echo 'password'".into(),
+            ..ImapConfig::default()
+        },
+    );
     imap.connect().unwrap();
 
     // set up mailboxes

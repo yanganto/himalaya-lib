@@ -2,12 +2,12 @@
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "notmuch-backend")]
-use himalaya_lib::backend::{Backend, MaildirBackend, NotmuchBackend};
+use himalaya_lib::backend::{Backend, NotmuchBackend};
 
 #[cfg(feature = "notmuch-backend")]
 #[test]
 fn test_notmuch_backend() {
-    use himalaya_lib::{AccountConfig, BackendConfig, Config, Flag, MaildirConfig, NotmuchConfig};
+    use himalaya_lib::{AccountConfig, Flag, NotmuchConfig};
 
     // set up maildir folders and notmuch database
     let mdir: maildir::Maildir = env::temp_dir().join("himalaya-test-notmuch").into();
@@ -15,29 +15,16 @@ fn test_notmuch_backend() {
     mdir.create_dirs().unwrap();
     notmuch::Database::create(mdir.path()).unwrap();
 
-    let notmuch_config = NotmuchConfig {
-        db_path: mdir.path().to_owned(),
-    };
-
-    let config = Config {
-        accounts: HashMap::from_iter([(
-            String::new(),
-            AccountConfig {
-                default: Some(true),
-                folder_aliases: Some(HashMap::from_iter([("inbox".into(), "*".into())])),
-                backend: BackendConfig::Notmuch(notmuch_config.clone()),
-                ..AccountConfig::default()
-            },
-        )]),
-        ..Config::default()
-    };
-
-    let mdir_config = MaildirConfig {
-        root_dir: mdir.path().to_owned(),
-    };
-
-    let mut mdir = MaildirBackend::new(&config, &mdir_config);
-    let mut notmuch = NotmuchBackend::new(&config, &notmuch_config, &mut mdir).unwrap();
+    let mut notmuch = NotmuchBackend::new(
+        AccountConfig {
+            folder_aliases: HashMap::from_iter([("inbox".into(), "*".into())]),
+            ..AccountConfig::default()
+        },
+        NotmuchConfig {
+            db_path: mdir.path().to_owned(),
+        },
+    )
+    .unwrap();
 
     // check that a message can be added
     let msg = include_bytes!("./emails/alice-to-patrick.eml");

@@ -24,7 +24,7 @@ use shellexpand;
 use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf, result};
 use thiserror::Error;
 
-use crate::{process, BackendConfig, EmailHooks, EmailSender, EmailTextPlainFormat};
+use crate::{process, EmailHooks, EmailSender, EmailTextPlainFormat};
 
 pub const DEFAULT_PAGE_SIZE: usize = 10;
 pub const DEFAULT_SIGNATURE_DELIM: &str = "-- \n";
@@ -71,234 +71,28 @@ pub struct Config {
 }
 
 impl Config {
-    /// Gets the account configuration matching the account name. If
-    /// the account name is not defined, gets the first default
-    /// account from the accounts map.
-    pub fn account(&self) -> Result<&AccountConfig> {
-        match self.account_name.as_ref().map(|s| s.as_str()) {
-            Some("default") | Some("") | None => self
-                .accounts
-                .iter()
-                .find_map(|(_, account)| {
-                    if account.is_default() {
-                        Some(account)
-                    } else {
-                        None
-                    }
-                })
-                .ok_or_else(|| Error::FindDefaultAccountError),
-            Some(name) => self
-                .accounts
-                .get(name)
-                .ok_or_else(|| Error::FindAccountError(name.to_owned())),
-        }
-    }
-
-    /// Builds the full RFC822 compliant user address email.
-    pub fn address(&self) -> Result<MailAddr> {
-        let display_name = &self
-            .account()?
-            .display_name
-            .as_ref()
-            .or_else(|| self.global.display_name.as_ref())
-            .map(ToOwned::to_owned)
-            .unwrap_or_default();
-
-        let has_special_chars = "()<>[]:;@.,".contains(|c| display_name.contains(c));
-
-        let addr = if display_name.is_empty() {
-            self.account()?.email.clone()
-        } else if has_special_chars {
-            format!("\"{}\" <{}>", display_name, &self.account()?.email)
-        } else {
-            format!("{} <{}>", display_name, &self.account()?.email)
-        };
-        let addr = mailparse::addrparse(&addr)
-            .map_err(|err| Error::ParseAccountAddrError(err, addr.to_owned()))?
-            .first()
-            .ok_or_else(|| Error::ParseAccountAddrNotFoundError(addr.to_owned()))?
-            .to_owned();
-
-        Ok(addr)
-    }
-
-    // TODO: move this function to a better location.
-    /// Encrypts a file.
-    pub fn pgp_encrypt_file(&self, addr: &str, path: PathBuf) -> Result<String> {
-        let cmd = self
-            .account()?
-            .email_writing_encrypt_cmd
-            .as_ref()
-            .or_else(|| self.global.email_writing_encrypt_cmd.as_ref())
-            .ok_or_else(|| Error::EncryptFileMissingCmdError)?;
-        let cmd = &format!("{} {} {:?}", cmd, addr, path);
-        process::run(cmd).map_err(Error::EncryptFileError)
-    }
-
-    // TODO: move this function to a better location.
-    /// Decrypts a file.
-    pub fn pgp_decrypt_file(&self, path: PathBuf) -> Result<String> {
-        let cmd = self
-            .account()?
-            .email_reading_decrypt_cmd
-            .as_ref()
-            .or_else(|| self.global.email_reading_decrypt_cmd.as_ref())
-            .ok_or_else(|| Error::DecryptFileMissingCmdError)?;
-        let cmd = &format!("{} {:?}", cmd, path);
-        process::run(cmd).map_err(Error::DecryptFileError)
-    }
-
-    /// Gets the downloads directory path.
-    pub fn downloads_dir(&self) -> Result<PathBuf> {
-        Ok(self
-            .account()?
-            .downloads_dir
-            .as_ref()
-            .and_then(|dir| dir.to_str())
-            .and_then(|dir| shellexpand::full(dir).ok())
-            .or_else(|| {
-                self.global
-                    .downloads_dir
-                    .as_ref()
-                    .and_then(|dir| dir.to_str())
-                    .and_then(|dir| shellexpand::full(dir).ok())
-            })
-            .map(|dir| PathBuf::from(dir.to_string()))
-            .unwrap_or_else(env::temp_dir))
-    }
-
-    /// Gets the download path from a file name.
-    pub fn get_download_file_path<S: AsRef<str>>(&self, file_name: S) -> Result<PathBuf> {
-        let file_path = self.downloads_dir()?.join(file_name.as_ref());
-        self.get_unique_download_file_path(&file_path, |path, _count| path.is_file())
-    }
-
-    /// Gets the unique download path from a file name by adding
-    /// suffixes in case of name conflicts.
-    pub(crate) fn get_unique_download_file_path(
-        &self,
-        original_file_path: &PathBuf,
-        is_file: impl Fn(&PathBuf, u8) -> bool,
-    ) -> Result<PathBuf> {
-        let mut count = 0;
-        let file_ext = original_file_path
-            .extension()
-            .and_then(OsStr::to_str)
-            .map(|fext| String::from(".") + fext)
-            .unwrap_or_default();
-        let mut file_path = original_file_path.clone();
-
-        while is_file(&file_path, count) {
-            count += 1;
-            file_path.set_file_name(OsStr::new(
-                &original_file_path
-                    .file_stem()
-                    .and_then(OsStr::to_str)
-                    .map(|fstem| format!("{}_{}{}", fstem, count, file_ext))
-                    .ok_or_else(|| Error::ParseDownloadFileNameError(file_path.to_owned()))?,
-            ));
-        }
-
-        Ok(file_path)
-    }
-
-    /// Gets the alias of the given folder if exists, otherwise
-    /// returns the folder itself. Also tries to expand shell
-    /// variables.
-    pub fn folder_alias(&self, folder: &str) -> Result<String> {
-        let aliases = self.folder_aliases()?;
-        let folder = folder.trim().to_lowercase();
-        let alias =
-            aliases
-                .get(&folder)
-                .map(|s| s.as_str())
-                .unwrap_or_else(|| match folder.as_str() {
-                    "inbox" => DEFAULT_INBOX_FOLDER,
-                    "draft" => DEFAULT_DRAFT_FOLDER,
-                    "sent" => DEFAULT_SENT_FOLDER,
-                    folder => folder,
-                });
-        let alias = shellexpand::full(alias)
-            .map(String::from)
-            .map_err(|err| Error::ExpandFolderAliasError(err, alias.to_owned()))?;
-        Ok(alias)
-    }
-
-    pub fn folder_aliases(&self) -> Result<HashMap<String, String>> {
-        let mut folder_aliases = self.global.folder_aliases.clone().unwrap_or_default();
-        folder_aliases.extend(self.account()?.folder_aliases.clone().unwrap_or_default());
-        Ok(folder_aliases)
-    }
-
-    pub fn email_hooks(&self) -> Result<EmailHooks> {
-        Ok(EmailHooks {
-            pre_send: self
-                .account()?
-                .email_hooks
-                .as_ref()
-                .and_then(|hooks| hooks.pre_send.as_ref())
-                .or_else(|| {
-                    self.global
-                        .email_hooks
-                        .as_ref()
-                        .and_then(|hooks| hooks.pre_send.as_ref())
-                })
-                .map(ToOwned::to_owned),
-        })
-    }
-
-    pub fn email_listing_page_size(&self) -> Result<usize> {
-        Ok(self
-            .account()?
-            .email_listing_page_size
-            .or_else(|| self.global.email_listing_page_size)
-            .unwrap_or(DEFAULT_PAGE_SIZE))
-    }
-
-    pub fn email_reading_format(&self) -> Result<EmailTextPlainFormat> {
-        Ok(self
-            .account()?
-            .email_reading_format
-            .as_ref()
-            .or_else(|| self.global.email_reading_format.as_ref())
-            .map(ToOwned::to_owned)
-            .unwrap_or_default())
-    }
-
-    pub fn email_reading_headers(&self) -> Result<Vec<String>> {
-        Ok(self
-            .account()?
-            .email_reading_headers
-            .as_ref()
-            .or_else(|| self.global.email_reading_headers.as_ref())
-            .map(ToOwned::to_owned)
-            .unwrap_or_default())
-    }
-
-    pub fn signature(&self) -> Result<Option<String>> {
-        let delim = self
-            .account()?
-            .signature_delim
-            .as_ref()
-            .or_else(|| self.global.signature_delim.as_ref())
-            .map(|s| s.as_str())
-            .unwrap_or(DEFAULT_SIGNATURE_DELIM);
-        let signature = self
-            .account()?
-            .signature
-            .as_ref()
-            .or_else(|| self.global.signature.as_ref());
-        Ok(signature
-            .and_then(|sig| shellexpand::full(sig).ok())
-            .map(String::from)
-            .and_then(|sig| fs::read_to_string(sig).ok())
-            .or_else(|| signature.map(ToOwned::to_owned))
-            .map(|sig| format!("{}{}", delim, sig.trim_end())))
-    }
-
-    pub fn email_sender(&self) -> Result<&EmailSender> {
-        Ok(&self.account()?.email_sender)
-    }
+    // Gets the account configuration matching the account name. If
+    // the account name is not defined, gets the first default
+    // account from the accounts map.
+    // pub fn account(&self) -> Result<&AccountConfig> {
+    //     match self.account_name.as_ref().map(|s| s.as_str()) {
+    //         Some("default") | Some("") | None => self
+    //             .accounts
+    //             .iter()
+    //             .find_map(|(_, account)| {
+    //                 if account.is_default() {
+    //                     Some(account)
+    //                 } else {
+    //                     None
+    //                 }
+    //             })
+    //             .ok_or_else(|| Error::FindDefaultAccountError),
+    //         Some(name) => self
+    //             .accounts
+    //             .get(name)
+    //             .ok_or_else(|| Error::FindAccountError(name.to_owned())),
+    //     }
+    // }
 }
 
 /// Represents the use top level configuration.
@@ -340,14 +134,10 @@ pub type AccountsConfig = HashMap<String, AccountConfig>;
 /// Represents the configuration of the user account.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct AccountConfig {
-    /// Represents the name of the account.
-    pub name: String,
     /// Represents the email address of the user.
     pub email: String,
-    /// Represents the defaultness of the account.
-    pub default: Option<bool>,
     /// Represents the display name of the user.
-    pub display_name: Option<String>,
+    pub display_name: String,
     /// Represents the email signature delimiter of the user.
     pub signature_delim: Option<String>,
     /// Represents the email signature of the user.
@@ -358,7 +148,7 @@ pub struct AccountConfig {
     /// Represents the page size when listing folders.
     pub folder_listing_page_size: Option<usize>,
     /// Represents the folder aliases map.
-    pub folder_aliases: Option<HashMap<String, String>>,
+    pub folder_aliases: HashMap<String, String>,
 
     /// Represents the page size when listing emails.
     pub email_listing_page_size: Option<usize>,
@@ -367,7 +157,7 @@ pub struct AccountConfig {
     pub email_reading_headers: Option<Vec<String>>,
     /// Represents the text/plain format as defined in the
     /// [RFC2646](https://www.ietf.org/rfc/rfc2646.txt)
-    pub email_reading_format: Option<EmailTextPlainFormat>,
+    pub email_reading_format: EmailTextPlainFormat,
     /// Represents the command used to decrypt an email.
     pub email_reading_decrypt_cmd: Option<String>,
     /// Represents the command used to encrypt an email.
@@ -375,15 +165,144 @@ pub struct AccountConfig {
     /// Represents the email sender provider.
     pub email_sender: EmailSender,
     /// Represents the email hooks.
-    pub email_hooks: Option<EmailHooks>,
-
-    /// Represents the backend configuration of the account.
-    pub backend: BackendConfig,
+    pub email_hooks: EmailHooks,
 }
 
 impl AccountConfig {
-    pub fn is_default(&self) -> bool {
-        self.default.unwrap_or_default()
+    /// Builds the full RFC822 compliant user address email.
+    pub fn address(&self) -> Result<MailAddr> {
+        let has_special_chars = "()<>[]:;@.,".contains(|c| self.display_name.contains(c));
+
+        let addr = if self.display_name.is_empty() {
+            self.email.clone()
+        } else if has_special_chars {
+            format!("\"{}\" <{}>", self.display_name, &self.email)
+        } else {
+            format!("{} <{}>", self.display_name, &self.email)
+        };
+        let addr = mailparse::addrparse(&addr)
+            .map_err(|err| Error::ParseAccountAddrError(err, addr.to_owned()))?
+            .first()
+            .ok_or_else(|| Error::ParseAccountAddrNotFoundError(addr.to_owned()))?
+            .to_owned();
+
+        Ok(addr)
+    }
+
+    pub fn pgp_encrypt_file(&self, addr: &str, path: PathBuf) -> Result<String> {
+        let cmd = self
+            .email_writing_encrypt_cmd
+            .as_ref()
+            .ok_or_else(|| Error::EncryptFileMissingCmdError)?;
+        let cmd = &format!("{} {} {:?}", cmd, addr, path);
+        process::run(cmd).map_err(Error::EncryptFileError)
+    }
+
+    pub fn pgp_decrypt_file(&self, path: PathBuf) -> Result<String> {
+        let cmd = self
+            .email_reading_decrypt_cmd
+            .as_ref()
+            .ok_or_else(|| Error::DecryptFileMissingCmdError)?;
+        let cmd = &format!("{} {:?}", cmd, path);
+        process::run(cmd).map_err(Error::DecryptFileError)
+    }
+
+    /// Gets the downloads directory path.
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.downloads_dir
+            .as_ref()
+            .and_then(|dir| dir.to_str())
+            .and_then(|dir| shellexpand::full(dir).ok())
+            .map(|dir| PathBuf::from(dir.to_string()))
+            .unwrap_or_else(env::temp_dir)
+    }
+
+    /// Gets the download path from a file name.
+    pub fn get_download_file_path<S: AsRef<str>>(&self, file_name: S) -> Result<PathBuf> {
+        let file_path = self.downloads_dir().join(file_name.as_ref());
+        self.get_unique_download_file_path(&file_path, |path, _count| path.is_file())
+    }
+
+    /// Gets the unique download path from a file name by adding
+    /// suffixes in case of name conflicts.
+    pub(crate) fn get_unique_download_file_path(
+        &self,
+        original_file_path: &PathBuf,
+        is_file: impl Fn(&PathBuf, u8) -> bool,
+    ) -> Result<PathBuf> {
+        let mut count = 0;
+        let file_ext = original_file_path
+            .extension()
+            .and_then(OsStr::to_str)
+            .map(|fext| String::from(".") + fext)
+            .unwrap_or_default();
+        let mut file_path = original_file_path.clone();
+
+        while is_file(&file_path, count) {
+            count += 1;
+            file_path.set_file_name(OsStr::new(
+                &original_file_path
+                    .file_stem()
+                    .and_then(OsStr::to_str)
+                    .map(|fstem| format!("{}_{}{}", fstem, count, file_ext))
+                    .ok_or_else(|| Error::ParseDownloadFileNameError(file_path.to_owned()))?,
+            ));
+        }
+
+        Ok(file_path)
+    }
+
+    /// Gets the alias of the given folder if exists, otherwise
+    /// returns the folder itself. Also tries to expand shell
+    /// variables.
+    pub fn folder_alias(&self, folder: &str) -> Result<String> {
+        let folder = folder.trim().to_lowercase();
+        let alias = self
+            .folder_aliases
+            .get(&folder)
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| match folder.as_str() {
+                "inbox" => DEFAULT_INBOX_FOLDER,
+                "draft" => DEFAULT_DRAFT_FOLDER,
+                "sent" => DEFAULT_SENT_FOLDER,
+                folder => folder,
+            });
+        let alias = shellexpand::full(alias)
+            .map(String::from)
+            .map_err(|err| Error::ExpandFolderAliasError(err, alias.to_owned()))?;
+        Ok(alias)
+    }
+
+    pub fn email_hooks(&self) -> EmailHooks {
+        EmailHooks {
+            pre_send: self.email_hooks.pre_send.to_owned(),
+        }
+    }
+
+    pub fn email_listing_page_size(&self) -> usize {
+        self.email_listing_page_size.unwrap_or(DEFAULT_PAGE_SIZE)
+    }
+
+    pub fn email_reading_headers(&self) -> Vec<String> {
+        self.email_reading_headers
+            .as_ref()
+            .map(ToOwned::to_owned)
+            .unwrap_or_default()
+    }
+
+    pub fn signature(&self) -> Result<Option<String>> {
+        let delim = self
+            .signature_delim
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or(DEFAULT_SIGNATURE_DELIM);
+        let signature = self.signature.as_ref();
+        Ok(signature
+            .and_then(|sig| shellexpand::full(sig).ok())
+            .map(String::from)
+            .and_then(|sig| fs::read_to_string(sig).ok())
+            .or_else(|| signature.map(ToOwned::to_owned))
+            .map(|sig| format!("{}{}", delim, sig.trim_end())))
     }
 }
 
@@ -393,7 +312,7 @@ mod tests {
 
     #[test]
     fn get_unique_download_file_path() {
-        let config = Config::default();
+        let config = AccountConfig::default();
         let path = PathBuf::from("downloads/file.ext");
 
         // When file path is unique

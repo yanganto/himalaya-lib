@@ -35,8 +35,9 @@ use tree_magic;
 use uuid::Uuid;
 
 use crate::{
-    config, from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs, Addr,
-    Addrs, BinaryPart, Config, Part, Parts, TextPlainPart, TplOverride, DEFAULT_SIGNATURE_DELIM,
+    config, from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs,
+    AccountConfig, Addr, Addrs, BinaryPart, Part, Parts, TextPlainPart, TplOverride,
+    DEFAULT_SIGNATURE_DELIM,
 };
 
 #[derive(Error, Debug)]
@@ -217,7 +218,7 @@ impl Email {
         }
     }
 
-    pub fn into_reply(mut self, all: bool, config: &Config) -> Result<Self> {
+    pub fn into_reply(mut self, all: bool, config: &AccountConfig) -> Result<Self> {
         let account_addr = config.address()?;
 
         // In-Reply-To
@@ -315,7 +316,7 @@ impl Email {
         Ok(self)
     }
 
-    pub fn into_forward(mut self, config: &Config) -> Result<Self> {
+    pub fn into_forward(mut self, config: &AccountConfig) -> Result<Self> {
         let account_addr = config.address()?;
 
         let prev_subject = self.subject.to_owned();
@@ -431,7 +432,7 @@ impl Email {
         }
     }
 
-    pub fn to_tpl(&self, opts: TplOverride, config: &Config) -> Result<String> {
+    pub fn to_tpl(&self, opts: TplOverride, config: &AccountConfig) -> Result<String> {
         let account_addr: Addrs = vec![config.address()?].into();
         let mut tpl = String::default();
 
@@ -514,10 +515,10 @@ impl Email {
         let parsed_mail = mailparse::parse_mail(tpl.as_bytes()).map_err(Error::ParseTplError)?;
 
         info!("end: building message from template");
-        Self::from_parsed_mail(parsed_mail, &Config::default())
+        Self::from_parsed_mail(parsed_mail, &AccountConfig::default())
     }
 
-    pub fn into_sendable_msg(&self, config: &Config) -> Result<lettre::Message> {
+    pub fn into_sendable_msg(&self, config: &AccountConfig) -> Result<lettre::Message> {
         let mut msg_builder = lettre::Message::builder()
             .message_id(self.message_id.to_owned())
             .subject(self.subject.to_owned());
@@ -602,7 +603,7 @@ impl Email {
 
     pub fn from_parsed_mail(
         parsed_mail: mailparse::ParsedMail<'_>,
-        config: &Config,
+        config: &AccountConfig,
     ) -> Result<Self> {
         trace!(">> build message from parsed mail");
         trace!("parsed mail: {:?}", parsed_mail);
@@ -674,10 +675,10 @@ impl Email {
         &self,
         text_mime: &str,
         headers: Vec<&str>,
-        config: &Config,
+        config: &AccountConfig,
     ) -> Result<String> {
         let mut all_headers = vec![];
-        for h in config.email_reading_headers()?.iter() {
+        for h in config.email_reading_headers().iter() {
             let h = h.to_lowercase();
             if !all_headers.contains(&h) {
                 all_headers.push(h)
@@ -807,15 +808,10 @@ mod tests {
 
     #[test]
     fn test_into_reply() {
-        let account = AccountConfig {
-            default: Some(true),
-            display_name: Some("Test".into()),
+        let config = AccountConfig {
+            display_name: "Test".into(),
             email: "test-account@local".into(),
             ..AccountConfig::default()
-        };
-        let config = Config {
-            accounts: HashMap::from_iter([(String::new(), account)]),
-            ..Config::default()
         };
 
         // Checks that:
@@ -951,16 +947,7 @@ mod tests {
 
     #[test]
     fn test_to_readable() {
-        let config = Config {
-            accounts: HashMap::from_iter([(
-                String::new(),
-                AccountConfig {
-                    default: Some(true),
-                    ..AccountConfig::default()
-                },
-            )]),
-            ..Config::default()
-        };
+        let config = AccountConfig::default();
         let email = Email {
             parts: Parts(vec![Part::TextPlain(TextPlainPart {
                 content: String::from("hello, world!"),
@@ -1028,8 +1015,7 @@ mod tests {
                 .unwrap()
         );
 
-        let account = AccountConfig {
-            default: Some(true),
+        let config = AccountConfig {
             email_reading_headers: Some(vec![
                 "CusTOM-heaDER".into(),
                 "Subject".into(),
@@ -1037,10 +1023,6 @@ mod tests {
                 "cc".into(),
             ]),
             ..AccountConfig::default()
-        };
-        let config = Config {
-            accounts: HashMap::from_iter([(String::new(), account)]),
-            ..Config::default()
         };
         // header present but empty in email headers, empty config
         assert_eq!(

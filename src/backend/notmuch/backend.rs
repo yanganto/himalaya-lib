@@ -19,12 +19,14 @@ use std::{fs, io, result};
 use thiserror::Error;
 
 use crate::{
-    backend, config, email, envelope::notmuch::envelopes, id_mapper, Backend, Config, Email,
-    Envelopes, Folder, Folders, IdMapper, MaildirBackend, NotmuchConfig,
+    backend, config, email, envelope::notmuch::envelopes, id_mapper, AccountConfig, Backend, Email,
+    Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig, NotmuchConfig,
 };
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot get notmuch backend from config")]
+    GetBackendFromConfigError,
     #[error("cannot parse notmuch message header {1}")]
     ParseMsgHeaderError(#[source] notmuch::Error, String),
     #[error("cannot parse notmuch message date {1}")]
@@ -81,34 +83,36 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the Notmuch backend.
-pub struct NotmuchBackend<'a> {
-    config: &'a Config,
-    notmuch_config: &'a NotmuchConfig,
-    pub mdir: &'a mut MaildirBackend<'a>,
+pub struct NotmuchBackend {
+    account_config: AccountConfig,
+    backend_config: NotmuchConfig,
+    mdir_backend: MaildirBackend,
     db: notmuch::Database,
 }
 
-impl<'a> NotmuchBackend<'a> {
+impl NotmuchBackend {
     pub fn new(
-        config: &'a Config,
-        notmuch_config: &'a NotmuchConfig,
-        mdir: &'a mut MaildirBackend<'a>,
-    ) -> Result<NotmuchBackend<'a>> {
-        info!(">> create new notmuch backend");
+        account_config: AccountConfig,
+        backend_config: NotmuchConfig,
+    ) -> Result<NotmuchBackend> {
+        let db = notmuch::Database::open(
+            backend_config.db_path.clone(),
+            notmuch::DatabaseMode::ReadWrite,
+        )
+        .map_err(Error::OpenDbError)?;
+        let mdir_backend = MaildirBackend::new(
+            account_config.clone(),
+            MaildirConfig {
+                root_dir: backend_config.db_path.clone(),
+            },
+        );
 
-        let backend = Self {
-            config,
-            notmuch_config,
-            mdir,
-            db: notmuch::Database::open(
-                notmuch_config.db_path.clone(),
-                notmuch::DatabaseMode::ReadWrite,
-            )
-            .map_err(Error::OpenDbError)?,
-        };
-
-        info!("<< create new notmuch backend");
-        Ok(backend)
+        Ok(Self {
+            account_config,
+            backend_config,
+            db,
+            mdir_backend,
+        })
     }
 
     fn _search_envelopes(
@@ -150,7 +154,7 @@ impl<'a> NotmuchBackend<'a> {
         // represents the minimum hash length possible to avoid
         // conflicts.
         let short_hash_len = {
-            let mut mapper = IdMapper::new(&self.notmuch_config.db_path)?;
+            let mut mapper = IdMapper::new(&self.backend_config.db_path)?;
             let entries = envelopes
                 .iter()
                 .map(|env| (env.id.to_owned(), env.internal_id.to_owned()))
@@ -168,7 +172,7 @@ impl<'a> NotmuchBackend<'a> {
     }
 }
 
-impl<'a> Backend for NotmuchBackend<'a> {
+impl Backend for NotmuchBackend {
     fn folder_add(&mut self, _mbox: &str) -> backend::Result<()> {
         Err(Error::AddMboxUnimplementedError)?
     }
@@ -177,7 +181,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         trace!(">> get notmuch virtual folders");
 
         let mut mboxes = Folders::default();
-        for (name, desc) in &self.config.folder_aliases()? {
+        for (name, desc) in &self.account_config.folder_aliases {
             mboxes.push(Folder {
                 name: name.into(),
                 desc: desc.into(),
@@ -206,7 +210,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         debug!("page: {:?}", page);
 
         let query = self
-            .config
+            .account_config
             .folder_alias(virt_mbox)
             .unwrap_or_else(|_| String::from("all"));
         debug!("query: {:?}", query);
@@ -231,7 +235,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         debug!("page: {:?}", page);
 
         let query = if query.is_empty() {
-            self.config
+            self.account_config
                 .folder_alias(virt_mbox)
                 .unwrap_or_else(|_| String::from("all"))
         } else {
@@ -248,10 +252,10 @@ impl<'a> Backend for NotmuchBackend<'a> {
         info!(">> add notmuch envelopes");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.db_path;
+        let dir = &self.backend_config.db_path;
 
         // Adds the message to the maildir folder and gets its hash.
-        let hash = self.mdir.email_add("", msg, "seen")?;
+        let hash = self.mdir_backend.email_add("", msg, "seen")?;
         debug!("hash: {:?}", hash);
 
         // Retrieves the file path of the added message by its maildir
@@ -285,7 +289,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         info!(">> add notmuch envelopes");
         debug!("short hash: {:?}", short_hash);
 
-        let dir = &self.notmuch_config.db_path;
+        let dir = &self.backend_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let msg_file_path = self
@@ -298,7 +302,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         debug!("message file path: {:?}", msg_file_path);
         let raw_msg = fs::read(&msg_file_path).map_err(Error::ReadMsgError)?;
         let msg = mailparse::parse_mail(&raw_msg).map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(msg, &self.config)?;
+        let msg = Email::from_parsed_mail(msg, &self.account_config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get notmuch message");
@@ -309,7 +313,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         info!(">> add notmuch envelopes");
         debug!("short hash: {:?}", short_hash);
 
-        let dir = &self.notmuch_config.db_path;
+        let dir = &self.backend_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let msg_file_path = self
@@ -322,7 +326,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         debug!("message file path: {:?}", msg_file_path);
         let raw_msg = fs::read(&msg_file_path).map_err(Error::ReadMsgError)?;
         let msg = mailparse::parse_mail(&raw_msg).map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(msg, &self.config)?;
+        let msg = Email::from_parsed_mail(msg, &self.account_config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get notmuch message");
@@ -355,7 +359,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         info!(">> delete notmuch message");
         debug!("short hash: {:?}", short_hash);
 
-        let dir = &self.notmuch_config.db_path;
+        let dir = &self.backend_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let msg_file_path = self
@@ -378,7 +382,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         info!(">> add notmuch message flags");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.db_path;
+        let dir = &self.backend_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let query = format!("id:{}", id);
@@ -406,7 +410,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         info!(">> set notmuch message flags");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.db_path;
+        let dir = &self.backend_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let query = format!("id:{}", id);
@@ -440,7 +444,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         info!(">> delete notmuch message flags");
         debug!("tags: {:?}", tags);
 
-        let dir = &self.notmuch_config.db_path;
+        let dir = &self.backend_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
         let query = format!("id:{}", id);

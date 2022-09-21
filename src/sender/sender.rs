@@ -22,7 +22,7 @@ use std::result;
 
 use thiserror::Error;
 
-use crate::{config, email, Config, Email};
+use crate::{config, email, AccountConfig, Email};
 
 #[cfg(feature = "internal-sender")]
 use crate::smtp;
@@ -41,5 +41,5 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Sender {
-    fn send(&mut self, config: &Config, msg: &Email) -> Result<Vec<u8>>;
+    fn send(&mut self, config: &AccountConfig, msg: &Email) -> Result<Vec<u8>>;
 }

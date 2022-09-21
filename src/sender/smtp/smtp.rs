@@ -29,7 +29,7 @@ use lettre::{
 use std::{convert::TryInto, result};
 use thiserror::Error;
 
-use crate::{config, email, process, sender, Config, Email, Sender, SmtpConfig};
+use crate::{config, email, process, sender, AccountConfig, Email, Sender, SmtpConfig};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -97,11 +97,11 @@ impl Smtp<'_> {
 }
 
 impl Sender for Smtp<'_> {
-    fn send(&mut self, config: &Config, msg: &Email) -> sender::Result<Vec<u8>> {
+    fn send(&mut self, config: &AccountConfig, msg: &Email) -> sender::Result<Vec<u8>> {
         let mut raw_msg = msg.into_sendable_msg(config)?.formatted();
 
         let envelope: lettre::address::Envelope = if let Some(cmd) =
-            config.email_hooks()?.pre_send.as_deref()
+            config.email_hooks.pre_send.as_deref()
         {
             for cmd in cmd.split('|') {
                 raw_msg =

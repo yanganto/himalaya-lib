@@ -1,9 +1,7 @@
 use maildir::Maildir;
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
-use himalaya_lib::{
-    AccountConfig, Backend, BackendConfig, Config, Flag, MaildirBackend, MaildirConfig,
-};
+use himalaya_lib::{AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig};
 
 #[test]
 fn test_maildir_backend() {
@@ -16,30 +14,25 @@ fn test_maildir_backend() {
     if let Err(_) = fs::remove_dir_all(mdir_sub.path()) {}
     mdir_sub.create_dirs().unwrap();
 
-    let mdir_config = MaildirConfig {
-        root_dir: mdir.path().to_owned(),
-    };
+    let mut mdir = MaildirBackend::new(
+        AccountConfig {
+            folder_aliases: HashMap::from_iter([("subdir".into(), "Subdir".into())]),
+            ..AccountConfig::default()
+        },
+        MaildirConfig {
+            root_dir: mdir.path().to_owned(),
+        },
+    );
 
-    let config = Config {
-        accounts: HashMap::from_iter([(
-            String::new(),
-            AccountConfig {
-                default: Some(true),
-                folder_aliases: Some(HashMap::from_iter([("subdir".into(), "Subdir".into())])),
-                backend: BackendConfig::Maildir(mdir_config.clone()),
-                ..AccountConfig::default()
-            },
-        )]),
-        ..Config::default()
-    };
-
-    let mut mdir = MaildirBackend::new(&config, &mdir_config);
-
-    let mdir_sub_config = MaildirConfig {
-        root_dir: mdir_sub.path().to_owned(),
-    };
-
-    let mut mdir_subdir = MaildirBackend::new(&config, &mdir_sub_config);
+    let mut submdir = MaildirBackend::new(
+        AccountConfig {
+            folder_aliases: HashMap::from_iter([("subdir".into(), "Subdir".into())]),
+            ..AccountConfig::default()
+        },
+        MaildirConfig {
+            root_dir: mdir_sub.path().to_owned(),
+        },
+    );
 
     // check that a message can be added
     let msg = include_bytes!("./emails/alice-to-patrick.eml");
@@ -86,16 +79,16 @@ fn test_maildir_backend() {
     mdir.email_copy("inbox", "subdir", &envelope.id).unwrap();
     assert!(mdir.email_list("inbox", &hash).is_ok());
     assert!(mdir.email_list("subdir", &hash).is_ok());
-    assert!(mdir_subdir.email_list("inbox", &hash).is_ok());
+    assert!(submdir.email_list("inbox", &hash).is_ok());
 
     // check that the message can be moved
     mdir.email_move("inbox", "subdir", &envelope.id).unwrap();
     assert!(mdir.email_list("inbox", &hash).is_err());
     assert!(mdir.email_list("subdir", &hash).is_ok());
-    assert!(mdir_subdir.email_list("inbox", &hash).is_ok());
+    assert!(submdir.email_list("inbox", &hash).is_ok());
 
     // check that the message can be deleted
     mdir.email_delete("subdir", &hash).unwrap();
     assert!(mdir.email_list("subdir", &hash).is_err());
-    assert!(mdir_subdir.email_list("inbox", &hash).is_err());
+    assert!(submdir.email_list("inbox", &hash).is_err());
 }

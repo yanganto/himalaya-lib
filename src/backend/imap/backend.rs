@@ -25,12 +25,14 @@ use std::{collections::HashSet, convert::TryInto, net::TcpStream, result, thread
 use thiserror::Error;
 
 use crate::{
-    backend, config, email, envelope, flag, process, Backend, Config, Email, Envelopes, Flags,
-    Folder, Folders, ImapConfig,
+    backend, config, email, envelope, flag, process, AccountConfig, Backend, Email, Envelopes,
+    Flags, Folder, Folders, ImapConfig,
 };
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("cannot get imap backend from config")]
+    GetBackendFromConfigError,
     #[error("cannot get envelope of message {0}")]
     GetEnvelopeError(u32),
     #[error("cannot get sender of message {0}")]
@@ -112,17 +114,17 @@ pub type Result<T> = result::Result<T, Error>;
 
 type ImapSess = imap::Session<TlsStream<TcpStream>>;
 
-pub struct ImapBackend<'a> {
-    config: &'a Config,
-    imap_config: &'a ImapConfig,
+pub struct ImapBackend {
+    account: AccountConfig,
+    backend: ImapConfig,
     sess: Option<ImapSess>,
 }
 
-impl<'a> ImapBackend<'a> {
-    pub fn new(config: &'a Config, imap_config: &'a ImapConfig) -> Self {
+impl ImapBackend {
+    pub fn new(account: AccountConfig, backend: ImapConfig) -> Self {
         Self {
-            config,
-            imap_config,
+            account,
+            backend,
             sess: None,
         }
     }
@@ -130,20 +132,20 @@ impl<'a> ImapBackend<'a> {
     fn sess(&mut self) -> Result<&mut ImapSess> {
         if self.sess.is_none() {
             debug!("create TLS builder");
-            debug!("insecure: {}", self.imap_config.insecure());
+            debug!("insecure: {}", self.backend.insecure());
             let builder = TlsConnector::builder()
-                .danger_accept_invalid_certs(self.imap_config.insecure())
-                .danger_accept_invalid_hostnames(self.imap_config.insecure())
+                .danger_accept_invalid_certs(self.backend.insecure())
+                .danger_accept_invalid_hostnames(self.backend.insecure())
                 .build()
                 .map_err(Error::CreateTlsConnectorError)?;
 
             debug!("create client");
-            debug!("host: {}", self.imap_config.host);
-            debug!("port: {}", self.imap_config.port);
-            debug!("starttls: {}", self.imap_config.starttls());
+            debug!("host: {}", self.backend.host);
+            debug!("port: {}", self.backend.port);
+            debug!("starttls: {}", self.backend.starttls());
             let mut client_builder =
-                imap::ClientBuilder::new(&self.imap_config.host, self.imap_config.port);
-            if self.imap_config.starttls() {
+                imap::ClientBuilder::new(&self.backend.host, self.backend.port);
+            if self.backend.starttls() {
                 client_builder.starttls();
             }
             let client = client_builder
@@ -151,9 +153,9 @@ impl<'a> ImapBackend<'a> {
                 .map_err(Error::ConnectImapServerError)?;
 
             debug!("create session");
-            debug!("login: {}", self.imap_config.login);
+            debug!("login: {}", self.backend.login);
             let mut sess = client
-                .login(&self.imap_config.login, &self.imap_config.passwd()?)
+                .login(&self.backend.login, &self.backend.passwd()?)
                 .map_err(|res| Error::LoginImapServerError(res.0))?;
             sess.debug = log_enabled!(Level::Trace);
             self.sess = Some(sess);
@@ -190,7 +192,7 @@ impl<'a> ImapBackend<'a> {
 
         debug!("init messages hashset");
         let mut msgs_set: HashSet<u32> = self
-            .search_new_msgs(&self.imap_config.notify_query())?
+            .search_new_msgs(&self.backend.notify_query())?
             .iter()
             .cloned()
             .collect::<HashSet<_>>();
@@ -211,7 +213,7 @@ impl<'a> ImapBackend<'a> {
                 .map_err(Error::StartIdleModeError)?;
 
             let uids: Vec<u32> = self
-                .search_new_msgs(&self.imap_config.notify_query())?
+                .search_new_msgs(&self.backend.notify_query())?
                 .into_iter()
                 .filter(|uid| -> bool { msgs_set.get(uid).is_none() })
                 .collect();
@@ -234,7 +236,7 @@ impl<'a> ImapBackend<'a> {
                     let uid = fetch.uid.ok_or_else(|| Error::GetUidError(fetch.message))?;
 
                     let from = msg.sender.to_owned().into();
-                    self.imap_config.run_notify_cmd(&msg.subject, &from)?;
+                    self.backend.run_notify_cmd(&msg.subject, &from)?;
 
                     debug!("notify message: {}", uid);
                     trace!("message: {:?}", msg);
@@ -270,7 +272,7 @@ impl<'a> ImapBackend<'a> {
                 })
                 .map_err(Error::StartIdleModeError)?;
 
-            let cmds = self.imap_config.watch_cmds().clone();
+            let cmds = self.backend.watch_cmds().clone();
             thread::spawn(move || {
                 debug!("batch execution of {} cmd(s)", cmds.len());
                 cmds.iter().for_each(|cmd| {
@@ -285,7 +287,7 @@ impl<'a> ImapBackend<'a> {
     }
 }
 
-impl<'a> Backend for ImapBackend<'a> {
+impl Backend for ImapBackend {
     fn folder_add(&mut self, mbox: &str) -> backend::Result<()> {
         trace!(">> add folder");
 
@@ -457,7 +459,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let mut msg = Email::from_parsed_mail(
             mailparse::parse_mail(&msg_raw)
                 .map_err(|err| Error::ParseMsgError(err, seq.to_owned()))?,
-            self.config,
+            &self.account,
         )?;
         msg.raw = msg_raw;
         Ok(msg)
@@ -478,7 +480,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let mut msg = Email::from_parsed_mail(
             mailparse::parse_mail(&msg_raw)
                 .map_err(|err| Error::ParseMsgError(err, seq.to_owned()))?,
-            self.config,
+            &self.account,
         )?;
         msg.raw = msg_raw;
         Ok(msg)

@@ -22,10 +22,24 @@
 use std::result;
 use thiserror::Error;
 
-use crate::{backend, config, email, id_mapper, Email, Envelopes, Folders};
+use crate::{
+    backend, config, email, id_mapper, AccountConfig, BackendConfig, Email, Envelopes, Folders,
+};
+
+#[cfg(feature = "imap-backend")]
+use crate::ImapBackend;
+
+#[cfg(feature = "maildir-backend")]
+use crate::MaildirBackend;
+
+#[cfg(feature = "notmuch-backend")]
+use crate::NotmuchBackend;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot build backend with an empty config")]
+    BuildBackendError,
+
     #[error(transparent)]
     EmailError(#[from] email::Error),
     #[error(transparent)]
@@ -78,4 +92,38 @@ pub trait Backend {
     fn flags_add(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
     fn flags_set(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
     fn flags_delete(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+}
+
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct BackendBuilder {
+    account: AccountConfig,
+    backend: BackendConfig,
+}
+
+impl BackendBuilder {
+    pub fn account(mut self, account: AccountConfig) -> Self {
+        self.account = account;
+        self
+    }
+
+    pub fn backend(mut self, backend: BackendConfig) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    pub fn build(self) -> Result<Box<dyn Backend>> {
+        match self.backend {
+            #[cfg(feature = "imap-backend")]
+            BackendConfig::Imap(backend) => Ok(Box::new(ImapBackend::new(self.account, backend))),
+            #[cfg(feature = "maildir-backend")]
+            BackendConfig::Maildir(backend) => {
+                Ok(Box::new(MaildirBackend::new(self.account, backend)))
+            }
+            #[cfg(feature = "notmuch-backend")]
+            BackendConfig::Notmuch(backend) => {
+                Ok(Box::new(NotmuchBackend::new(self.account, backend)?))
+            }
+            BackendConfig::None => Err(Error::BuildBackendError),
+        }
+    }
 }

@@ -30,13 +30,15 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    backend, config, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper, Backend,
-    Config, Email, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
+    backend, config, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper,
+    AccountConfig, Backend, Email, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
     DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot get maildir backend from config")]
+    GetBackendFromConfigError,
     #[error("cannot find maildir sender")]
     FindSenderError,
     #[error("cannot read maildir directory {0}")]
@@ -91,16 +93,16 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the maildir backend.
-pub struct MaildirBackend<'a> {
-    config: &'a Config,
+pub struct MaildirBackend {
+    account: AccountConfig,
     mdir: maildir::Maildir,
 }
 
-impl<'a> MaildirBackend<'a> {
-    pub fn new(config: &'a Config, maildir_config: &'a MaildirConfig) -> Self {
+impl MaildirBackend {
+    pub fn new(account: AccountConfig, backend: MaildirConfig) -> Self {
         Self {
-            config,
-            mdir: maildir_config.root_dir.to_owned().into(),
+            account,
+            mdir: backend.root_dir.to_owned().into(),
         }
     }
 
@@ -115,7 +117,7 @@ impl<'a> MaildirBackend<'a> {
 
     /// Creates a maildir instance from a string slice.
     pub fn get_mdir_from_dir(&self, dir: &str) -> Result<maildir::Maildir> {
-        let dir = self.config.folder_alias(dir)?;
+        let dir = self.account.folder_alias(dir)?;
 
         // If the dir points to the inbox folder, creates a maildir
         // instance from the root folder.
@@ -150,7 +152,7 @@ impl<'a> MaildirBackend<'a> {
     }
 }
 
-impl<'a> Backend for MaildirBackend<'a> {
+impl Backend for MaildirBackend {
     fn folder_add(&mut self, subdir: &str) -> backend::Result<()> {
         info!(">> add maildir subdir");
         debug!("subdir: {:?}", subdir);
@@ -168,7 +170,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         trace!(">> get maildir mailboxes");
 
         let mut mboxes = Folders::default();
-        for (name, desc) in &self.config.folder_aliases()? {
+        for (name, desc) in &self.account.folder_aliases {
             mboxes.push(Folder {
                 delim: String::from("/"),
                 name: name.into(),
@@ -313,7 +315,7 @@ impl<'a> Backend for MaildirBackend<'a> {
             .find(&id)
             .ok_or_else(|| Error::GetMsgError(id.to_owned()))?;
         let parsed_mail = mail_entry.parsed().map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(parsed_mail, self.config)?;
+        let msg = Email::from_parsed_mail(parsed_mail, &self.account)?;
         trace!("message: {:?}", msg);
 
         info!("<< get maildir message");
@@ -332,7 +334,7 @@ impl<'a> Backend for MaildirBackend<'a> {
             .find(&id)
             .ok_or_else(|| Error::GetMsgError(id.to_owned()))?;
         let parsed_mail = mail_entry.parsed().map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(parsed_mail, self.config)?;
+        let msg = Email::from_parsed_mail(parsed_mail, &self.account)?;
         trace!("message: {:?}", msg);
 
         info!("<< get maildir message");
