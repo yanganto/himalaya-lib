@@ -2,6 +2,42 @@
 
 Rust library for email management.
 
+```rust
+let account_config = AccountConfig {
+    email: "test@localhost".into(),
+    display_name: Some("Test".into()),
+    email_sender: EmailSender::Internal(SmtpConfig {
+        host: "localhost".into(),
+        port: 587,
+        starttls: Some(true),
+        login: "login".into(),
+        passwd_cmd: "echo password".into(),
+        ..Default::default()
+    }),
+    ..Default::default()
+};
+
+let imap_config = ImapConfig {
+    host: "localhost".into(),
+    port: 993,
+    starttls: Some(true),
+    login: "login".into(),
+    passwd_cmd: "echo password".into(),
+    ..Default::default()
+};
+
+let backend_config = BackendConfig::Imap(&imap_config);
+
+let mut backend = BackendBuilder::build(&account_config, &backend_config).unwrap();
+backend.envelope_list("INBOX", 10, 0).unwrap();
+backend.email_move("INBOX", "Archives", "21").unwrap();
+backend.email_delete("INBOX", "42").unwrap();
+
+let mut sender = SenderBuilder::build(&account_config).unwrap();
+let email = Email::from_tpl("To: test2@localhost\r\nSubject: Hello\r\n\r\nContent").unwrap();
+sender.send(&account_config, &email).unwrap();
+```
+
 *The project is under active development. Do not use in production
 before the `v1.0.0`.*
 
