@@ -35,7 +35,7 @@ use tree_magic;
 use uuid::Uuid;
 
 use crate::{
-    config, from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs,
+    account, from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs,
     AccountConfig, Addr, Addrs, BinaryPart, Part, Parts, TextPlainPart, TplOverride,
     DEFAULT_SIGNATURE_DELIM,
 };
@@ -67,7 +67,7 @@ pub enum Error {
     ParseAddressError(#[from] lettre::address::AddressError),
 
     #[error(transparent)]
-    ConfigError(#[from] config::Error),
+    ConfigError(#[from] account::config::Error),
 
     #[error("cannot get content type of multipart")]
     GetMultipartContentTypeError,
@@ -80,7 +80,7 @@ pub enum Error {
     #[error("cannot write encrypted part to temporary file")]
     WriteEncryptedPartBodyError(#[source] io::Error),
     #[error("cannot write encrypted part to temporary file")]
-    DecryptPartError(#[source] config::Error),
+    DecryptPartError(#[source] account::config::Error),
 
     #[error("cannot delete local draft: {1}")]
     DeleteLocalDraftError(#[source] io::Error, PathBuf),
@@ -802,7 +802,7 @@ mod tests {
     use mailparse::SingleInfo;
     use std::iter::FromIterator;
 
-    use crate::{config::AccountConfig, email::Addr};
+    use crate::{email::Addr, AccountConfig};
 
     use super::*;
 

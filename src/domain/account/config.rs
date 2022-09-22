@@ -51,85 +51,9 @@ pub enum Error {
     ExpandFolderAliasError(#[source] shellexpand::LookupError<env::VarError>, String),
     #[error("cannot parse download file name from {0}")]
     ParseDownloadFileNameError(PathBuf),
-    #[error("cannot find a default account")]
-    FindDefaultAccountError,
-    #[error("cannot find account {0}")]
-    FindAccountError(String),
 }
 
 pub type Result<T> = result::Result<T, Error>;
-
-/// Represents the user configuration.
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct Config {
-    /// Represents the global configuration.
-    pub global: GlobalConfig,
-    /// Represents the accounts configuration.
-    pub accounts: AccountsConfig,
-    /// Represents the optional selected account name.
-    pub account_name: Option<String>,
-}
-
-impl Config {
-    // Gets the account configuration matching the account name. If
-    // the account name is not defined, gets the first default
-    // account from the accounts map.
-    // pub fn account(&self) -> Result<&AccountConfig> {
-    //     match self.account_name.as_ref().map(|s| s.as_str()) {
-    //         Some("default") | Some("") | None => self
-    //             .accounts
-    //             .iter()
-    //             .find_map(|(_, account)| {
-    //                 if account.is_default() {
-    //                     Some(account)
-    //                 } else {
-    //                     None
-    //                 }
-    //             })
-    //             .ok_or_else(|| Error::FindDefaultAccountError),
-    //         Some(name) => self
-    //             .accounts
-    //             .get(name)
-    //             .ok_or_else(|| Error::FindAccountError(name.to_owned())),
-    //     }
-    // }
-}
-
-/// Represents the use top level configuration.
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct GlobalConfig {
-    /// Represents the display name of the user.
-    pub display_name: Option<String>,
-    /// Represents the email signature delimiter of the user.
-    pub signature_delim: Option<String>,
-    /// Represents the email signature of the user.
-    pub signature: Option<String>,
-    /// Represents the downloads directory (mostly for attachments).
-    pub downloads_dir: Option<PathBuf>,
-
-    /// Represents the page size when listing folders.
-    pub folder_listing_page_size: Option<usize>,
-    /// Represents the folder aliases map.
-    pub folder_aliases: Option<HashMap<String, String>>,
-
-    /// Represents the page size when listing emails.
-    pub email_listing_page_size: Option<usize>,
-    /// Represents the user downloads directory (mostly for
-    /// attachments).
-    pub email_reading_headers: Option<Vec<String>>,
-    /// Represents the text/plain format as defined in the
-    /// [RFC2646](https://www.ietf.org/rfc/rfc2646.txt)
-    pub email_reading_format: Option<EmailTextPlainFormat>,
-    /// Represents the command used to decrypt an email.
-    pub email_reading_decrypt_cmd: Option<String>,
-    /// Represents the command used to encrypt an email.
-    pub email_writing_encrypt_cmd: Option<String>,
-    /// Represents the email hooks.
-    pub email_hooks: Option<EmailHooks>,
-}
-
-/// Represents the configuration of all the user accounts.
-pub type AccountsConfig = HashMap<String, AccountConfig>;
 
 /// Represents the configuration of the user account.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]

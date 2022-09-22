@@ -29,7 +29,7 @@ use lettre::{
 use std::{convert::TryInto, result};
 use thiserror::Error;
 
-use crate::{config, email, process, sender, AccountConfig, Email, Sender, SmtpConfig};
+use crate::{account, email, process, sender, AccountConfig, Email, Sender, SmtpConfig};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -47,7 +47,7 @@ pub enum Error {
     #[error(transparent)]
     SmtpConfigError(#[from] sender::smtp::config::Error),
     #[error(transparent)]
-    ConfigError(#[from] config::Error),
+    ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     MsgError(#[from] email::Error),
 }

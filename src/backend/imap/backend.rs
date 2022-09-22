@@ -25,7 +25,7 @@ use std::{any::Any, collections::HashSet, convert::TryInto, net::TcpStream, resu
 use thiserror::Error;
 
 use crate::{
-    backend, config, email, envelope, flag, process, AccountConfig, Backend, Email, Envelopes,
+    account, backend, email, envelope, flag, process, AccountConfig, Backend, Email, Envelopes,
     Flags, Folder, Folders, ImapConfig,
 };
 
@@ -103,7 +103,7 @@ pub enum Error {
     LogoutError(#[source] imap::Error),
 
     #[error(transparent)]
-    ConfigError(#[from] config::Error),
+    ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     ImapConfigError(#[from] backend::imap::config::Error),
     #[error(transparent)]

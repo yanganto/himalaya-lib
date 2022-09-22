@@ -23,7 +23,7 @@ use std::{any::Any, result};
 use thiserror::Error;
 
 use crate::{
-    backend, config, email, id_mapper, AccountConfig, BackendConfig, Email, Envelopes, Folders,
+    account, backend, email, id_mapper, AccountConfig, BackendConfig, Email, Envelopes, Folders,
 };
 
 #[cfg(feature = "imap-backend")]
@@ -45,7 +45,7 @@ pub enum Error {
     #[error(transparent)]
     IdMapper(#[from] id_mapper::Error),
     #[error(transparent)]
-    ConfigError(#[from] config::Error),
+    ConfigError(#[from] account::config::Error),
 
     #[cfg(feature = "imap-backend")]
     #[error(transparent)]

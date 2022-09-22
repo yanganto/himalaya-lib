@@ -19,8 +19,8 @@ use std::{any::Any, fs, io, result};
 use thiserror::Error;
 
 use crate::{
-    backend, config, email, envelope::notmuch::envelopes, id_mapper, AccountConfig, Backend, Email,
-    Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig, NotmuchConfig,
+    account, backend, email, envelope::notmuch::envelopes, id_mapper, AccountConfig, Backend,
+    Email, Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig, NotmuchConfig,
 };
 
 #[derive(Debug, Error)]
@@ -73,7 +73,7 @@ pub enum Error {
     DelTagError(#[source] notmuch::Error),
 
     #[error(transparent)]
-    ConfigError(#[from] config::Error),
+    ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     IdMapperError(#[from] id_mapper::Error),
     #[error(transparent)]

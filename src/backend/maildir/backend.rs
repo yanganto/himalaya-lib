@@ -31,7 +31,7 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    backend, config, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper,
+    account, backend, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper,
     AccountConfig, Backend, Email, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
     DEFAULT_INBOX_FOLDER,
 };
@@ -84,7 +84,7 @@ pub enum Error {
     DelFlagsError(#[source] io::Error),
 
     #[error(transparent)]
-    ConfigError(#[from] config::Error),
+    ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     IdMapperError(#[from] id_mapper::Error),
     #[error(transparent)]

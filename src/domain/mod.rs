@@ -1,11 +1,11 @@
-pub mod envelope;
-pub use envelope::{Envelope, Envelopes};
-
-pub mod flag;
-pub use flag::{Flag, Flags};
-
-pub mod folder;
-pub use folder::*;
-
+pub mod account;
 pub mod email;
+pub mod envelope;
+pub mod flag;
+pub mod folder;
+
+pub use account::*;
 pub use email::*;
+pub use envelope::{Envelope, Envelopes};
+pub use flag::{Flag, Flags};
+pub use folder::*;
