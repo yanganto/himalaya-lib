@@ -40,7 +40,7 @@ fn test_imap_backend() {
     let id = imap.email_add("Mailbox1", msg, "seen").unwrap().to_string();
 
     // check that the added message exists
-    let msg = imap.email_list("Mailbox1", &id).unwrap();
+    let msg = imap.email_get("Mailbox1", &id).unwrap();
     assert_eq!("alice@localhost", msg.from.clone().unwrap().to_string());
     assert_eq!("patrick@localhost", msg.to.clone().unwrap().to_string());
     assert_eq!("Ceci est un message.", msg.fold_text_plain_parts());
@@ -71,7 +71,7 @@ fn test_imap_backend() {
 
     // check that the message can be deleted
     imap.email_delete("Mailbox2", &id).unwrap();
-    assert!(imap.email_list("Mailbox2", &id).is_err());
+    assert!(imap.email_get("Mailbox2", &id).is_err());
 
     // check that disconnection works
     imap.disconnect().unwrap();

@@ -323,25 +323,6 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(msg)
     }
 
-    fn email_list(&mut self, dir: &str, short_hash: &str) -> backend::Result<Email> {
-        info!(">> get maildir message");
-        debug!("dir: {:?}", dir);
-        debug!("short hash: {:?}", short_hash);
-
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id = IdMapper::new(mdir.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        let mut mail_entry = mdir
-            .find(&id)
-            .ok_or_else(|| Error::GetMsgError(id.to_owned()))?;
-        let parsed_mail = mail_entry.parsed().map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(parsed_mail, &self.account_config)?;
-        trace!("message: {:?}", msg);
-
-        info!("<< get maildir message");
-        Ok(msg)
-    }
-
     fn email_copy(
         &mut self,
         dir_src: &str,

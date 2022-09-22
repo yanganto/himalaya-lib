@@ -31,7 +31,7 @@ fn test_notmuch_backend() {
     let hash = notmuch.email_add("", msg, "inbox seen").unwrap();
 
     // check that the added message exists
-    let msg = notmuch.email_list("", &hash).unwrap();
+    let msg = notmuch.email_get("", &hash).unwrap();
     assert_eq!("alice@localhost", msg.from.clone().unwrap().to_string());
     assert_eq!("patrick@localhost", msg.to.clone().unwrap().to_string());
     assert_eq!("Ceci est un message.", msg.fold_text_plain_parts());
@@ -76,5 +76,5 @@ fn test_notmuch_backend() {
 
     // check that the message can be deleted
     notmuch.email_delete("", &hash).unwrap();
-    assert!(notmuch.email_list("inbox", &hash).is_err());
+    assert!(notmuch.email_get("inbox", &hash).is_err());
 }

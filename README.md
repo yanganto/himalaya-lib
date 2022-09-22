@@ -25,7 +25,6 @@ let imap_config = ImapConfig {
     passwd_cmd: "echo password".into(),
     ..Default::default()
 };
-
 let backend_config = BackendConfig::Imap(&imap_config);
 
 let mut backend = BackendBuilder::build(&account_config, &backend_config).unwrap();

@@ -34,7 +34,7 @@ fn test_maildir_backend() {
     let hash = mdir.email_add("inbox", msg, "seen").unwrap();
 
     // check that the added message exists
-    let msg = mdir.email_list("inbox", &hash).unwrap();
+    let msg = mdir.email_get("inbox", &hash).unwrap();
     assert_eq!("alice@localhost", msg.from.clone().unwrap().to_string());
     assert_eq!("patrick@localhost", msg.to.clone().unwrap().to_string());
     assert_eq!("Ceci est un message.", msg.fold_text_plain_parts());
@@ -72,18 +72,18 @@ fn test_maildir_backend() {
 
     // check that the message can be copied
     mdir.email_copy("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.email_list("inbox", &hash).is_ok());
-    assert!(mdir.email_list("subdir", &hash).is_ok());
-    assert!(submdir.email_list("inbox", &hash).is_ok());
+    assert!(mdir.email_get("inbox", &hash).is_ok());
+    assert!(mdir.email_get("subdir", &hash).is_ok());
+    assert!(submdir.email_get("inbox", &hash).is_ok());
 
     // check that the message can be moved
     mdir.email_move("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.email_list("inbox", &hash).is_err());
-    assert!(mdir.email_list("subdir", &hash).is_ok());
-    assert!(submdir.email_list("inbox", &hash).is_ok());
+    assert!(mdir.email_get("inbox", &hash).is_err());
+    assert!(mdir.email_get("subdir", &hash).is_ok());
+    assert!(submdir.email_get("inbox", &hash).is_ok());
 
     // check that the message can be deleted
     mdir.email_delete("subdir", &hash).unwrap();
-    assert!(mdir.email_list("subdir", &hash).is_err());
-    assert!(submdir.email_list("inbox", &hash).is_err());
+    assert!(mdir.email_get("subdir", &hash).is_err());
+    assert!(submdir.email_get("inbox", &hash).is_err());
 }

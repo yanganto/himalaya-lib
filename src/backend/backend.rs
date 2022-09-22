@@ -84,7 +84,6 @@ pub trait Backend<'a> {
 
     fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> Result<String>;
     fn email_get(&mut self, folder: &str, id: &str) -> Result<Email>;
-    fn email_list(&mut self, folder: &str, id: &str) -> Result<Email>;
     fn email_copy(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
     fn email_move(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
     fn email_delete(&mut self, folder: &str, ids: &str) -> Result<()>;

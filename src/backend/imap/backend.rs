@@ -465,35 +465,14 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(msg)
     }
 
-    fn email_list(&mut self, mbox: &str, seq: &str) -> backend::Result<Email> {
-        self.sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
-        let fetches = self
-            .sess()?
-            .fetch(seq, "(FLAGS INTERNALDATE BODY[])")
-            .map_err(|err| Error::FetchMsgsBySeqError(err, seq.to_owned()))?;
-        let fetch = fetches
-            .first()
-            .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?;
-        let msg_raw = fetch.body().unwrap_or_default().to_owned();
-        let mut msg = Email::from_parsed_mail(
-            mailparse::parse_mail(&msg_raw)
-                .map_err(|err| Error::ParseMsgError(err, seq.to_owned()))?,
-            &self.account_config,
-        )?;
-        msg.raw = msg_raw;
-        Ok(msg)
-    }
-
     fn email_copy(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> backend::Result<()> {
-        let msg = self.email_list(&mbox_src, seq)?.raw;
+        let msg = self.email_get(&mbox_src, seq)?.raw;
         self.email_add(&mbox_dst, &msg, "seen")?;
         Ok(())
     }
 
     fn email_move(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> backend::Result<()> {
-        let msg = self.email_list(mbox_src, seq)?.raw;
+        let msg = self.email_get(mbox_src, seq)?.raw;
         self.flags_add(mbox_src, seq, "seen deleted")?;
         self.email_add(&mbox_dst, &msg, "seen")?;
         Ok(())
