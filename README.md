@@ -42,10 +42,10 @@ before the `v1.0.0`.*
 
 ## Introduction
 
-The aim of this Rust library is to expose a common email management
-API. This way, you can build the client of your dreams that will match
-the best your workflow without reiventing the wheel. Here the list of
-available clients built by the community:
+The role of this library is to extract and expose an API for managing
+emails. This way, you can build clients that match the best your
+workflow without reiventing the wheel. Here the list of available
+clients built by the community:
 
 - [CLI](https://github.com/soywod/himalaya)
 - [Vim plugin](https://git.sr.ht/~soywod/himalaya-vim)

@@ -7,12 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2022-09-19
+## [0.1.0] - 2022-09-22
 
-### Added
-
-- Import source code from GitHub.
-
-### Removed
-
-- Removed default features.
+First official version of the Himalaya's library. The source code
+mostly comes from the [CLI](https://github.com/soywod/himalaya)
+repository.
