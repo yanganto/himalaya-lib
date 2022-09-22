@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn test_into_reply() {
         let config = AccountConfig {
-            display_name: "Test".into(),
+            display_name: Some("Test".into()),
             email: "test-account@local".into(),
             ..AccountConfig::default()
         };

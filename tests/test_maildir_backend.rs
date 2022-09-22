@@ -14,25 +14,20 @@ fn test_maildir_backend() {
     if let Err(_) = fs::remove_dir_all(mdir_sub.path()) {}
     mdir_sub.create_dirs().unwrap();
 
-    let mut mdir = MaildirBackend::new(
-        AccountConfig {
-            folder_aliases: HashMap::from_iter([("subdir".into(), "Subdir".into())]),
-            ..AccountConfig::default()
-        },
-        MaildirConfig {
-            root_dir: mdir.path().to_owned(),
-        },
-    );
+    let account_config = AccountConfig {
+        folder_aliases: HashMap::from_iter([("subdir".into(), "Subdir".into())]),
+        ..AccountConfig::default()
+    };
 
-    let mut submdir = MaildirBackend::new(
-        AccountConfig {
-            folder_aliases: HashMap::from_iter([("subdir".into(), "Subdir".into())]),
-            ..AccountConfig::default()
-        },
-        MaildirConfig {
-            root_dir: mdir_sub.path().to_owned(),
-        },
-    );
+    let mdir_config = MaildirConfig {
+        root_dir: mdir.path().to_owned(),
+    };
+    let mut mdir = MaildirBackend::new(&account_config, &mdir_config);
+
+    let submdir_config = MaildirConfig {
+        root_dir: mdir_sub.path().to_owned(),
+    };
+    let mut submdir = MaildirBackend::new(&account_config, &submdir_config);
 
     // check that a message can be added
     let msg = include_bytes!("./emails/alice-to-patrick.eml");

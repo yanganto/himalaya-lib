@@ -137,7 +137,7 @@ pub struct AccountConfig {
     /// Represents the email address of the user.
     pub email: String,
     /// Represents the display name of the user.
-    pub display_name: String,
+    pub display_name: Option<String>,
     /// Represents the email signature delimiter of the user.
     pub signature_delim: Option<String>,
     /// Represents the email signature of the user.
@@ -171,15 +171,22 @@ pub struct AccountConfig {
 impl AccountConfig {
     /// Builds the full RFC822 compliant user address email.
     pub fn address(&self) -> Result<MailAddr> {
-        let has_special_chars = "()<>[]:;@.,".contains(|c| self.display_name.contains(c));
+        let display_name = self
+            .display_name
+            .as_ref()
+            .map(ToOwned::to_owned)
+            .unwrap_or_default();
 
-        let addr = if self.display_name.is_empty() {
+        let has_special_chars = "()<>[]:;@.,".contains(|c| display_name.contains(c));
+
+        let addr = if display_name.is_empty() {
             self.email.clone()
         } else if has_special_chars {
-            format!("\"{}\" <{}>", self.display_name, &self.email)
+            format!("\"{}\" <{}>", display_name, &self.email)
         } else {
-            format!("{} <{}>", self.display_name, &self.email)
+            format!("{} <{}>", display_name, &self.email)
         };
+
         let addr = mailparse::addrparse(&addr)
             .map_err(|err| Error::ParseAccountAddrError(err, addr.to_owned()))?
             .first()
@@ -273,12 +280,6 @@ impl AccountConfig {
         Ok(alias)
     }
 
-    pub fn email_hooks(&self) -> EmailHooks {
-        EmailHooks {
-            pre_send: self.email_hooks.pre_send.to_owned(),
-        }
-    }
-
     pub fn email_listing_page_size(&self) -> usize {
         self.email_listing_page_size.unwrap_or(DEFAULT_PAGE_SIZE)
     }
@@ -297,6 +298,7 @@ impl AccountConfig {
             .map(|s| s.as_str())
             .unwrap_or(DEFAULT_SIGNATURE_DELIM);
         let signature = self.signature.as_ref();
+
         Ok(signature
             .and_then(|sig| shellexpand::full(sig).ok())
             .map(String::from)

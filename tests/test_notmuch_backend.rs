@@ -15,16 +15,16 @@ fn test_notmuch_backend() {
     mdir.create_dirs().unwrap();
     notmuch::Database::create(mdir.path()).unwrap();
 
-    let mut notmuch = NotmuchBackend::new(
-        AccountConfig {
-            folder_aliases: HashMap::from_iter([("inbox".into(), "*".into())]),
-            ..AccountConfig::default()
-        },
-        NotmuchConfig {
-            db_path: mdir.path().to_owned(),
-        },
-    )
-    .unwrap();
+    let account_config = AccountConfig {
+        folder_aliases: HashMap::from_iter([("inbox".into(), "*".into())]),
+        ..AccountConfig::default()
+    };
+
+    let notmuch_config = NotmuchConfig {
+        db_path: mdir.path().to_owned(),
+    };
+
+    let mut notmuch = NotmuchBackend::new(&account_config, &notmuch_config).unwrap();
 
     // check that a message can be added
     let msg = include_bytes!("./emails/alice-to-patrick.eml");

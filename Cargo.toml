@@ -11,7 +11,7 @@ imap-backend = ["imap", "imap-proto"]
 maildir-backend = ["maildir", "md5"]
 notmuch-backend = ["notmuch", "maildir-backend"]
 internal-sender = []
-default = ["imap-backend", "maildir-backend", "internal-sender"]
+default = ["imap-backend", "maildir-backend", "notmuch-backend", "internal-sender"]
 
 [dependencies]
 ammonia = "3.1.2"

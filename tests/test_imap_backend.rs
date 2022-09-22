@@ -6,28 +6,27 @@ use himalaya_lib::backend::{Backend, ImapBackend};
 fn test_imap_backend() {
     use himalaya_lib::{AccountConfig, EmailSender, ImapConfig, SmtpConfig};
 
-    let mut imap = ImapBackend::new(
-        AccountConfig {
-            email_sender: EmailSender::Internal(SmtpConfig {
-                host: "localhost".into(),
-                port: 3465,
-                starttls: Some(false),
-                insecure: Some(true),
-                login: "inbox@localhost".into(),
-                passwd_cmd: "echo 'password'".into(),
-            }),
-            ..AccountConfig::default()
-        },
-        ImapConfig {
+    let account_config = AccountConfig {
+        email_sender: EmailSender::Internal(SmtpConfig {
             host: "localhost".into(),
-            port: 3993,
+            port: 3465,
             starttls: Some(false),
             insecure: Some(true),
             login: "inbox@localhost".into(),
             passwd_cmd: "echo 'password'".into(),
-            ..ImapConfig::default()
-        },
-    );
+        }),
+        ..AccountConfig::default()
+    };
+    let imap_config = ImapConfig {
+        host: "localhost".into(),
+        port: 3993,
+        starttls: Some(false),
+        insecure: Some(true),
+        login: "inbox@localhost".into(),
+        passwd_cmd: "echo 'password'".into(),
+        ..ImapConfig::default()
+    };
+    let mut imap = ImapBackend::new(&account_config, &imap_config);
     imap.connect().unwrap();
 
     // set up mailboxes

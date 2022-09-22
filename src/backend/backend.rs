@@ -19,7 +19,7 @@
 //! This module exposes the backend trait, which can be used to create
 //! custom backend implementations.
 
-use std::result;
+use std::{any::Any, result};
 use thiserror::Error;
 
 use crate::{
@@ -60,7 +60,7 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub trait Backend {
+pub trait Backend<'a> {
     fn connect(&mut self) -> Result<()> {
         Ok(())
     }
@@ -92,36 +92,28 @@ pub trait Backend {
     fn flags_add(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
     fn flags_set(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
     fn flags_delete(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+
+    fn as_any(&self) -> &(dyn Any + 'a);
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct BackendBuilder {
-    account: AccountConfig,
-    backend: BackendConfig,
-}
+pub struct BackendBuilder;
 
-impl BackendBuilder {
-    pub fn account(mut self, account: AccountConfig) -> Self {
-        self.account = account;
-        self
-    }
-
-    pub fn backend(mut self, backend: BackendConfig) -> Self {
-        self.backend = backend;
-        self
-    }
-
-    pub fn build(self) -> Result<Box<dyn Backend>> {
-        match self.backend {
+impl<'a> BackendBuilder {
+    pub fn build(
+        account_config: &'a AccountConfig,
+        backend_config: &'a BackendConfig<'a>,
+    ) -> Result<Box<dyn Backend<'a> + 'a>> {
+        match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(backend) => Ok(Box::new(ImapBackend::new(self.account, backend))),
+            BackendConfig::Imap(config) => Ok(Box::new(ImapBackend::new(account_config, config))),
             #[cfg(feature = "maildir-backend")]
-            BackendConfig::Maildir(backend) => {
-                Ok(Box::new(MaildirBackend::new(self.account, backend)))
+            BackendConfig::Maildir(config) => {
+                Ok(Box::new(MaildirBackend::new(account_config, config)))
             }
             #[cfg(feature = "notmuch-backend")]
-            BackendConfig::Notmuch(backend) => {
-                Ok(Box::new(NotmuchBackend::new(self.account, backend)?))
+            BackendConfig::Notmuch(config) => {
+                Ok(Box::new(NotmuchBackend::new(account_config, config)?))
             }
             BackendConfig::None => Err(Error::BuildBackendError),
         }

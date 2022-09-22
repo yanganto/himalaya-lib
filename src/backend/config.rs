@@ -30,17 +30,17 @@ use crate::NotmuchConfig;
 
 /// Represents the backend configuration of the user account.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum BackendConfig {
+pub enum BackendConfig<'a> {
     None,
     #[cfg(feature = "imap-backend")]
-    Imap(ImapConfig),
+    Imap(&'a ImapConfig),
     #[cfg(feature = "maildir-backend")]
-    Maildir(MaildirConfig),
+    Maildir(&'a MaildirConfig),
     #[cfg(feature = "notmuch-backend")]
-    Notmuch(NotmuchConfig),
+    Notmuch(&'a NotmuchConfig),
 }
 
-impl Default for BackendConfig {
+impl Default for BackendConfig<'_> {
     fn default() -> Self {
         Self::None
     }

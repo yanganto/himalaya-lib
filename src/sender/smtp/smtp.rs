@@ -59,7 +59,14 @@ pub struct Smtp<'a> {
     transport: Option<SmtpTransport>,
 }
 
-impl Smtp<'_> {
+impl<'a> Smtp<'a> {
+    pub fn new(config: &'a SmtpConfig) -> Self {
+        Self {
+            config,
+            transport: None,
+        }
+    }
+
     fn transport(&mut self) -> Result<&SmtpTransport> {
         if let Some(ref transport) = self.transport {
             Ok(transport)
@@ -96,7 +103,7 @@ impl Smtp<'_> {
     }
 }
 
-impl Sender for Smtp<'_> {
+impl<'a> Sender for Smtp<'a> {
     fn send(&mut self, config: &AccountConfig, msg: &Email) -> sender::Result<Vec<u8>> {
         let mut raw_msg = msg.into_sendable_msg(config)?.formatted();
 
@@ -117,14 +124,5 @@ impl Sender for Smtp<'_> {
             .send_raw(&envelope, &raw_msg)
             .map_err(Error::SendError)?;
         Ok(raw_msg)
-    }
-}
-
-impl<'a> From<&'a SmtpConfig> for Smtp<'a> {
-    fn from(config: &'a SmtpConfig) -> Self {
-        Self {
-            config,
-            transport: None,
-        }
     }
 }

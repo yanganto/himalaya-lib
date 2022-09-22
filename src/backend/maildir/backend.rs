@@ -21,6 +21,7 @@
 
 use log::{debug, info, trace};
 use std::{
+    any::Any,
     env,
     ffi::OsStr,
     fs, io,
@@ -93,16 +94,16 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the maildir backend.
-pub struct MaildirBackend {
-    account: AccountConfig,
+pub struct MaildirBackend<'a> {
+    account_config: &'a AccountConfig,
     mdir: maildir::Maildir,
 }
 
-impl MaildirBackend {
-    pub fn new(account: AccountConfig, backend: MaildirConfig) -> Self {
+impl<'a> MaildirBackend<'a> {
+    pub fn new(account_config: &'a AccountConfig, backend_config: &'a MaildirConfig) -> Self {
         Self {
-            account,
-            mdir: backend.root_dir.to_owned().into(),
+            account_config,
+            mdir: backend_config.root_dir.to_owned().into(),
         }
     }
 
@@ -117,7 +118,7 @@ impl MaildirBackend {
 
     /// Creates a maildir instance from a string slice.
     pub fn get_mdir_from_dir(&self, dir: &str) -> Result<maildir::Maildir> {
-        let dir = self.account.folder_alias(dir)?;
+        let dir = self.account_config.folder_alias(dir)?;
 
         // If the dir points to the inbox folder, creates a maildir
         // instance from the root folder.
@@ -152,7 +153,7 @@ impl MaildirBackend {
     }
 }
 
-impl Backend for MaildirBackend {
+impl<'a> Backend<'a> for MaildirBackend<'a> {
     fn folder_add(&mut self, subdir: &str) -> backend::Result<()> {
         info!(">> add maildir subdir");
         debug!("subdir: {:?}", subdir);
@@ -170,7 +171,7 @@ impl Backend for MaildirBackend {
         trace!(">> get maildir mailboxes");
 
         let mut mboxes = Folders::default();
-        for (name, desc) in &self.account.folder_aliases {
+        for (name, desc) in &self.account_config.folder_aliases {
             mboxes.push(Folder {
                 delim: String::from("/"),
                 name: name.into(),
@@ -315,7 +316,7 @@ impl Backend for MaildirBackend {
             .find(&id)
             .ok_or_else(|| Error::GetMsgError(id.to_owned()))?;
         let parsed_mail = mail_entry.parsed().map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(parsed_mail, &self.account)?;
+        let msg = Email::from_parsed_mail(parsed_mail, &self.account_config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get maildir message");
@@ -334,7 +335,7 @@ impl Backend for MaildirBackend {
             .find(&id)
             .ok_or_else(|| Error::GetMsgError(id.to_owned()))?;
         let parsed_mail = mail_entry.parsed().map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(parsed_mail, &self.account)?;
+        let msg = Email::from_parsed_mail(parsed_mail, &self.account_config)?;
         trace!("message: {:?}", msg);
 
         info!("<< get maildir message");
@@ -461,5 +462,9 @@ impl Backend for MaildirBackend {
 
         info!("<< delete maildir message flags");
         Ok(())
+    }
+
+    fn as_any(&self) -> &(dyn Any + 'a) {
+        self
     }
 }
