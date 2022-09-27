@@ -306,8 +306,8 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
             .sess()?
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
-        let mboxes = Folders {
-            folders: imap_mboxes
+        let mboxes = Folders(
+            imap_mboxes
                 .iter()
                 .map(|imap_mbox| Folder {
                     delim: imap_mbox.delimiter().unwrap_or_default().into(),
@@ -326,7 +326,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
                         .join(", "),
                 })
                 .collect(),
-        };
+        );
 
         trace!("imap folders: {:?}", mboxes);
         trace!("<< get imap folders");

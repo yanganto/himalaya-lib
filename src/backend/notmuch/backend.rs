@@ -141,7 +141,7 @@ impl<'a> NotmuchBackend<'a> {
         envelopes.sort_by(|a, b| b.date.partial_cmp(&a.date).unwrap());
 
         // Applies pagination boundaries.
-        envelopes.envelopes = envelopes[page_begin..page_end].to_owned();
+        envelopes.0 = envelopes[page_begin..page_end].to_owned();
 
         // Appends envelopes hash to the id mapper cache file and
         // calculates the new short hash length. The short hash length

@@ -494,7 +494,7 @@ impl Email {
         }
 
         // Signature
-        if let Some(sig) = opts.sig {
+        if let Some(sig) = opts.signature {
             tpl.push_str("\n\n");
             tpl.push_str(sig);
         } else if let Some(ref sig) = config.signature()? {
