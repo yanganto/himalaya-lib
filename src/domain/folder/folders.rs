@@ -26,20 +26,18 @@ use crate::Folder;
 
 /// Represents the list of folders.
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
-pub struct Folders {
-    pub folders: Vec<Folder>,
-}
+pub struct Folders(pub Vec<Folder>);
 
 impl ops::Deref for Folders {
     type Target = Vec<Folder>;
 
     fn deref(&self) -> &Self::Target {
-        &self.folders
+        &self.0
     }
 }
 
 impl ops::DerefMut for Folders {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.folders
+        &mut self.0
     }
 }

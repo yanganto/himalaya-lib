@@ -28,7 +28,7 @@
 
               # Rust env
               openssl.dev
-              pkgconfig
+              pkg-config
               rust-bin
               rust-analyzer
               cargo-watch

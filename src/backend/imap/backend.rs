@@ -306,8 +306,8 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
             .sess()?
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
-        let mboxes = Folders {
-            folders: imap_mboxes
+        let mboxes = Folders(
+            imap_mboxes
                 .iter()
                 .map(|imap_mbox| Folder {
                     delim: imap_mbox.delimiter().unwrap_or_default().into(),
@@ -326,7 +326,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
                         .join(", "),
                 })
                 .collect(),
-        };
+        );
 
         trace!("imap folders: {:?}", mboxes);
         trace!("<< get imap folders");
@@ -362,7 +362,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
 
         let range = if page_size > 0 {
             let cursor = page * page_size;
-            let begin = 1.max(last_seq - cursor);
+            let begin = 1.max(last_seq - cursor.min(last_seq));
             let end = begin - begin.min(page_size) + 1;
             format!("{}:{}", end, begin)
         } else {

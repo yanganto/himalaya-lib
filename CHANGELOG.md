@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2022-09-28
+
+### Changed
+
+- Folders and Envelopes are not wrapped anymore in a struct:
+
+  ```rust
+  // Before
+  pub struct Envelopes {
+	  pub envelopes: Vec<Envelope>,
+  }
+  
+  // After
+  pub struct Envelopes(pub Vec<Envelope>);
+  ```
+
+- `TplOverride::sig` has been renamed `TplOverride::signature`
+- Nix deps have been upgraded
+
+### Fixed
+
+- Imap backend pagination overflow
+
 ## [0.1.0] - 2022-09-22
 
 First official version of the Himalaya's library. The source code

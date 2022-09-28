@@ -27,5 +27,5 @@ pub struct TplOverride<'a> {
     pub bcc: Option<Vec<&'a str>>,
     pub headers: Option<Vec<&'a str>>,
     pub body: Option<&'a str>,
-    pub sig: Option<&'a str>,
+    pub signature: Option<&'a str>,
 }
