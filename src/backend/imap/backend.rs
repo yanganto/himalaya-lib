@@ -362,7 +362,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
 
         let range = if page_size > 0 {
             let cursor = page * page_size;
-            let begin = 1.max(last_seq - cursor);
+            let begin = 1.max(last_seq - cursor.min(last_seq));
             let end = begin - begin.min(page_size) + 1;
             format!("{}:{}", end, begin)
         } else {
