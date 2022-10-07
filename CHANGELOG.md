@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed `DEFAULT_DRAFT_FOLDER` to `DEFAULT_DRAFTS_FOLDER` to be more
+  consistant with IMAP folder names.
+  
+### Fixed
+
+- Kept folder name case (because IMAP folders are case sensitive).
+
 ## [0.2.1] - 2022-09-29
 
 ### Changed
 
-- Remove notmuch from the default features
+- Removed notmuch from the default features.
 
 ## [0.2.0] - 2022-09-28
 

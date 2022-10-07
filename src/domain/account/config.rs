@@ -31,7 +31,7 @@ pub const DEFAULT_SIGNATURE_DELIM: &str = "-- \n";
 
 pub const DEFAULT_INBOX_FOLDER: &str = "INBOX";
 pub const DEFAULT_SENT_FOLDER: &str = "Sent";
-pub const DEFAULT_DRAFT_FOLDER: &str = "Drafts";
+pub const DEFAULT_DRAFTS_FOLDER: &str = "Drafts";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -187,16 +187,16 @@ impl AccountConfig {
     /// returns the folder itself. Also tries to expand shell
     /// variables.
     pub fn folder_alias(&self, folder: &str) -> Result<String> {
-        let folder = folder.trim().to_lowercase();
+        let lowercase_folder = folder.trim().to_lowercase();
         let alias = self
             .folder_aliases
-            .get(&folder)
-            .map(|s| s.as_str())
-            .unwrap_or_else(|| match folder.as_str() {
+            .get(&lowercase_folder)
+            .map(String::as_str)
+            .unwrap_or_else(|| match lowercase_folder.as_str() {
                 "inbox" => DEFAULT_INBOX_FOLDER,
-                "draft" => DEFAULT_DRAFT_FOLDER,
+                "drafts" => DEFAULT_DRAFTS_FOLDER,
                 "sent" => DEFAULT_SENT_FOLDER,
-                folder => folder,
+                _ => folder,
             });
         let alias = shellexpand::full(alias)
             .map(String::from)
