@@ -10,8 +10,8 @@ license = "MIT"
 imap-backend = ["imap", "imap-proto"]
 maildir-backend = ["maildir", "md5"]
 notmuch-backend = ["notmuch", "maildir-backend"]
-internal-sender = []
-default = ["imap-backend", "maildir-backend", "internal-sender"]
+smtp-sender = []
+default = ["imap-backend", "maildir-backend", "smtp-sender"]
 
 [dependencies]
 ammonia = "3.1.2"

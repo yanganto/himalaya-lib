@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{account, email, AccountConfig, Email, EmailSender};
 
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 use crate::{smtp, Smtp};
 
 #[derive(Debug, Error)]
@@ -21,7 +21,7 @@ pub enum Error {
     EmailError(#[from] email::Error),
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
-    #[cfg(feature = "internal-sender")]
+    #[cfg(feature = "smtp-sender")]
     #[error(transparent)]
     SmtpError(#[from] smtp::Error),
 }
@@ -38,8 +38,8 @@ pub struct SenderBuilder;
 impl<'a> SenderBuilder {
     pub fn build(account_config: &'a AccountConfig) -> Result<Box<dyn Sender + 'a>> {
         match &account_config.email_sender {
-            EmailSender::Internal(config) => Ok(Box::new(Smtp::new(config))),
-            EmailSender::External(_cmd) => Err(Error::BuildExternalEmailSenderUnimplementedError),
+            EmailSender::Smtp(config) => Ok(Box::new(Smtp::new(config))),
+            EmailSender::Cmd(_cmd) => Err(Error::BuildExternalEmailSenderUnimplementedError),
             EmailSender::None => return Err(Error::BuildEmailSenderMissingError),
         }
     }

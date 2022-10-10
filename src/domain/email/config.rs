@@ -2,18 +2,18 @@
 //!
 //! This module contains structures related to email configuration.
 
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 use crate::SmtpConfig;
 
 /// Represents the email sender provider.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EmailSender {
     None,
-    #[cfg(feature = "internal-sender")]
+    #[cfg(feature = "smtp-sender")]
     /// Represents the internal SMTP mailer library.
-    Internal(SmtpConfig),
+    Smtp(SmtpConfig),
     /// Represents the system command.
-    External(EmailSendCmd),
+    Cmd(EmailSendCmd),
 }
 
 impl Default for EmailSender {

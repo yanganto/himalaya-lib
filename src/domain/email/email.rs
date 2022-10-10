@@ -750,7 +750,7 @@ impl Email {
     }
 }
 
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 impl TryInto<lettre::address::Envelope> for Email {
     type Error = Error;
 
@@ -759,7 +759,7 @@ impl TryInto<lettre::address::Envelope> for Email {
     }
 }
 
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 impl TryInto<lettre::address::Envelope> for &Email {
     type Error = Error;
 
