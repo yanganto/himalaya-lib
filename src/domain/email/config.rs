@@ -12,8 +12,8 @@ pub enum EmailSender {
     #[cfg(feature = "smtp-sender")]
     /// Represents the internal SMTP mailer library.
     Smtp(SmtpConfig),
-    /// Represents the system command.
-    Cmd(EmailSendCmd),
+    /// Represents the sendmail command.
+    Sendmail(SendmailConfig),
 }
 
 impl Default for EmailSender {
@@ -22,10 +22,10 @@ impl Default for EmailSender {
     }
 }
 
-/// Represents the external sender config.
+/// Represents the sendmail sender config.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct EmailSendCmd {
-    /// Represents the send command.
+pub struct SendmailConfig {
+    /// Represents the sendmail command.
     pub cmd: String,
 }
 

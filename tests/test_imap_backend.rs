@@ -7,7 +7,7 @@ fn test_imap_backend() {
     use himalaya_lib::{AccountConfig, EmailSender, ImapConfig, SmtpConfig};
 
     let account_config = AccountConfig {
-        email_sender: EmailSender::Internal(SmtpConfig {
+        email_sender: EmailSender::Smtp(SmtpConfig {
             host: "localhost".into(),
             port: 3465,
             starttls: Some(false),

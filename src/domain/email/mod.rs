@@ -3,7 +3,7 @@
 //! This module contains everything related to messages.
 
 pub mod config;
-pub use config::{EmailHooks, EmailSendCmd, EmailSender, EmailTextPlainFormat};
+pub use config::{EmailHooks, EmailSender, EmailTextPlainFormat, SendmailConfig};
 
 mod parts;
 pub use parts::*;
