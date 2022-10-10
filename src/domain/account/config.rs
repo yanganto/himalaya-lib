@@ -1,19 +1,3 @@
-// himalaya-lib, a Rust library for email management.
-// Copyright (C) 2022  soywod <clement.douin@posteo.net>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 //! Config module.
 //!
 //! This module contains everything related to the user's
@@ -31,7 +15,7 @@ pub const DEFAULT_SIGNATURE_DELIM: &str = "-- \n";
 
 pub const DEFAULT_INBOX_FOLDER: &str = "INBOX";
 pub const DEFAULT_SENT_FOLDER: &str = "Sent";
-pub const DEFAULT_DRAFT_FOLDER: &str = "Drafts";
+pub const DEFAULT_DRAFTS_FOLDER: &str = "Drafts";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -187,16 +171,16 @@ impl AccountConfig {
     /// returns the folder itself. Also tries to expand shell
     /// variables.
     pub fn folder_alias(&self, folder: &str) -> Result<String> {
-        let folder = folder.trim().to_lowercase();
+        let lowercase_folder = folder.trim().to_lowercase();
         let alias = self
             .folder_aliases
-            .get(&folder)
-            .map(|s| s.as_str())
-            .unwrap_or_else(|| match folder.as_str() {
+            .get(&lowercase_folder)
+            .map(String::as_str)
+            .unwrap_or_else(|| match lowercase_folder.as_str() {
                 "inbox" => DEFAULT_INBOX_FOLDER,
-                "draft" => DEFAULT_DRAFT_FOLDER,
+                "drafts" => DEFAULT_DRAFTS_FOLDER,
                 "sent" => DEFAULT_SENT_FOLDER,
-                folder => folder,
+                _ => folder,
             });
         let alias = shellexpand::full(alias)
             .map(String::from)

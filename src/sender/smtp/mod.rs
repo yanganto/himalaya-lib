@@ -1,9 +1,9 @@
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 pub mod config;
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 pub mod smtp;
 
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 pub use config::SmtpConfig;
-#[cfg(feature = "internal-sender")]
+#[cfg(feature = "smtp-sender")]
 pub use smtp::{Error, Smtp};

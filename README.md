@@ -49,10 +49,11 @@ clients built by the community:
 
 - [CLI](https://github.com/soywod/himalaya)
 - [Vim plugin](https://git.sr.ht/~soywod/himalaya-vim)
-- [Emacs plugin](https://github.com/dantecatalfamo/himalaya-emacs) (beta)
+- [Emacs plugin](https://git.sr.ht/~soywod/himalaya-emacs) (beta)
 - GUI (comming soon)
 - TUI
 - Web server
+- …
 
 ## Features
 
@@ -63,7 +64,7 @@ clients built by the community:
   and custom system commands senders
 - List, add and delete folders (mailboxes)
 - List and search envelopes
-- List, get, add, copy, move and delete emails
+- Get, add, copy, move and delete emails
 - Add, set and delete flags
 - Multi-accounting
 - Folder aliases
@@ -74,7 +75,7 @@ clients built by the community:
 ## Contributing
 
 If you find a bug, feel free to open an issue at
-https://todo.sr.ht/~soywod/himalaya-lib.
+[~soywod/himalaya-lib](https://todo.sr.ht/~soywod/himalaya-lib).
 
 If you have a feature in mind, feel free to send a patchset at
 https://git.sr.ht/~soywod/himalaya-lib/send-email or using the

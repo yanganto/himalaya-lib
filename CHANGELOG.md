@@ -7,17 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2022-10-10
+
+### Changed
+
+- Renamed `DEFAULT_DRAFT_FOLDER` to `DEFAULT_DRAFTS_FOLDER` to be more
+  consistant with IMAP folder names.
+- Changed licence to `MIT`.
+- Renamed feature `internal-sender` to `smtp-sender`.
+  
+### Fixed
+
+- Fixed folder name case (because IMAP folders are case sensitive).
+
 ## [0.2.1] - 2022-09-29
 
 ### Changed
 
-- Remove notmuch from the default features
+- Removed notmuch from the default features.
 
 ## [0.2.0] - 2022-09-28
 
 ### Changed
 
-- Folders and Envelopes are not wrapped anymore in a struct:
+- Unwrapped folders and envelopes from struct:
 
   ```rust
   // Before
@@ -29,12 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pub struct Envelopes(pub Vec<Envelope>);
   ```
 
-- `TplOverride::sig` has been renamed `TplOverride::signature`
-- Nix deps have been upgraded
+- Renamed `TplOverride::sig` to `TplOverride::signature`.
+- Upgraded Nix deps.
 
 ### Fixed
 
-- Imap backend pagination overflow
+- Fixed imap backend pagination overflow.
 
 ## [0.1.0] - 2022-09-22
 
