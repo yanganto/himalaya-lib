@@ -27,7 +27,6 @@ rfc2047-decoder = "0.1.2"
 serde = { version = "1.0.118", features = ["derive"] }
 shellexpand = "2.1.0"
 thiserror = "1.0.31"
-toml = "0.5.8"
 tree_magic = "0.2.3"
 uuid = { version = "0.8", features = ["v4"] }
 
