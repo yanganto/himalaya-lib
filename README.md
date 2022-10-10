@@ -72,6 +72,36 @@ clients built by the community:
 - IMAP IDLE mode for real-time notifications
 - …
 
+## Development
+
+The development environment is managed by
+[Nix](https://nixos.org/download.html). Running `nix-shell` will spawn
+a shell with everything you need to get started with the lib: `cargo`,
+`cargo-watch`, `rust-bin`, `rust-analyzer`, `notmuch`…
+
+```sh
+# starts a nix shell
+$ nix-shell
+
+# then builds the lib
+$ cargo build
+```
+
+## Testing
+
+Before running the test suite you need to spawn an IMAP server. Here
+an example with [`docker`](https://www.docker.com/) and
+[`greenmail`](https://github.com/greenmail-mail-test/greenmail):
+
+```sh
+$ docker run -it --rm \
+  -p 3025:3025 -p 3110:3110 -p 3143:3143 -p 3465:3465 -p 3993:3993 -p 3995:3995 \
+  -e GREENMAIL_OPTS='-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled -Dgreenmail.verbose' \
+  greenmail/standalone:1.6.2
+  
+$ cargo test
+```
+
 ## Contributing
 
 If you find a bug, feel free to open an issue at

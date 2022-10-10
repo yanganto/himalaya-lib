@@ -39,7 +39,7 @@ impl<'a> SenderBuilder {
     pub fn build(account_config: &'a AccountConfig) -> Result<Box<dyn Sender + 'a>> {
         match &account_config.email_sender {
             EmailSender::Smtp(config) => Ok(Box::new(Smtp::new(config))),
-            EmailSender::Cmd(_cmd) => Err(Error::BuildExternalEmailSenderUnimplementedError),
+            EmailSender::Sendmail(_cmd) => Err(Error::BuildExternalEmailSenderUnimplementedError),
             EmailSender::None => return Err(Error::BuildEmailSenderMissingError),
         }
     }

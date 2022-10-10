@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2022-10-10
+
+### Changed
+
+- Renamed `EmailSendCmd` into `SendmailConfig`.
+- Renamed `EmailSender::Cmd` into `EmailSender::Sendmail`.
+
+### Fixed
+
+- Fixed broken tests
+
+### Removed
+
+- Removed useless dependency `toml`
+  [patch](https://lists.sr.ht/~soywod/himalaya-lib/%3C20220929084520.98165-1-me%40paulrouget.com%3E).
+  
 ## [0.3.0] - 2022-10-10
 
 ### Changed
