@@ -110,7 +110,8 @@ impl AccountConfig {
             .as_ref()
             .ok_or_else(|| Error::EncryptFileMissingCmdError)?;
         let cmd = &format!("{} {} {:?}", cmd, addr, path);
-        process::run(cmd).map_err(Error::EncryptFileError)
+        let output = process::run(cmd, &[]).map_err(Error::EncryptFileError)?;
+        Ok(String::from_utf8_lossy(&output).to_string())
     }
 
     pub fn pgp_decrypt_file(&self, path: PathBuf) -> Result<String> {
@@ -119,7 +120,8 @@ impl AccountConfig {
             .as_ref()
             .ok_or_else(|| Error::DecryptFileMissingCmdError)?;
         let cmd = &format!("{} {:?}", cmd, path);
-        process::run(cmd).map_err(Error::DecryptFileError)
+        let output = process::run(cmd, &[]).map_err(Error::DecryptFileError)?;
+        Ok(String::from_utf8_lossy(&output).to_string())
     }
 
     /// Gets the downloads directory path.

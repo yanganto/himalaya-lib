@@ -89,15 +89,12 @@ impl<'a> Smtp<'a> {
 
 impl<'a> Sender for Smtp<'a> {
     fn send(&mut self, config: &AccountConfig, msg: &Email) -> sender::Result<Vec<u8>> {
-        let mut raw_msg = msg.into_sendable_msg(config)?.formatted();
+        let raw_msg = msg.into_sendable_msg(config)?.formatted();
 
         let envelope: lettre::address::Envelope = if let Some(cmd) =
             config.email_hooks.pre_send.as_deref()
         {
-            for cmd in cmd.split('|') {
-                raw_msg =
-                    process::pipe(cmd.trim(), &raw_msg).map_err(Error::ExecutePreSendHookError)?;
-            }
+            let raw_msg = process::run(cmd, &raw_msg).map_err(Error::ExecutePreSendHookError)?;
             let parsed_mail = mailparse::parse_mail(&raw_msg).map_err(Error::ParseEmailError)?;
             Email::from_parsed_mail(parsed_mail, config)?.try_into()
         } else {

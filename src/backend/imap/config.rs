@@ -52,7 +52,8 @@ impl ImapConfig {
     /// Executes the IMAP password command in order to retrieve the
     /// IMAP server password.
     pub fn passwd(&self) -> Result<String> {
-        let passwd = process::run(&self.passwd_cmd).map_err(Error::GetPasswdError)?;
+        let passwd = process::run(&self.passwd_cmd, &[]).map_err(Error::GetPasswdError)?;
+        let passwd = String::from_utf8_lossy(&passwd).to_string();
         let passwd = passwd
             .lines()
             .next()
@@ -82,7 +83,7 @@ impl ImapConfig {
             .map(|cmd| format!(r#"{} {:?} {:?}"#, cmd, subject, sender))
             .unwrap_or(default_cmd);
 
-        process::run(&cmd).map_err(Error::StartNotifyModeError)?;
+        process::run(&cmd, &[]).map_err(Error::StartNotifyModeError)?;
         Ok(())
     }
 

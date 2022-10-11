@@ -40,7 +40,8 @@ pub struct SmtpConfig {
 impl SmtpConfig {
     /// Builds the internal SMTP sender credentials.
     pub fn credentials(&self) -> Result<SmtpCredentials> {
-        let passwd = process::run(&self.passwd_cmd).map_err(Error::GetPasswdError)?;
+        let passwd = process::run(&self.passwd_cmd, &[]).map_err(Error::GetPasswdError)?;
+        let passwd = String::from_utf8_lossy(&passwd).to_string();
         let passwd = passwd
             .lines()
             .next()

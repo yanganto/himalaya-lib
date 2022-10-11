@@ -259,10 +259,9 @@ impl<'a> ImapBackend<'a> {
             let cmds = self.imap_config.watch_cmds().clone();
             thread::spawn(move || {
                 debug!("batch execution of {} cmd(s)", cmds.len());
-                cmds.iter().for_each(|cmd| {
-                    debug!("running command {:?}…", cmd);
-                    let res = process::run(cmd);
-                    debug!("{:?}", res);
+                cmds.iter().for_each(|cmd| match process::run(cmd, &[]) {
+                    Err(_) => (),
+                    Ok(_) => (),
                 })
             });
 

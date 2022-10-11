@@ -3,7 +3,7 @@
 //! This module contains cross platform helpers around the
 //! `std::process` crate.
 
-use log::{debug, trace};
+use log::debug;
 use std::{
     io::{self, prelude::*},
     process::{Command, Stdio},
@@ -32,17 +32,13 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 /// Runs the given command and returns the output as UTF8 string.
-pub fn run(cmd: &str) -> Result<String> {
-    debug!("running command: {}", cmd);
+pub fn run(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
+    let mut output = input.to_owned();
 
-    let output = if cfg!(target_os = "windows") {
-        Command::new("cmd").args(&["/C", cmd]).output()
-    } else {
-        Command::new("sh").arg("-c").arg(cmd).output()
-    };
-    let output = output.map_err(|err| Error::RunCmdError(err, cmd.to_string()))?;
-    let output = String::from_utf8(output.stdout).map_err(Error::ParseCmdOutputError)?;
-    trace!("command output: {}", output);
+    for cmd in cmd.split('|') {
+        debug!("running command: {}", cmd);
+        output = pipe(cmd.trim(), &output)?;
+    }
 
     Ok(output)
 }
