@@ -9,7 +9,8 @@ fn test_imap_backend() {
     let account_config = AccountConfig {
         email_sender: EmailSender::Smtp(SmtpConfig {
             host: "localhost".into(),
-            port: 3465,
+            port: 3025,
+            ssl: Some(false),
             starttls: Some(false),
             insecure: Some(true),
             login: "inbox@localhost".into(),
@@ -19,7 +20,8 @@ fn test_imap_backend() {
     };
     let imap_config = ImapConfig {
         host: "localhost".into(),
-        port: 3993,
+        port: 3143,
+        ssl: Some(false),
         starttls: Some(false),
         insecure: Some(true),
         login: "inbox@localhost".into(),

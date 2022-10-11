@@ -2,10 +2,17 @@
 //!
 //! This module contains the definition of the IMAP backend.
 
-use imap::types::NameAttribute;
+use imap::{extensions::idle::SetReadTimeout, types::NameAttribute};
 use log::{debug, log_enabled, trace, Level};
 use native_tls::{TlsConnector, TlsStream};
-use std::{any::Any, collections::HashSet, convert::TryInto, net::TcpStream, result, thread};
+use std::{
+    any::Any,
+    collections::HashSet,
+    convert::TryInto,
+    io::{self, Read, Write},
+    net::TcpStream,
+    result, thread,
+};
 use thiserror::Error;
 
 use crate::{
@@ -96,12 +103,51 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-type ImapSess = imap::Session<TlsStream<TcpStream>>;
+enum ImapSessionStream {
+    Tls(TlsStream<TcpStream>),
+    Tcp(TcpStream),
+}
+
+impl SetReadTimeout for ImapSessionStream {
+    fn set_read_timeout(&mut self, timeout: Option<std::time::Duration>) -> imap::Result<()> {
+        match self {
+            Self::Tls(stream) => stream.set_read_timeout(timeout),
+            Self::Tcp(stream) => stream.set_read_timeout(timeout),
+        }
+    }
+}
+
+impl Read for ImapSessionStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Tls(stream) => stream.read(buf),
+            Self::Tcp(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl Write for ImapSessionStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Tls(stream) => stream.write(buf),
+            Self::Tcp(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Tls(stream) => stream.flush(),
+            Self::Tcp(stream) => stream.flush(),
+        }
+    }
+}
+
+type ImapSession = imap::Session<ImapSessionStream>;
 
 pub struct ImapBackend<'a> {
     account_config: &'a AccountConfig,
     imap_config: &'a ImapConfig,
-    sess: Option<ImapSess>,
+    sess: Option<ImapSession>,
 }
 
 impl<'a> ImapBackend<'a> {
@@ -113,7 +159,7 @@ impl<'a> ImapBackend<'a> {
         }
     }
 
-    fn sess(&mut self) -> Result<&mut ImapSess> {
+    fn sess(&mut self) -> Result<&mut ImapSession> {
         if self.sess.is_none() {
             debug!("create TLS builder");
             debug!("insecure: {}", self.imap_config.insecure());
@@ -132,12 +178,17 @@ impl<'a> ImapBackend<'a> {
             if self.imap_config.starttls() {
                 client_builder.starttls();
             }
-            let client = client_builder
-                .connect(|domain, tcp| Ok(TlsConnector::connect(&builder, domain, tcp)?))
-                .map_err(Error::ConnectImapServerError)?;
 
-            debug!("create session");
-            debug!("login: {}", self.imap_config.login);
+            let client = if self.imap_config.ssl() {
+                client_builder.connect(|domain, tcp| {
+                    let connector = TlsConnector::connect(&builder, domain, tcp)?;
+                    Ok(ImapSessionStream::Tls(connector))
+                })
+            } else {
+                client_builder.connect(|_, tcp| Ok(ImapSessionStream::Tcp(tcp)))
+            }
+            .map_err(Error::ConnectImapServerError)?;
+
             let mut sess = client
                 .login(&self.imap_config.login, &self.imap_config.passwd()?)
                 .map_err(|res| Error::LoginImapServerError(res.0))?;

@@ -10,9 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * Added pipe support for `(imap|smtp)-passwd-cmd` [github#373].
+* Add `imap-ssl` and `smtp-ssl` options to be able to disable
+  encryption [github#347].
 
 ### Fixed
 
+* Fixed long subject decoding issue [github#380].
 * Fixed `process` module for `MINGW*` [github#254].
 
 ## [0.3.1] - 2022-10-10
@@ -78,7 +81,9 @@ First official version of the Himalaya's library. The source code
 mostly comes from the [CLI](https://github.com/soywod/himalaya)
 repository.
 
-[github#254]: https://github.com/soywod/himalaya/issues/254
-[github#373]: https://github.com/soywod/himalaya/issues/373
-
 [patch#1]: https://lists.sr.ht/~soywod/himalaya-lib/%3C20220929084520.98165-1-me%40paulrouget.com%3E
+
+[github#254]: https://github.com/soywod/himalaya/issues/254
+[github#347]: https://github.com/soywod/himalaya/issues/347
+[github#373]: https://github.com/soywod/himalaya/issues/373
+[github#380]: https://github.com/soywod/himalaya/issues/380

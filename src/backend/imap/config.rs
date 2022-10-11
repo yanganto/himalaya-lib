@@ -29,6 +29,8 @@ pub struct ImapConfig {
     pub host: String,
     /// Represents the IMAP server port.
     pub port: u16,
+    /// Enables SSL.
+    pub ssl: Option<bool>,
     /// Enables StartTLS.
     pub starttls: Option<bool>,
     /// Trusts any certificate.
@@ -59,6 +61,11 @@ impl ImapConfig {
             .next()
             .ok_or_else(|| Error::GetPasswdEmptyError)?;
         Ok(passwd.to_owned())
+    }
+
+    /// Gets the SSL IMAP option.
+    pub fn ssl(&self) -> bool {
+        self.ssl.unwrap_or(true)
     }
 
     /// Gets the StartTLS IMAP option.

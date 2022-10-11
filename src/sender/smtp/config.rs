@@ -27,6 +27,8 @@ pub struct SmtpConfig {
     pub host: String,
     /// Represents the SMTP server port.
     pub port: u16,
+    /// Enables SSL.
+    pub ssl: Option<bool>,
     /// Enables StartTLS.
     pub starttls: Option<bool>,
     /// Trusts any certificate.
@@ -50,6 +52,10 @@ impl SmtpConfig {
             self.login.to_owned(),
             passwd.to_owned(),
         ))
+    }
+
+    pub fn ssl(&self) -> bool {
+        self.ssl.unwrap_or(true)
     }
 
     pub fn starttls(&self) -> bool {

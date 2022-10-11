@@ -55,28 +55,28 @@ impl<'a> Smtp<'a> {
         if let Some(ref transport) = self.transport {
             Ok(transport)
         } else {
-            let builder = if self.config.starttls() {
-                SmtpTransport::starttls_relay(&self.config.host)
-            } else {
-                SmtpTransport::relay(&self.config.host)
-            }
-            .map_err(Error::BuildTransportRelayError)?;
+            let builder = if self.config.ssl() {
+                let tls = TlsParameters::builder(self.config.host.to_owned())
+                    .dangerous_accept_invalid_hostnames(self.config.insecure())
+                    .dangerous_accept_invalid_certs(self.config.insecure())
+                    .build()
+                    .map_err(Error::BuildTlsParamsError)?;
 
-            let tls = TlsParameters::builder(self.config.host.to_owned())
-                .dangerous_accept_invalid_hostnames(self.config.insecure())
-                .dangerous_accept_invalid_certs(self.config.insecure())
-                .build()
-                .map_err(Error::BuildTlsParamsError)?;
-
-            let tls = if self.config.starttls() {
-                Tls::Required(tls)
+                if self.config.starttls() {
+                    SmtpTransport::starttls_relay(&self.config.host)
+                        .map_err(Error::BuildTransportRelayError)?
+                        .tls(Tls::Required(tls))
+                } else {
+                    SmtpTransport::relay(&self.config.host)
+                        .map_err(Error::BuildTransportRelayError)?
+                        .tls(Tls::Wrapper(tls))
+                }
             } else {
-                Tls::Wrapper(tls)
+                SmtpTransport::relay(&self.config.host).map_err(Error::BuildTransportRelayError)?
             };
 
             self.transport = Some(
                 builder
-                    .tls(tls)
                     .port(self.config.port)
                     .credentials(self.config.credentials()?)
                     .build(),
