@@ -72,7 +72,9 @@ impl<'a> Smtp<'a> {
                         .tls(Tls::Wrapper(tls))
                 }
             } else {
-                SmtpTransport::relay(&self.config.host).map_err(Error::BuildTransportRelayError)?
+                SmtpTransport::relay(&self.config.host)
+                    .map_err(Error::BuildTransportRelayError)?
+                    .tls(Tls::None)
             };
 
             self.transport = Some(
