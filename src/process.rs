@@ -5,6 +5,7 @@
 
 use log::debug;
 use std::{
+    env,
     io::{self, prelude::*},
     process::{Command, Stdio},
     result, string,
@@ -47,16 +48,32 @@ pub fn run(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
 pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
     let mut output = Vec::new();
 
-    let pipeline = Command::new(cmd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|err| Error::SpawnProcessError(err, cmd.to_string()))?;
+    let pipeline = if cfg!(target_os = "windows")
+        && env::var("MSYSTEM")
+            .map(|env| !env.starts_with("MINGW"))
+            .unwrap_or_default()
+    {
+        Command::new("cmd")
+            .args(&["/C", cmd])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+    }
+    .map_err(|err| Error::SpawnProcessError(err, cmd.to_string()))?;
+
     pipeline
         .stdin
         .ok_or_else(|| Error::GetStdinError)?
         .write_all(input)
         .map_err(Error::WriteStdinError)?;
+
     pipeline
         .stdout
         .ok_or_else(|| Error::GetStdoutError)?
