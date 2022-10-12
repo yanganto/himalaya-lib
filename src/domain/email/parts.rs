@@ -1,6 +1,8 @@
+use ammonia::Builder as AmmoniaBuilder;
 use mailparse::MailHeaderMap;
-use serde::Serialize;
+use regex::Regex;
 use std::{
+    collections::HashSet,
     env, fs,
     ops::{Deref, DerefMut},
 };
@@ -8,25 +10,24 @@ use uuid::Uuid;
 
 use crate::{email, AccountConfig};
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct TextPlainPart {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct TextHtmlPart {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct BinaryPart {
     pub filename: String,
     pub mime: String,
     pub content: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Part {
     TextPlain(TextPlainPart),
     TextHtml(TextHtmlPart),
@@ -39,8 +40,22 @@ impl Part {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PartsReaderOptions {
+    pub plain_first: bool,
+    pub sanitize: bool,
+}
+
+impl Default for PartsReaderOptions {
+    fn default() -> Self {
+        Self {
+            plain_first: true,
+            sanitize: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct Parts(pub Vec<Part>);
 
 impl Parts {
@@ -62,6 +77,95 @@ impl Parts {
             build_parts_map_rec(config, part, &mut parts)?;
         }
         Ok(Self(parts))
+    }
+
+    /// Folds string body from all plain text parts into a single
+    /// string body. If no plain text parts are found, HTML parts are
+    /// used instead. The result is sanitized (all HTML markup is
+    /// removed).
+    pub fn to_readable(&self, opts: PartsReaderOptions) -> String {
+        let (mut plain, mut html) = self.iter().fold(
+            (String::default(), String::default()),
+            |(mut plain, mut html), part| {
+                match part {
+                    Part::TextPlain(part) => {
+                        let glue = if plain.is_empty() { "" } else { "\n\n" };
+                        plain.push_str(glue);
+                        plain.push_str(&part.content);
+                    }
+                    Part::TextHtml(part) => {
+                        let glue = if html.is_empty() { "" } else { "\n\n" };
+                        html.push_str(glue);
+                        html.push_str(&part.content);
+                    }
+                    _ => (),
+                };
+                (plain, html)
+            },
+        );
+
+        if opts.sanitize {
+            html = {
+                // removes html markup
+                let sanitized_html = AmmoniaBuilder::new()
+                    .tags(HashSet::default())
+                    .clean(&html)
+                    .to_string();
+                // merges new line chars
+                let sanitized_html = Regex::new(r"(\r?\n\s*){2,}")
+                    .unwrap()
+                    .replace_all(&sanitized_html, "\n\n")
+                    .to_string();
+                // replaces tabulations and &npsp; by spaces
+                let sanitized_html = Regex::new(r"(\t|&nbsp;)")
+                    .unwrap()
+                    .replace_all(&sanitized_html, " ")
+                    .to_string();
+                // merges spaces
+                let sanitized_html = Regex::new(r" {2,}")
+                    .unwrap()
+                    .replace_all(&sanitized_html, "  ")
+                    .to_string();
+                // decodes html entities
+                let sanitized_html = html_escape::decode_html_entities(&sanitized_html).to_string();
+
+                sanitized_html
+            };
+
+            plain = {
+                // merges new line chars
+                let sanitized_plain = Regex::new(r"(\r?\n\s*){2,}")
+                    .unwrap()
+                    .replace_all(&plain, "\n\n")
+                    .to_string();
+                // replaces tabulations by spaces
+                let sanitized_plain = Regex::new(r"\t")
+                    .unwrap()
+                    .replace_all(&sanitized_plain, " ")
+                    .to_string();
+                // merges spaces
+                let sanitized_plain = Regex::new(r" {2,}")
+                    .unwrap()
+                    .replace_all(&sanitized_plain, "  ")
+                    .to_string();
+
+                sanitized_plain
+            };
+        };
+
+        if opts.plain_first {
+            if plain.is_empty() {
+                html
+            } else {
+                plain
+            }
+        } else {
+            if html.is_empty() {
+                plain
+            } else {
+                html
+            }
+        }
     }
 }
 

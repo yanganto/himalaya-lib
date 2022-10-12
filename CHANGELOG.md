@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Fixed long subject decoding issue [github#380].
 * Fixed `process` module for `MINGW*` [github#254].
 
+### Changed
+
+* Moved `Email::fold_text_plain_parts` to `Parts::to_readable`. It
+  take now a `PartsReaderOptions` as parameter:
+  
+  * `plain_first`: shows plain texts first, switch to html if empty.
+  
+  * `sanitize`: sanitizes or not text bodies (both plain and html).
+
 ## [0.3.1] - 2022-10-10
 
 ### Changed
