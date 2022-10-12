@@ -3,8 +3,9 @@
 //! This module contains cross platform helpers around the
 //! `std::process` crate.
 
-use log::{debug, trace};
+use log::debug;
 use std::{
+    env,
     io::{self, prelude::*},
     process::{Command, Stdio},
     result, string,
@@ -32,17 +33,13 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 /// Runs the given command and returns the output as UTF8 string.
-pub fn run(cmd: &str) -> Result<String> {
-    debug!("running command: {}", cmd);
+pub fn run(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
+    let mut output = input.to_owned();
 
-    let output = if cfg!(target_os = "windows") {
-        Command::new("cmd").args(&["/C", cmd]).output()
-    } else {
-        Command::new("sh").arg("-c").arg(cmd).output()
-    };
-    let output = output.map_err(|err| Error::RunCmdError(err, cmd.to_string()))?;
-    let output = String::from_utf8(output.stdout).map_err(Error::ParseCmdOutputError)?;
-    trace!("command output: {}", output);
+    for cmd in cmd.split('|') {
+        debug!("running command: {}", cmd);
+        output = pipe(cmd.trim(), &output)?;
+    }
 
     Ok(output)
 }
@@ -51,16 +48,32 @@ pub fn run(cmd: &str) -> Result<String> {
 pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
     let mut output = Vec::new();
 
-    let pipeline = Command::new(cmd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|err| Error::SpawnProcessError(err, cmd.to_string()))?;
+    let pipeline = if cfg!(target_os = "windows")
+        && env::var("MSYSTEM")
+            .map(|env| !env.starts_with("MINGW"))
+            .unwrap_or_default()
+    {
+        Command::new("cmd")
+            .args(&["/C", cmd])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+    }
+    .map_err(|err| Error::SpawnProcessError(err, cmd.to_string()))?;
+
     pipeline
         .stdin
         .ok_or_else(|| Error::GetStdinError)?
         .write_all(input)
         .map_err(Error::WriteStdinError)?;
+
     pipeline
         .stdout
         .ok_or_else(|| Error::GetStdoutError)?

@@ -26,7 +26,9 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
         let k = h.get_key();
         trace!("header key: {:?}", k);
 
-        let v = rfc2047_decoder::decode(h.get_value_raw())
+        let v = rfc2047_decoder::Decoder::new()
+            .skip_encoded_word_length(true)
+            .decode(h.get_value_raw())
             .map_err(|err| Error::DecodeHeaderError(err, k.to_owned()))?;
         trace!("header value: {:?}", v);
 

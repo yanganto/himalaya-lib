@@ -29,6 +29,8 @@ pub struct ImapConfig {
     pub host: String,
     /// Represents the IMAP server port.
     pub port: u16,
+    /// Enables SSL.
+    pub ssl: Option<bool>,
     /// Enables StartTLS.
     pub starttls: Option<bool>,
     /// Trusts any certificate.
@@ -52,12 +54,18 @@ impl ImapConfig {
     /// Executes the IMAP password command in order to retrieve the
     /// IMAP server password.
     pub fn passwd(&self) -> Result<String> {
-        let passwd = process::run(&self.passwd_cmd).map_err(Error::GetPasswdError)?;
+        let passwd = process::run(&self.passwd_cmd, &[]).map_err(Error::GetPasswdError)?;
+        let passwd = String::from_utf8_lossy(&passwd).to_string();
         let passwd = passwd
             .lines()
             .next()
             .ok_or_else(|| Error::GetPasswdEmptyError)?;
         Ok(passwd.to_owned())
+    }
+
+    /// Gets the SSL IMAP option.
+    pub fn ssl(&self) -> bool {
+        self.ssl.unwrap_or(true)
     }
 
     /// Gets the StartTLS IMAP option.
@@ -82,7 +90,7 @@ impl ImapConfig {
             .map(|cmd| format!(r#"{} {:?} {:?}"#, cmd, subject, sender))
             .unwrap_or(default_cmd);
 
-        process::run(&cmd).map_err(Error::StartNotifyModeError)?;
+        process::run(&cmd, &[]).map_err(Error::StartNotifyModeError)?;
         Ok(())
     }
 

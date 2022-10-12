@@ -2,7 +2,7 @@
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "notmuch-backend")]
-use himalaya_lib::backend::{Backend, NotmuchBackend};
+use himalaya_lib::{Backend, NotmuchBackend, PartsReaderOptions};
 
 #[cfg(feature = "notmuch-backend")]
 #[test]
@@ -34,7 +34,10 @@ fn test_notmuch_backend() {
     let msg = notmuch.email_get("", &hash).unwrap();
     assert_eq!("alice@localhost", msg.from.clone().unwrap().to_string());
     assert_eq!("patrick@localhost", msg.to.clone().unwrap().to_string());
-    assert_eq!("Ceci est un message.", msg.fold_text_plain_parts());
+    assert_eq!(
+        "Ceci est un message.",
+        msg.parts.to_readable(PartsReaderOptions::default())
+    );
 
     // check that the envelope of the added message exists
     let envelopes = notmuch.envelope_list("inbox", 10, 0).unwrap();

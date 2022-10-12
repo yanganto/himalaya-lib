@@ -1,12 +1,9 @@
-use ammonia;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use convert_case::{Case, Casing};
-use html_escape;
 use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
 use log::{info, trace, warn};
-use regex::Regex;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     convert::TryInto,
     env::{self, temp_dir},
     fmt::Debug,
@@ -20,8 +17,8 @@ use uuid::Uuid;
 
 use crate::{
     account, from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs,
-    AccountConfig, Addr, Addrs, BinaryPart, Part, Parts, TextPlainPart, TplOverride,
-    DEFAULT_SIGNATURE_DELIM,
+    AccountConfig, Addr, Addrs, BinaryPart, Part, Parts, PartsReaderOptions, TextPlainPart,
+    TplOverride, DEFAULT_SIGNATURE_DELIM,
 };
 
 #[derive(Error, Debug)]
@@ -102,106 +99,6 @@ impl Email {
             .collect()
     }
 
-    /// Folds string body from all plain text parts into a single
-    /// string body. If no plain text parts are found, HTML parts are
-    /// used instead. The result is sanitized (all HTML markup is
-    /// removed).
-    pub fn fold_text_plain_parts(&self) -> String {
-        let (plain, html) = self.parts.iter().fold(
-            (String::default(), String::default()),
-            |(mut plain, mut html), part| {
-                match part {
-                    Part::TextPlain(part) => {
-                        let glue = if plain.is_empty() { "" } else { "\n\n" };
-                        plain.push_str(glue);
-                        plain.push_str(&part.content);
-                    }
-                    Part::TextHtml(part) => {
-                        let glue = if html.is_empty() { "" } else { "\n\n" };
-                        html.push_str(glue);
-                        html.push_str(&part.content);
-                    }
-                    _ => (),
-                };
-                (plain, html)
-            },
-        );
-        if plain.is_empty() {
-            // Remove HTML markup
-            let sanitized_html = ammonia::Builder::new()
-                .tags(HashSet::default())
-                .clean(&html)
-                .to_string();
-            // Merge new line chars
-            let sanitized_html = Regex::new(r"(\r?\n\s*){2,}")
-                .unwrap()
-                .replace_all(&sanitized_html, "\n\n")
-                .to_string();
-            // Replace tabulations and &npsp; by spaces
-            let sanitized_html = Regex::new(r"(\t|&nbsp;)")
-                .unwrap()
-                .replace_all(&sanitized_html, " ")
-                .to_string();
-            // Merge spaces
-            let sanitized_html = Regex::new(r" {2,}")
-                .unwrap()
-                .replace_all(&sanitized_html, "  ")
-                .to_string();
-            // Decode HTML entities
-            let sanitized_html = html_escape::decode_html_entities(&sanitized_html).to_string();
-
-            sanitized_html
-        } else {
-            // Merge new line chars
-            let sanitized_plain = Regex::new(r"(\r?\n\s*){2,}")
-                .unwrap()
-                .replace_all(&plain, "\n\n")
-                .to_string();
-            // Replace tabulations by spaces
-            let sanitized_plain = Regex::new(r"\t")
-                .unwrap()
-                .replace_all(&sanitized_plain, " ")
-                .to_string();
-            // Merge spaces
-            let sanitized_plain = Regex::new(r" {2,}")
-                .unwrap()
-                .replace_all(&sanitized_plain, "  ")
-                .to_string();
-
-            sanitized_plain
-        }
-    }
-
-    /// Fold string body from all HTML parts into a single string
-    /// body.
-    fn fold_text_html_parts(&self) -> String {
-        let text_parts = self
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                Part::TextHtml(part) => Some(part.content.to_owned()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let text_parts = Regex::new(r"(\r?\n){2,}")
-            .unwrap()
-            .replace_all(&text_parts, "\n\n")
-            .to_string();
-        text_parts
-    }
-
-    /// Fold string body from all text parts into a single string
-    /// body. The mime allows users to choose between plain text parts
-    /// and html text parts.
-    pub fn fold_text_parts(&self, text_mime: &str) -> String {
-        if text_mime == "html" {
-            self.fold_text_html_parts()
-        } else {
-            self.fold_text_plain_parts()
-        }
-    }
-
     pub fn into_reply(mut self, all: bool, config: &AccountConfig) -> Result<Self> {
         let account_addr = config.address()?;
 
@@ -273,7 +170,12 @@ impl Email {
             let mut content = format!("\n\nOn {}, {} wrote:\n", date, sender);
 
             let mut glue = "";
-            for line in self.fold_text_parts("plain").trim().lines() {
+            for line in self
+                .parts
+                .to_readable(PartsReaderOptions::default())
+                .trim()
+                .lines()
+            {
                 if line == DEFAULT_SIGNATURE_DELIM {
                     break;
                 }
@@ -349,7 +251,7 @@ impl Email {
             content.push('\n');
         }
         content.push('\n');
-        content.push_str(&self.fold_text_parts("plain"));
+        content.push_str(&self.parts.to_readable(PartsReaderOptions::default()));
         self.parts
             .replace_text_plain_parts_with(TextPlainPart { content });
 
@@ -474,7 +376,7 @@ impl Email {
         if let Some(body) = opts.body {
             tpl.push_str(body);
         } else {
-            tpl.push_str(&self.fold_text_plain_parts())
+            tpl.push_str(&self.parts.to_readable(PartsReaderOptions::default()))
         }
 
         // Signature
@@ -502,7 +404,7 @@ impl Email {
         Self::from_parsed_mail(parsed_mail, &AccountConfig::default())
     }
 
-    pub fn into_sendable_msg(&self, config: &AccountConfig) -> Result<lettre::Message> {
+    pub fn into_sendable(&self, config: &AccountConfig) -> Result<lettre::Message> {
         let mut msg_builder = lettre::Message::builder()
             .message_id(self.message_id.to_owned())
             .subject(self.subject.to_owned());
@@ -542,8 +444,9 @@ impl Email {
         };
 
         let mut multipart = {
-            let mut multipart =
-                MultiPart::mixed().singlepart(SinglePart::plain(self.fold_text_plain_parts()));
+            let mut multipart = MultiPart::mixed().singlepart(SinglePart::plain(
+                self.parts.to_readable(PartsReaderOptions::default()),
+            ));
             for part in self.attachments() {
                 multipart = multipart.singlepart(Attachment::new(part.filename.clone()).body(
                     part.content,
@@ -655,11 +558,11 @@ impl Email {
     /// message is like a template, except that:
     ///  - headers part is customizable (can be omitted if empty filter given in argument)
     ///  - body type is customizable (plain or html)
-    pub fn to_readable_string(
+    pub fn to_readable(
         &self,
-        text_mime: &str,
-        headers: Vec<&str>,
         config: &AccountConfig,
+        opts: PartsReaderOptions,
+        headers: Vec<&str>,
     ) -> Result<String> {
         let mut all_headers = vec![];
         for h in config.email_reading_headers().iter() {
@@ -745,7 +648,8 @@ impl Email {
             readable_email.push_str("\n");
         }
 
-        readable_email.push_str(&self.fold_text_parts(text_mime));
+        readable_email.push_str(&self.parts.to_readable(opts));
+
         Ok(readable_email)
     }
 }
@@ -938,24 +842,25 @@ mod tests {
             })]),
             ..Email::default()
         };
+        let opts = PartsReaderOptions::default();
 
         // empty email headers, empty headers, empty config
         assert_eq!(
             "hello, world!",
-            email.to_readable_string("plain", vec![], &config).unwrap()
+            email.to_readable(&config, opts.clone(), vec![]).unwrap()
         );
         // empty email headers, basic headers
         assert_eq!(
             "hello, world!",
             email
-                .to_readable_string("plain", vec!["From", "DATE", "custom-hEader"], &config)
+                .to_readable(&config, opts.clone(), vec!["From", "DATE", "custom-hEader"])
                 .unwrap()
         );
         // empty email headers, multiple subject headers
         assert_eq!(
             "Subject: \n\nhello, world!",
             email
-                .to_readable_string("plain", vec!["subject", "Subject", "SUBJECT"], &config)
+                .to_readable(&config, opts.clone(), vec!["subject", "Subject", "SUBJECT"])
                 .unwrap()
         );
 
@@ -980,14 +885,14 @@ mod tests {
         assert_eq!(
             "From: \"Test\" <test@local>\n\nhello, world!",
             email
-                .to_readable_string("plain", vec!["from"], &config)
+                .to_readable(&config, opts.clone(), vec!["from"])
                 .unwrap()
         );
         // header present but empty in email headers, empty config
         assert_eq!(
             "hello, world!",
             email
-                .to_readable_string("plain", vec!["cc"], &config)
+                .to_readable(&config, opts.clone(), vec!["cc"])
                 .unwrap()
         );
         // multiple same custom headers present in email headers, empty
@@ -995,7 +900,11 @@ mod tests {
         assert_eq!(
             "Custom-Header: custom value\n\nhello, world!",
             email
-                .to_readable_string("plain", vec!["custom-header", "cuSTom-HeaDer"], &config)
+                .to_readable(
+                    &config,
+                    opts.clone(),
+                    vec!["custom-header", "cuSTom-HeaDer"]
+                )
                 .unwrap()
         );
 
@@ -1011,7 +920,7 @@ mod tests {
         // header present but empty in email headers, empty config
         assert_eq!(
             "Custom-Header: custom value\nSubject: \nFrom: \"Test\" <test@local>\nMessage-Id: <message-id>\n\nhello, world!",
-            email.to_readable_string("plain", vec!["cc", "message-ID"], &config)
+            email.to_readable(&config, opts, vec!["cc", "message-ID"])
                 .unwrap()
         );
     }

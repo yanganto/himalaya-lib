@@ -2,6 +2,7 @@
 //!
 //! This module contains structures related to email configuration.
 
+use crate::SendmailConfig;
 #[cfg(feature = "smtp-sender")]
 use crate::SmtpConfig;
 
@@ -20,13 +21,6 @@ impl Default for EmailSender {
     fn default() -> Self {
         Self::None
     }
-}
-
-/// Represents the sendmail sender config.
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct SendmailConfig {
-    /// Represents the sendmail command.
-    pub cmd: String,
 }
 
 /// Represents the text/plain format as defined in the [RFC2646].

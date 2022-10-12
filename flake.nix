@@ -33,8 +33,9 @@
               rust-analyzer
               cargo-watch
 
-              # Notmuch
+              # Email tools
               notmuch
+              msmtp
             ];
           };
         }

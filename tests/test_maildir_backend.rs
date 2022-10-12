@@ -1,8 +1,14 @@
+#[cfg(feature = "maildir-backend")]
 use maildir::Maildir;
+#[cfg(feature = "maildir-backend")]
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
-use himalaya_lib::{AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig};
+#[cfg(feature = "maildir-backend")]
+use himalaya_lib::{
+    AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig, PartsReaderOptions,
+};
 
+#[cfg(feature = "maildir-backend")]
 #[test]
 fn test_maildir_backend() {
     // set up maildir folders
@@ -37,7 +43,10 @@ fn test_maildir_backend() {
     let msg = mdir.email_get("inbox", &hash).unwrap();
     assert_eq!("alice@localhost", msg.from.clone().unwrap().to_string());
     assert_eq!("patrick@localhost", msg.to.clone().unwrap().to_string());
-    assert_eq!("Ceci est un message.", msg.fold_text_plain_parts());
+    assert_eq!(
+        "Ceci est un message.",
+        msg.parts.to_readable(PartsReaderOptions::default())
+    );
 
     // check that the envelope of the added message exists
     let envelopes = mdir.envelope_list("inbox", 10, 0).unwrap();

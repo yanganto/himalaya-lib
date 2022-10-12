@@ -27,6 +27,8 @@ pub struct SmtpConfig {
     pub host: String,
     /// Represents the SMTP server port.
     pub port: u16,
+    /// Enables SSL.
+    pub ssl: Option<bool>,
     /// Enables StartTLS.
     pub starttls: Option<bool>,
     /// Trusts any certificate.
@@ -40,7 +42,8 @@ pub struct SmtpConfig {
 impl SmtpConfig {
     /// Builds the internal SMTP sender credentials.
     pub fn credentials(&self) -> Result<SmtpCredentials> {
-        let passwd = process::run(&self.passwd_cmd).map_err(Error::GetPasswdError)?;
+        let passwd = process::run(&self.passwd_cmd, &[]).map_err(Error::GetPasswdError)?;
+        let passwd = String::from_utf8_lossy(&passwd).to_string();
         let passwd = passwd
             .lines()
             .next()
@@ -49,6 +52,10 @@ impl SmtpConfig {
             self.login.to_owned(),
             passwd.to_owned(),
         ))
+    }
+
+    pub fn ssl(&self) -> bool {
+        self.ssl.unwrap_or(true)
     }
 
     pub fn starttls(&self) -> bool {

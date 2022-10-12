@@ -28,7 +28,10 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
         .subject
         .as_ref()
         .map(|subj| {
-            rfc2047_decoder::decode(subj).map_err(|err| Error::DecodeSubjectError(err, raw.message))
+            rfc2047_decoder::Decoder::new()
+                .skip_encoded_word_length(true)
+                .decode(subj)
+                .map_err(|err| Error::DecodeSubjectError(err, raw.message))
         })
         .unwrap_or_else(|| Ok(String::default()))?;
 
@@ -39,7 +42,9 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
         .or_else(|| envelope.from.as_ref().and_then(|addrs| addrs.get(0)))
         .ok_or_else(|| Error::GetSenderError(raw.message))?;
     let sender = if let Some(ref name) = sender.name {
-        rfc2047_decoder::decode(&name.to_vec())
+        rfc2047_decoder::Decoder::new()
+            .skip_encoded_word_length(true)
+            .decode(&name.to_vec())
             .map_err(|err| Error::DecodeSenderNameError(err, raw.message))?
     } else {
         let mbox = sender
@@ -47,7 +52,9 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
             .as_ref()
             .ok_or_else(|| Error::GetSenderError(raw.message))
             .and_then(|mbox| {
-                rfc2047_decoder::decode(&mbox.to_vec())
+                rfc2047_decoder::Decoder::new()
+                    .skip_encoded_word_length(true)
+                    .decode(&mbox.to_vec())
                     .map_err(|err| Error::DecodeSenderNameError(err, raw.message))
             })?;
         let host = sender
@@ -55,7 +62,9 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
             .as_ref()
             .ok_or_else(|| Error::GetSenderError(raw.message))
             .and_then(|host| {
-                rfc2047_decoder::decode(&host.to_vec())
+                rfc2047_decoder::Decoder::new()
+                    .skip_encoded_word_length(true)
+                    .decode(&host.to_vec())
                     .map_err(|err| Error::DecodeSenderNameError(err, raw.message))
             })?;
         format!("{}@{}", mbox, host)
