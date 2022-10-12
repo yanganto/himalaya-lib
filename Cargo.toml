@@ -7,7 +7,7 @@ edition = "2021"
 license = "MIT"
 
 [features]
-imap-backend = ["imap", "imap-proto"]
+imap-backend = ["imap", "imap-proto", "utf7-imap"]
 maildir-backend = ["maildir", "md5"]
 notmuch-backend = ["notmuch", "maildir-backend"]
 smtp-sender = []
@@ -36,3 +36,4 @@ imap-proto = { version = "=0.14.3", optional = true }
 maildir = { version = "=0.6.1", optional = true }
 md5 = { version = "0.7.0", optional = true }
 notmuch = { version = "=0.7.1", optional = true }
+utf7-imap = { version = "=0.3.2", optional = true }

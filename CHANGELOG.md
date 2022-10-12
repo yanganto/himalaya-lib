@@ -13,10 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Added `imap-ssl` and `smtp-ssl` options to be able to disable
   encryption [github#347].
 * Implemented sendmail sender [github#351].
-
-### Fixed
-
-* Fixed long subject decoding issue [github#380].
 * Fixed `process` module for `MINGW*` [github#254].
 
 ### Changed
@@ -27,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * `plain_first`: shows plain texts first, switch to html if empty.
   
   * `sanitize`: sanitizes or not text bodies (both plain and html).
+
+### Fixed
+
+* Fixed long subject decoding issue [github#380].
+* Fixed bad mailbox name encoding from UTF7-IMAP [github#370].
 
 ## [0.3.1] - 2022-10-10
 
@@ -96,5 +97,6 @@ repository.
 [github#254]: https://github.com/soywod/himalaya/issues/254
 [github#347]: https://github.com/soywod/himalaya/issues/347
 [github#351]: https://github.com/soywod/himalaya/issues/351
+[github#370]: https://github.com/soywod/himalaya/issues/370
 [github#373]: https://github.com/soywod/himalaya/issues/373
 [github#380]: https://github.com/soywod/himalaya/issues/380

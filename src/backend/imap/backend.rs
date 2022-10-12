@@ -14,6 +14,7 @@ use std::{
     result, thread,
 };
 use thiserror::Error;
+use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
 
 use crate::{
     account, backend, email, envelope, flag, process, AccountConfig, Backend, Email, Envelopes,
@@ -322,20 +323,17 @@ impl<'a> ImapBackend<'a> {
 }
 
 impl<'a> Backend<'a> for ImapBackend<'a> {
-    fn folder_add(&mut self, mbox: &str) -> backend::Result<()> {
-        trace!(">> add folder");
+    fn folder_add(&mut self, folder: &str) -> backend::Result<()> {
+        let folder = encode_utf7(folder.to_owned());
 
         self.sess()?
-            .create(mbox)
-            .map_err(|err| Error::CreateMboxError(err, mbox.to_owned()))?;
+            .create(&folder)
+            .map_err(|err| Error::CreateMboxError(err, folder.to_owned()))?;
 
-        trace!("<< add folder");
         Ok(())
     }
 
     fn folder_list(&mut self) -> backend::Result<Folders> {
-        trace!(">> get imap folders");
-
         let imap_mboxes = self
             .sess()?
             .list(Some(""), Some("*"))
@@ -345,7 +343,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
                 .iter()
                 .map(|imap_mbox| Folder {
                     delim: imap_mbox.delimiter().unwrap_or_default().into(),
-                    name: imap_mbox.name().into(),
+                    name: decode_utf7(imap_mbox.name().into()),
                     desc: imap_mbox
                         .attributes()
                         .iter()
@@ -367,27 +365,27 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(mboxes)
     }
 
-    fn folder_delete(&mut self, mbox: &str) -> backend::Result<()> {
-        trace!(">> delete imap folder");
+    fn folder_delete(&mut self, folder: &str) -> backend::Result<()> {
+        let folder = encode_utf7(folder.to_owned());
 
         self.sess()?
-            .delete(mbox)
-            .map_err(|err| Error::DeleteMboxError(err, mbox.to_owned()))?;
+            .delete(&folder)
+            .map_err(|err| Error::DeleteMboxError(err, folder.to_owned()))?;
 
-        trace!("<< delete imap folder");
         Ok(())
     }
 
     fn envelope_list(
         &mut self,
-        mbox: &str,
+        folder: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
+        let folder = encode_utf7(folder.to_owned());
         let last_seq = self
             .sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?
+            .select(&folder)
+            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?
             .exists as usize;
         debug!("last sequence number: {:?}", last_seq);
         if last_seq == 0 {
@@ -415,16 +413,17 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
 
     fn envelope_search(
         &mut self,
-        mbox: &str,
+        folder: &str,
         query: &str,
         sort: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
+        let folder = encode_utf7(folder.to_owned());
         let last_seq = self
             .sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?
+            .select(&folder)
+            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?
             .exists;
         debug!("last sequence number: {:?}", last_seq);
         if last_seq == 0 {
@@ -436,7 +435,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let seqs: Vec<String> = if sort.is_empty() {
             self.sess()?
                 .search(query)
-                .map_err(|err| Error::SearchMsgsError(err, mbox.to_owned(), query.to_owned()))?
+                .map_err(|err| Error::SearchMsgsError(err, folder.to_owned(), query.to_owned()))?
                 .iter()
                 .map(|seq| seq.to_string())
                 .collect()
@@ -444,7 +443,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
             let sort: envelope::imap::SortCriteria = sort.try_into()?;
             self.sess()?
                 .sort(&sort, imap::extensions::sort::SortCharset::Utf8, query)
-                .map_err(|err| Error::SortMsgsError(err, mbox.to_owned(), query.to_owned()))?
+                .map_err(|err| Error::SortMsgsError(err, folder.to_owned(), query.to_owned()))?
                 .iter()
                 .map(|seq| seq.to_string())
                 .collect()
@@ -463,25 +462,27 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(envelopes)
     }
 
-    fn email_add(&mut self, mbox: &str, msg: &[u8], flags: &str) -> backend::Result<String> {
+    fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> backend::Result<String> {
+        let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
         self.sess()?
-            .append(mbox, msg)
+            .append(&folder, msg)
             .flags(flag::imap::into_raws(&flags))
             .finish()
-            .map_err(|err| Error::AppendMsgError(err, mbox.to_owned()))?;
+            .map_err(|err| Error::AppendMsgError(err, folder.to_owned()))?;
         let last_seq = self
             .sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?
+            .select(&folder)
+            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?
             .exists;
         Ok(last_seq.to_string())
     }
 
-    fn email_get(&mut self, mbox: &str, seq: &str) -> backend::Result<Email> {
+    fn email_get(&mut self, folder: &str, seq: &str) -> backend::Result<Email> {
+        let folder = encode_utf7(folder.to_owned());
         self.sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
+            .select(&folder)
+            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
         let fetches = self
             .sess()?
             .fetch(seq, "(FLAGS INTERNALDATE BODY[])")
@@ -499,53 +500,56 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(msg)
     }
 
-    fn email_copy(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> backend::Result<()> {
-        let msg = self.email_get(&mbox_src, seq)?.raw;
-        self.email_add(&mbox_dst, &msg, "seen")?;
+    fn email_copy(&mut self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
+        let email = self.email_get(folder, seq)?.raw;
+        self.email_add(folder_target, &email, "seen")?;
         Ok(())
     }
 
-    fn email_move(&mut self, mbox_src: &str, mbox_dst: &str, seq: &str) -> backend::Result<()> {
-        let msg = self.email_get(mbox_src, seq)?.raw;
-        self.flags_add(mbox_src, seq, "seen deleted")?;
-        self.email_add(&mbox_dst, &msg, "seen")?;
+    fn email_move(&mut self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
+        let msg = self.email_get(folder, seq)?.raw;
+        self.flags_add(folder, seq, "seen deleted")?;
+        self.email_add(folder_target, &msg, "seen")?;
         Ok(())
     }
 
-    fn email_delete(&mut self, mbox: &str, seq: &str) -> backend::Result<()> {
-        self.flags_add(mbox, seq, "deleted")
+    fn email_delete(&mut self, folder: &str, seq: &str) -> backend::Result<()> {
+        self.flags_add(folder, seq, "deleted")
     }
 
-    fn flags_add(&mut self, mbox: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+    fn flags_add(&mut self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+        let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
         self.sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
+            .select(&folder)
+            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
         self.sess()?
             .store(seq_range, format!("+FLAGS ({})", flags))
             .map_err(|err| Error::AddFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
         self.sess()?
             .expunge()
-            .map_err(|err| Error::ExpungeError(err, mbox.to_owned()))?;
+            .map_err(|err| Error::ExpungeError(err, folder.to_owned()))?;
         Ok(())
     }
 
-    fn flags_set(&mut self, mbox: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+    fn flags_set(&mut self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+        let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
         self.sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
+            .select(&folder)
+            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
         self.sess()?
             .store(seq_range, format!("FLAGS ({})", flags))
             .map_err(|err| Error::SetFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
         Ok(())
     }
 
-    fn flags_delete(&mut self, mbox: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+    fn flags_delete(&mut self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+        let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
         self.sess()?
-            .select(mbox)
-            .map_err(|err| Error::SelectMboxError(err, mbox.to_owned()))?;
+            .select(&folder)
+            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
         self.sess()?
             .store(seq_range, format!("-FLAGS ({})", flags))
             .map_err(|err| Error::DelFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
@@ -553,8 +557,6 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
     }
 
     fn disconnect(&mut self) -> backend::Result<()> {
-        trace!(">> imap logout");
-
         if let Some(ref mut sess) = self.sess {
             debug!("logout from imap server");
             sess.logout().map_err(Error::LogoutError)?;
@@ -562,7 +564,6 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
             debug!("no session found");
         }
 
-        trace!("<< imap logout");
         Ok(())
     }
 
