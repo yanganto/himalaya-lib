@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * Added pipe support for `(imap|smtp)-passwd-cmd` [github#373].
-* Add `imap-ssl` and `smtp-ssl` options to be able to disable
+* Added `imap-ssl` and `smtp-ssl` options to be able to disable
   encryption [github#347].
+* Implemented sendmail sender [github#351].
 
 ### Fixed
 
@@ -85,5 +86,6 @@ repository.
 
 [github#254]: https://github.com/soywod/himalaya/issues/254
 [github#347]: https://github.com/soywod/himalaya/issues/347
+[github#351]: https://github.com/soywod/himalaya/issues/351
 [github#373]: https://github.com/soywod/himalaya/issues/373
 [github#380]: https://github.com/soywod/himalaya/issues/380

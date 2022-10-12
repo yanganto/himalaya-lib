@@ -39,14 +39,16 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub struct Smtp<'a> {
-    config: &'a SmtpConfig,
+    account_config: &'a AccountConfig,
+    smtp_config: &'a SmtpConfig,
     transport: Option<SmtpTransport>,
 }
 
 impl<'a> Smtp<'a> {
-    pub fn new(config: &'a SmtpConfig) -> Self {
+    pub fn new(account_config: &'a AccountConfig, smtp_config: &'a SmtpConfig) -> Self {
         Self {
-            config,
+            account_config,
+            smtp_config,
             transport: None,
         }
     }
@@ -55,32 +57,32 @@ impl<'a> Smtp<'a> {
         if let Some(ref transport) = self.transport {
             Ok(transport)
         } else {
-            let builder = if self.config.ssl() {
-                let tls = TlsParameters::builder(self.config.host.to_owned())
-                    .dangerous_accept_invalid_hostnames(self.config.insecure())
-                    .dangerous_accept_invalid_certs(self.config.insecure())
+            let builder = if self.smtp_config.ssl() {
+                let tls = TlsParameters::builder(self.smtp_config.host.to_owned())
+                    .dangerous_accept_invalid_hostnames(self.smtp_config.insecure())
+                    .dangerous_accept_invalid_certs(self.smtp_config.insecure())
                     .build()
                     .map_err(Error::BuildTlsParamsError)?;
 
-                if self.config.starttls() {
-                    SmtpTransport::starttls_relay(&self.config.host)
+                if self.smtp_config.starttls() {
+                    SmtpTransport::starttls_relay(&self.smtp_config.host)
                         .map_err(Error::BuildTransportRelayError)?
                         .tls(Tls::Required(tls))
                 } else {
-                    SmtpTransport::relay(&self.config.host)
+                    SmtpTransport::relay(&self.smtp_config.host)
                         .map_err(Error::BuildTransportRelayError)?
                         .tls(Tls::Wrapper(tls))
                 }
             } else {
-                SmtpTransport::relay(&self.config.host)
+                SmtpTransport::relay(&self.smtp_config.host)
                     .map_err(Error::BuildTransportRelayError)?
                     .tls(Tls::None)
             };
 
             self.transport = Some(
                 builder
-                    .port(self.config.port)
-                    .credentials(self.config.credentials()?)
+                    .port(self.smtp_config.port)
+                    .credentials(self.smtp_config.credentials()?)
                     .build(),
             );
 
@@ -90,22 +92,23 @@ impl<'a> Smtp<'a> {
 }
 
 impl<'a> Sender for Smtp<'a> {
-    fn send(&mut self, config: &AccountConfig, msg: &Email) -> sender::Result<Vec<u8>> {
-        let raw_msg = msg.into_sendable_msg(config)?.formatted();
+    fn send(&mut self, email: &Email) -> sender::Result<Vec<u8>> {
+        let raw_email = email.into_sendable_msg(self.account_config)?.formatted();
 
         let envelope: lettre::address::Envelope = if let Some(cmd) =
-            config.email_hooks.pre_send.as_deref()
+            self.account_config.email_hooks.pre_send.as_deref()
         {
-            let raw_msg = process::run(cmd, &raw_msg).map_err(Error::ExecutePreSendHookError)?;
-            let parsed_mail = mailparse::parse_mail(&raw_msg).map_err(Error::ParseEmailError)?;
-            Email::from_parsed_mail(parsed_mail, config)?.try_into()
+            let raw_email =
+                process::run(cmd, &raw_email).map_err(Error::ExecutePreSendHookError)?;
+            let parsed_mail = mailparse::parse_mail(&raw_email).map_err(Error::ParseEmailError)?;
+            Email::from_parsed_mail(parsed_mail, self.account_config)?.try_into()
         } else {
-            msg.try_into()
+            email.try_into()
         }?;
 
         self.transport()?
-            .send_raw(&envelope, &raw_msg)
+            .send_raw(&envelope, &raw_email)
             .map_err(Error::SendError)?;
-        Ok(raw_msg)
+        Ok(raw_email)
     }
 }

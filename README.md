@@ -61,7 +61,7 @@ clients built by the community:
   [Maildir](https://en.wikipedia.org/wiki/Maildir) and
   [Notmuch](https://notmuchmail.org/) backends
 - [SMTP](https://en.wikipedia.org/wiki/Simple_Mail_Transfer_Protocol)
-  and custom system commands senders
+  and [Sendmail](https://en.wikipedia.org/wiki/Sendmail) senders
 - List, add and delete folders (mailboxes)
 - List and search envelopes
 - Get, add, copy, move and delete emails

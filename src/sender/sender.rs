@@ -5,15 +5,13 @@
 use std::result;
 use thiserror::Error;
 
-use crate::{account, email, AccountConfig, Email, EmailSender};
+use crate::{account, email, sendmail, AccountConfig, Email, EmailSender, Sendmail};
 
 #[cfg(feature = "smtp-sender")]
 use crate::{smtp, Smtp};
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("cannot build email sender: external email sender not implemented yet")]
-    BuildExternalEmailSenderUnimplementedError,
     #[error("cannot build email sender: sender is not defined")]
     BuildEmailSenderMissingError,
 
@@ -24,12 +22,14 @@ pub enum Error {
     #[cfg(feature = "smtp-sender")]
     #[error(transparent)]
     SmtpError(#[from] smtp::Error),
+    #[error(transparent)]
+    SendmailError(#[from] sendmail::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Sender {
-    fn send(&mut self, config: &AccountConfig, msg: &Email) -> Result<Vec<u8>>;
+    fn send(&mut self, email: &Email) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -38,8 +38,10 @@ pub struct SenderBuilder;
 impl<'a> SenderBuilder {
     pub fn build(account_config: &'a AccountConfig) -> Result<Box<dyn Sender + 'a>> {
         match &account_config.email_sender {
-            EmailSender::Smtp(config) => Ok(Box::new(Smtp::new(config))),
-            EmailSender::Sendmail(_cmd) => Err(Error::BuildExternalEmailSenderUnimplementedError),
+            EmailSender::Smtp(smtp_config) => Ok(Box::new(Smtp::new(account_config, smtp_config))),
+            EmailSender::Sendmail(sendmail_config) => {
+                Ok(Box::new(Sendmail::new(account_config, sendmail_config)))
+            }
             EmailSender::None => return Err(Error::BuildEmailSenderMissingError),
         }
     }
