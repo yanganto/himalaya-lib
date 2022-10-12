@@ -32,7 +32,7 @@ impl<'a> Sendmail<'a> {
 
 impl<'a> Sender for Sendmail<'a> {
     fn send(&mut self, email: &Email) -> sender::Result<Vec<u8>> {
-        let input = email.into_sendable_msg(self.account_config)?.formatted();
+        let input = email.into_sendable(self.account_config)?.formatted();
         let output = process::run(&self.sendmail_config.cmd, &input).map_err(Error::RunCmdError)?;
         Ok(if output.is_empty() { input } else { output })
     }

@@ -93,7 +93,7 @@ impl<'a> Smtp<'a> {
 
 impl<'a> Sender for Smtp<'a> {
     fn send(&mut self, email: &Email) -> sender::Result<Vec<u8>> {
-        let raw_email = email.into_sendable_msg(self.account_config)?.formatted();
+        let raw_email = email.into_sendable(self.account_config)?.formatted();
 
         let envelope: lettre::address::Envelope = if let Some(cmd) =
             self.account_config.email_hooks.pre_send.as_deref()

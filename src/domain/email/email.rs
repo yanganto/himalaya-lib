@@ -502,7 +502,7 @@ impl Email {
         Self::from_parsed_mail(parsed_mail, &AccountConfig::default())
     }
 
-    pub fn into_sendable_msg(&self, config: &AccountConfig) -> Result<lettre::Message> {
+    pub fn into_sendable(&self, config: &AccountConfig) -> Result<lettre::Message> {
         let mut msg_builder = lettre::Message::builder()
             .message_id(self.message_id.to_owned())
             .subject(self.subject.to_owned());
