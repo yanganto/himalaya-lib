@@ -42,8 +42,9 @@ fn test_smtp_sender() {
     imap.email_delete("INBOX", "1:*").unwrap();
 
     // checking that an email can be sent
-    let email = Email::from_tpl(include_str!("./emails/alice-to-patrick.eml")).unwrap();
-    smtp.send(&email).unwrap();
+    let tpl = include_bytes!("./emails/alice-to-patrick.eml");
+    let email = mailparse::parse_mail(tpl).unwrap();
+    smtp.send(email).unwrap();
 
     thread::sleep(Duration::from_secs(1));
 
