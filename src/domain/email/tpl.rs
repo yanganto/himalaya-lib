@@ -8,7 +8,7 @@ use lettre::{
 };
 use log::warn;
 use mailparse::MailParseError;
-use std::{result, string};
+use std::{ops, result, string};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -23,13 +23,18 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Tpl(pub String);
 
-impl Tpl {
-    pub fn new(tpl: String) -> Self {
-        Self(tpl)
-    }
+impl ops::Deref for Tpl {
+    type Target = String;
 
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Tpl {
     pub fn compile(&self) -> Result<Message> {
         let input = mailparse::parse_mail(self.0.as_bytes()).map_err(Error::ParseTplError)?;
         let mut output = Message::builder();

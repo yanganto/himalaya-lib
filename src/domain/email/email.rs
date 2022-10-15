@@ -2,12 +2,13 @@ use chrono::{DateTime, Local, TimeZone, Utc};
 use convert_case::{Case, Casing};
 use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
 use log::{info, trace, warn};
+use mailparse::ParsedMail;
 use std::{
     collections::HashMap,
     convert::TryInto,
     env::{self, temp_dir},
     fmt::Debug,
-    fs, io,
+    fs, io, ops,
     path::PathBuf,
     result,
 };
@@ -682,6 +683,111 @@ impl TryInto<lettre::address::Envelope> for &Email {
             .map(from_addrs_to_sendable_addrs)
             .unwrap_or(Ok(vec![]))?;
         Ok(lettre::address::Envelope::new(from, to).map_err(Error::BuildEnvelopeError)?)
+    }
+}
+
+#[derive(Debug)]
+pub struct Email2<'a>(ParsedMail<'a>);
+
+impl<'a> ops::Deref for Email2<'a> {
+    type Target = ParsedMail<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> ops::DerefMut for Email2<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug)]
+pub struct EmailIterator<'a> {
+    pub index: usize,
+    pub parts: Vec<&'a ParsedMail<'a>>,
+}
+
+impl<'a> EmailIterator<'a> {
+    pub fn new(part: &'a ParsedMail<'a>) -> Self {
+        Self {
+            index: 0,
+            parts: vec![part],
+        }
+    }
+}
+
+impl<'a> Iterator for EmailIterator<'a> {
+    type Item = &'a ParsedMail<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let index = self.index;
+        if index < self.parts.len() {
+            for part in &self.parts[index].subparts {
+                self.parts.push(part)
+            }
+            self.index += 1;
+            Some(self.parts[index])
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod email_iterator_tests {
+    use lettre::{
+        message::{MultiPart, SinglePart},
+        Message,
+    };
+    use mailparse::MailHeaderMap;
+
+    use crate::EmailIterator;
+
+    #[test]
+    fn test_one_part_no_subpart() {
+        let email = Message::builder()
+            .from("from@localhost".parse().unwrap())
+            .to("to@localhost".parse().unwrap())
+            .singlepart(SinglePart::plain(String::new()))
+            .unwrap()
+            .formatted();
+        let email = mailparse::parse_mail(&email).unwrap();
+
+        let parts = EmailIterator::new(&email).into_iter().collect::<Vec<_>>();
+
+        assert_eq!(1, parts.len());
+        assert!(parts[0]
+            .get_headers()
+            .get_first_value("Content-Type")
+            .unwrap()
+            .starts_with("text/plain"));
+    }
+
+    #[test]
+    fn test_one_part_one_subpart() {
+        let email = Message::builder()
+            .from("from@localhost".parse().unwrap())
+            .to("to@localhost".parse().unwrap())
+            .multipart(MultiPart::mixed().singlepart(SinglePart::plain(String::new())))
+            .unwrap()
+            .formatted();
+        let email = mailparse::parse_mail(&email).unwrap();
+
+        let parts = EmailIterator::new(&email).into_iter().collect::<Vec<_>>();
+
+        assert_eq!(2, parts.len());
+        assert!(parts[0]
+            .get_headers()
+            .get_first_value("Content-Type")
+            .unwrap()
+            .starts_with("multipart/mixed"));
+        assert!(parts[1]
+            .get_headers()
+            .get_first_value("Content-Type")
+            .unwrap()
+            .starts_with("text/plain"));
     }
 }
 
