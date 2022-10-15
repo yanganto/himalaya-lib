@@ -12,7 +12,7 @@ mod addr;
 pub use addr::*;
 
 mod tpl;
-pub use tpl::{compile, TplOverride};
+pub use tpl::{Tpl, TplOverride};
 
 mod email;
 pub use email::*;

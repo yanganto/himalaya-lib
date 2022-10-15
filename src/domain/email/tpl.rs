@@ -23,62 +23,70 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub fn compile(tpl: &[u8]) -> Result<Message> {
-    let input = mailparse::parse_mail(tpl).map_err(Error::ParseTplError)?;
-    let mut output = Message::builder();
+pub struct Tpl(pub String);
 
-    for header in input.get_headers() {
-        output = match header.get_key().to_lowercase().as_str() {
-            "message-id" => output.message_id(Some(header.get_value())),
-            "in-reply-to" => output.in_reply_to(header.get_value()),
-            "subject" => output.subject(header.get_value()),
-            "from" => {
-                if let Ok(header) = header.get_value().parse() {
-                    output.from(header)
-                } else {
-                    warn!("cannot parse header From: {}", header.get_value());
-                    output
-                }
-            }
-            "to" => {
-                if let Ok(header) = header.get_value().parse() {
-                    output.to(header)
-                } else {
-                    warn!("cannot parse header To: {}", header.get_value());
-                    output
-                }
-            }
-            "reply-to" => {
-                if let Ok(header) = header.get_value().parse() {
-                    output.reply_to(header)
-                } else {
-                    warn!("cannot parse header Reply-To: {}", header.get_value());
-                    output
-                }
-            }
-            "cc" => {
-                if let Ok(header) = header.get_value().parse() {
-                    output.cc(header)
-                } else {
-                    warn!("cannot parse header Cc: {}", header.get_value());
-                    output
-                }
-            }
-            "bcc" => {
-                if let Ok(header) = header.get_value().parse() {
-                    output.bcc(header)
-                } else {
-                    warn!("cannot parse header Bcc: {}", header.get_value());
-                    output
-                }
-            }
-            _ => output,
-        };
+impl Tpl {
+    pub fn new(tpl: String) -> Self {
+        Self(tpl)
     }
 
-    output
-        .singlepart(SinglePart::plain(input.get_body().unwrap_or_default()))
-        .map_err(Error::CompileTplError)
+    pub fn compile(&self) -> Result<Message> {
+        let input = mailparse::parse_mail(self.0.as_bytes()).map_err(Error::ParseTplError)?;
+        let mut output = Message::builder();
+
+        for header in input.get_headers() {
+            output = match header.get_key().to_lowercase().as_str() {
+                "message-id" => output.message_id(Some(header.get_value())),
+                "in-reply-to" => output.in_reply_to(header.get_value()),
+                "subject" => output.subject(header.get_value()),
+                "from" => {
+                    if let Ok(header) = header.get_value().parse() {
+                        output.from(header)
+                    } else {
+                        warn!("cannot parse header From: {}", header.get_value());
+                        output
+                    }
+                }
+                "to" => {
+                    if let Ok(header) = header.get_value().parse() {
+                        output.to(header)
+                    } else {
+                        warn!("cannot parse header To: {}", header.get_value());
+                        output
+                    }
+                }
+                "reply-to" => {
+                    if let Ok(header) = header.get_value().parse() {
+                        output.reply_to(header)
+                    } else {
+                        warn!("cannot parse header Reply-To: {}", header.get_value());
+                        output
+                    }
+                }
+                "cc" => {
+                    if let Ok(header) = header.get_value().parse() {
+                        output.cc(header)
+                    } else {
+                        warn!("cannot parse header Cc: {}", header.get_value());
+                        output
+                    }
+                }
+                "bcc" => {
+                    if let Ok(header) = header.get_value().parse() {
+                        output.bcc(header)
+                    } else {
+                        warn!("cannot parse header Bcc: {}", header.get_value());
+                        output
+                    }
+                }
+                _ => output,
+            };
+        }
+
+        output
+            .singlepart(SinglePart::plain(input.get_body().unwrap_or_default()))
+            .map_err(Error::CompileTplError)
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]

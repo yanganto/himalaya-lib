@@ -2,7 +2,6 @@
 //!
 //! This module contains the sender interface.
 
-use mailparse::ParsedMail;
 use std::result;
 use thiserror::Error;
 
@@ -30,7 +29,7 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Sender {
-    fn send(&mut self, email: ParsedMail<'_>) -> Result<()>;
+    fn send(&mut self, email: &[u8]) -> Result<()>;
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]

@@ -3,7 +3,7 @@
 //! This module contains the representation of the sendmail email
 //! sender.
 
-use mailparse::{MailParseError, ParsedMail};
+use mailparse::MailParseError;
 use std::result;
 use thiserror::Error;
 
@@ -36,14 +36,13 @@ impl<'a> Sendmail<'a> {
 }
 
 impl<'a> Sender for Sendmail<'a> {
-    fn send(&mut self, email: ParsedMail<'_>) -> sender::Result<()> {
-        let mut email = email;
-        let email_processed;
+    fn send(&mut self, email: &[u8]) -> sender::Result<()> {
+        let mut email = mailparse::parse_mail(&email).map_err(Error::ParseEmailError)?;
+        let buffer;
 
         if let Some(cmd) = self.account_config.email_hooks.pre_send.as_deref() {
-            email_processed =
-                process::run(cmd, email.raw_bytes).map_err(Error::ExecutePreSendHookError)?;
-            email = mailparse::parse_mail(&email_processed).map_err(Error::ParseEmailError)?;
+            buffer = process::run(cmd, email.raw_bytes).map_err(Error::ExecutePreSendHookError)?;
+            email = mailparse::parse_mail(&buffer).map_err(Error::ParseEmailError)?;
         };
 
         process::run(&self.sendmail_config.cmd, email.raw_bytes).map_err(Error::RunCmdError)?;
