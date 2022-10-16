@@ -2,7 +2,10 @@
 //!
 //! This module contains the definition of the IMAP backend.
 
-use imap::{extensions::idle::SetReadTimeout, types::NameAttribute};
+use imap::{
+    extensions::idle::SetReadTimeout,
+    types::{Fetch, NameAttribute, ZeroCopy},
+};
 use log::{debug, log_enabled, trace, Level};
 use native_tls::{TlsConnector, TlsStream};
 use std::{
@@ -17,8 +20,8 @@ use thiserror::Error;
 use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
 
 use crate::{
-    account, backend, email, envelope, flag, process, AccountConfig, Backend, Email, Envelopes,
-    Flags, Folder, Folders, ImapConfig,
+    account, backend, email, envelope, flag, process, AccountConfig, Backend, Email, EmailWrapper,
+    Envelopes, Flags, Folder, Folders, ImapConfig,
 };
 
 #[derive(Error, Debug)]
@@ -72,7 +75,7 @@ pub enum Error {
     #[error("cannot delete mailbox {1}")]
     DeleteMboxError(#[source] imap::Error, String),
     #[error("cannot select mailbox {1}")]
-    SelectMboxError(#[source] imap::Error, String),
+    SelectFolderError(#[source] imap::Error, String),
     #[error("cannot fetch messages within range {1}")]
     FetchMsgsByRangeError(#[source] imap::Error, String),
     #[error("cannot fetch messages by sequence {1}")]
@@ -149,6 +152,7 @@ pub struct ImapBackend<'a> {
     account_config: &'a AccountConfig,
     imap_config: &'a ImapConfig,
     sess: Option<ImapSession>,
+    fetches: Option<ZeroCopy<Vec<Fetch>>>,
 }
 
 impl<'a> ImapBackend<'a> {
@@ -157,6 +161,7 @@ impl<'a> ImapBackend<'a> {
             account_config,
             imap_config,
             sess: None,
+            fetches: None,
         }
     }
 
@@ -323,6 +328,8 @@ impl<'a> ImapBackend<'a> {
 }
 
 impl<'a> Backend<'a> for ImapBackend<'a> {
+    // Old API
+
     fn folder_add(&mut self, folder: &str) -> backend::Result<()> {
         let folder = encode_utf7(folder.to_owned());
 
@@ -385,7 +392,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let last_seq = self
             .sess()?
             .select(&folder)
-            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
             .exists as usize;
         debug!("last sequence number: {:?}", last_seq);
         if last_seq == 0 {
@@ -423,7 +430,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let last_seq = self
             .sess()?
             .select(&folder)
-            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
             .exists;
         debug!("last sequence number: {:?}", last_seq);
         if last_seq == 0 {
@@ -473,7 +480,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let last_seq = self
             .sess()?
             .select(&folder)
-            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
             .exists;
         Ok(last_seq.to_string())
     }
@@ -482,7 +489,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let folder = encode_utf7(folder.to_owned());
         self.sess()?
             .select(&folder)
-            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
         let fetches = self
             .sess()?
             .fetch(seq, "(FLAGS INTERNALDATE BODY[])")
@@ -522,7 +529,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(&folder)
-            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
         self.sess()?
             .store(seq_range, format!("+FLAGS ({})", flags))
             .map_err(|err| Error::AddFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
@@ -537,7 +544,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(&folder)
-            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
         self.sess()?
             .store(seq_range, format!("FLAGS ({})", flags))
             .map_err(|err| Error::SetFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
@@ -549,7 +556,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let flags: Flags = flags.into();
         self.sess()?
             .select(&folder)
-            .map_err(|err| Error::SelectMboxError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
         self.sess()?
             .store(seq_range, format!("-FLAGS ({})", flags))
             .map_err(|err| Error::DelFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
@@ -565,6 +572,38 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         }
 
         Ok(())
+    }
+
+    // New API
+
+    fn get_email(&mut self, folder: &str, seq: &str) -> backend::Result<EmailWrapper> {
+        debug!("folder: {:?}", folder);
+        debug!("seq: {:?}", seq);
+
+        let folder = encode_utf7(folder.to_owned());
+        debug!("utf7 decoded folder: {:?}", folder);
+
+        self.sess()?
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+
+        self.fetches = Some(
+            self.sess()?
+                .fetch(seq, "BODY[]")
+                .map_err(|err| Error::FetchMsgsBySeqError(err, seq.to_owned()))?,
+        );
+
+        let email = self
+            .fetches
+            .as_mut()
+            .and_then(|fetches| fetches.first())
+            .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?
+            .body()
+            .unwrap_or_default()
+            .try_into()?;
+        trace!("email: {:?}", email);
+
+        Ok(email)
     }
 
     fn as_any(&self) -> &(dyn Any + 'a) {

@@ -7,7 +7,8 @@ use std::{any::Any, result};
 use thiserror::Error;
 
 use crate::{
-    account, backend, email, id_mapper, AccountConfig, BackendConfig, Email, Envelopes, Folders,
+    account, backend, email, id_mapper, AccountConfig, BackendConfig, Email, EmailWrapper,
+    Envelopes, Folders,
 };
 
 #[cfg(feature = "imap-backend")]
@@ -45,17 +46,17 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Backend<'a> {
+    // Old API
+
     fn connect(&mut self) -> Result<()> {
         Ok(())
     }
     fn disconnect(&mut self) -> Result<()> {
         Ok(())
     }
-
     fn folder_add(&mut self, folder: &str) -> Result<()>;
     fn folder_list(&mut self) -> Result<Folders>;
     fn folder_delete(&mut self, folder: &str) -> Result<()>;
-
     fn envelope_list(&mut self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn envelope_search(
         &mut self,
@@ -65,16 +66,18 @@ pub trait Backend<'a> {
         page_size: usize,
         page: usize,
     ) -> Result<Envelopes>;
-
     fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> Result<String>;
     fn email_get(&mut self, folder: &str, id: &str) -> Result<Email>;
     fn email_copy(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
     fn email_move(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
     fn email_delete(&mut self, folder: &str, ids: &str) -> Result<()>;
-
     fn flags_add(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
     fn flags_set(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
     fn flags_delete(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+
+    // New API
+
+    fn get_email(&mut self, folder: &str, id: &str) -> Result<EmailWrapper>;
 
     fn as_any(&self) -> &(dyn Any + 'a);
 }

@@ -4,7 +4,8 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, envelope::notmuch::envelopes, id_mapper, AccountConfig, Backend,
-    Email, Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig, NotmuchConfig,
+    Email, EmailWrapper, Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig,
+    NotmuchConfig,
 };
 
 #[derive(Debug, Error)]
@@ -151,6 +152,8 @@ impl<'a> NotmuchBackend<'a> {
 }
 
 impl<'a> Backend<'a> for NotmuchBackend<'a> {
+    // Old API
+
     fn folder_add(&mut self, _mbox: &str) -> backend::Result<()> {
         Err(Error::AddMboxUnimplementedError)?
     }
@@ -424,6 +427,32 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
 
         info!("<< delete notmuch message flags");
         Ok(())
+    }
+
+    // New API
+
+    fn get_email(&mut self, _: &str, short_hash: &str) -> backend::Result<EmailWrapper> {
+        debug!("short hash: {:?}", short_hash);
+
+        let dir = &self.notmuch_config.db_path;
+        let id = IdMapper::new(dir)?.find(short_hash)?;
+        debug!("id: {:?}", id);
+
+        let email_filepath = self
+            .db
+            .find_message(&id)
+            .map_err(Error::FindMsgError)?
+            .ok_or_else(|| Error::FindMsgEmptyError)?
+            .filename()
+            .to_owned();
+        debug!("email filepath: {:?}", email_filepath);
+
+        let email = fs::read(&email_filepath)
+            .map_err(Error::ReadMsgError)?
+            .into();
+        trace!("email: {:?}", email);
+
+        Ok(email)
     }
 
     fn as_any(&self) -> &(dyn Any + 'a) {

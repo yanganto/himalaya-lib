@@ -4,11 +4,12 @@ use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
 use log::{info, trace, warn};
 use mailparse::ParsedMail;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     convert::TryInto,
     env::{self, temp_dir},
     fmt::Debug,
-    fs, io, ops,
+    fs, io,
     path::PathBuf,
     result,
 };
@@ -44,6 +45,8 @@ pub enum Error {
     GetAttachmentFilenameError(PathBuf),
     #[error("cannot parse recipient")]
     ParseRecipientError,
+    #[error("cannot parse email from raw data")]
+    ParseRawEmailError(#[source] mailparse::MailParseError),
 
     #[error("cannot parse message or address")]
     ParseAddressError(#[from] lettre::address::AddressError),
@@ -686,52 +689,84 @@ impl TryInto<lettre::address::Envelope> for &Email {
     }
 }
 
-#[derive(Debug)]
-pub struct Email2<'a>(ParsedMail<'a>);
+#[derive(Debug, Default)]
+pub struct EmailWrapper<'a> {
+    bytes: Cow<'a, [u8]>,
+    parsed: Option<ParsedMail<'a>>,
+}
 
-impl<'a> ops::Deref for Email2<'a> {
-    type Target = ParsedMail<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl<'a> EmailWrapper<'a> {
+    pub fn parsed(&'a mut self) -> Result<&ParsedMail<'a>> {
+        match self.parsed {
+            Some(ref parsed) => Ok(parsed),
+            None => {
+                self.parsed =
+                    Some(mailparse::parse_mail(&self.bytes).map_err(Error::ParseRawEmailError)?);
+                Ok(self.parsed.as_ref().unwrap())
+            }
+        }
     }
 }
 
-impl<'a> ops::DerefMut for Email2<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+impl<'a> From<Vec<u8>> for EmailWrapper<'a> {
+    fn from(bytes: Vec<u8>) -> EmailWrapper<'a> {
+        EmailWrapper {
+            bytes: Cow::Owned(bytes),
+            parsed: None,
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a [u8]> for EmailWrapper<'a> {
+    type Error = Error;
+
+    fn try_from(bytes: &'a [u8]) -> Result<EmailWrapper<'a>> {
+        Ok(EmailWrapper {
+            bytes: Cow::Borrowed(bytes),
+            parsed: Some(mailparse::parse_mail(&bytes).map_err(Error::ParseRawEmailError)?),
+        })
+    }
+}
+
+impl<'a> From<ParsedMail<'a>> for EmailWrapper<'a> {
+    fn from(parsed: ParsedMail<'a>) -> Self {
+        Self {
+            bytes: Cow::Borrowed(parsed.raw_bytes),
+            parsed: Some(parsed),
+        }
     }
 }
 
 #[derive(Debug)]
-pub struct EmailIterator<'a> {
-    pub index: usize,
+pub struct EmailPartsIterator<'a> {
+    pub pos: usize,
     pub parts: Vec<&'a ParsedMail<'a>>,
 }
 
-impl<'a> EmailIterator<'a> {
+impl<'a> EmailPartsIterator<'a> {
     pub fn new(part: &'a ParsedMail<'a>) -> Self {
         Self {
-            index: 0,
+            pos: 0,
             parts: vec![part],
         }
     }
 }
 
-impl<'a> Iterator for EmailIterator<'a> {
+impl<'a> Iterator for EmailPartsIterator<'a> {
     type Item = &'a ParsedMail<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let index = self.index;
-        if index < self.parts.len() {
-            for part in &self.parts[index].subparts {
-                self.parts.push(part)
-            }
-            self.index += 1;
-            Some(self.parts[index])
-        } else {
-            None
+        if self.pos >= self.parts.len() {
+            return None;
         }
+
+        for part in &self.parts[self.pos].subparts {
+            self.parts.push(part)
+        }
+
+        let item = self.parts[self.pos];
+        self.pos += 1;
+        Some(item)
     }
 }
 
@@ -743,7 +778,7 @@ mod email_iterator_tests {
     };
     use mailparse::MailHeaderMap;
 
-    use crate::EmailIterator;
+    use crate::EmailPartsIterator;
 
     #[test]
     fn test_one_part_no_subpart() {
@@ -755,7 +790,9 @@ mod email_iterator_tests {
             .formatted();
         let email = mailparse::parse_mail(&email).unwrap();
 
-        let parts = EmailIterator::new(&email).into_iter().collect::<Vec<_>>();
+        let parts = EmailPartsIterator::new(&email)
+            .into_iter()
+            .collect::<Vec<_>>();
 
         assert_eq!(1, parts.len());
         assert!(parts[0]
@@ -775,7 +812,9 @@ mod email_iterator_tests {
             .formatted();
         let email = mailparse::parse_mail(&email).unwrap();
 
-        let parts = EmailIterator::new(&email).into_iter().collect::<Vec<_>>();
+        let parts = EmailPartsIterator::new(&email)
+            .into_iter()
+            .collect::<Vec<_>>();
 
         assert_eq!(2, parts.len());
         assert!(parts[0]

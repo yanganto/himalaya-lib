@@ -4,6 +4,7 @@
 //! traits implementation.
 
 use log::{debug, info, trace};
+use maildir::MailEntry;
 use std::{
     any::Any,
     env,
@@ -16,8 +17,8 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper,
-    AccountConfig, Backend, Email, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
-    DEFAULT_INBOX_FOLDER,
+    AccountConfig, Backend, Email, EmailWrapper, Envelopes, Flags, Folder, Folders, IdMapper,
+    MaildirConfig, DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
@@ -81,6 +82,7 @@ pub type Result<T> = result::Result<T, Error>;
 pub struct MaildirBackend<'a> {
     account_config: &'a AccountConfig,
     mdir: maildir::Maildir,
+    mail_entry: Option<MailEntry>,
 }
 
 impl<'a> MaildirBackend<'a> {
@@ -88,6 +90,7 @@ impl<'a> MaildirBackend<'a> {
         Self {
             account_config,
             mdir: backend_config.root_dir.to_owned().into(),
+            mail_entry: None,
         }
     }
 
@@ -138,6 +141,8 @@ impl<'a> MaildirBackend<'a> {
 }
 
 impl<'a> Backend<'a> for MaildirBackend<'a> {
+    // Old API
+
     fn folder_add(&mut self, subdir: &str) -> backend::Result<()> {
         info!(">> add maildir subdir");
         debug!("subdir: {:?}", subdir);
@@ -427,6 +432,33 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
 
         info!("<< delete maildir message flags");
         Ok(())
+    }
+
+    // New API
+
+    fn get_email(&mut self, dir: &str, short_hash: &str) -> backend::Result<EmailWrapper> {
+        debug!("dir: {:?}", dir);
+        debug!("short hash: {:?}", short_hash);
+
+        let mdir = self.get_mdir_from_dir(dir)?;
+        let id = IdMapper::new(mdir.path())?.find(short_hash)?;
+        debug!("id: {:?}", id);
+
+        self.mail_entry = Some(
+            mdir.find(&id)
+                .ok_or_else(|| Error::GetMsgError(id.to_owned()))?,
+        );
+
+        let email = self
+            .mail_entry
+            .as_mut()
+            .unwrap()
+            .parsed()
+            .map_err(Error::ParseMsgError)?
+            .into();
+        trace!("email: {:?}", email);
+
+        Ok(email)
     }
 
     fn as_any(&self) -> &(dyn Any + 'a) {
