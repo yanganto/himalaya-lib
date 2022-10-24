@@ -3,6 +3,7 @@
 //! This module contains everything related to the user's
 //! configuration.
 
+use lettre::{address::AddressError, message::Mailbox};
 use mailparse::MailAddr;
 use shellexpand;
 use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf, result};
@@ -35,6 +36,8 @@ pub enum Error {
     ExpandFolderAliasError(#[source] shellexpand::LookupError<env::VarError>, String),
     #[error("cannot parse download file name from {0}")]
     ParseDownloadFileNameError(PathBuf),
+    #[error("cannot parse address from config")]
+    ParseAddressError(#[source] AddressError),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -77,6 +80,14 @@ pub struct AccountConfig {
 }
 
 impl AccountConfig {
+    /// Builds the full RFC822 compliant user address email.
+    pub fn addr(&self) -> Result<Mailbox> {
+        Ok(Mailbox::new(
+            self.display_name.clone(),
+            self.email.parse().map_err(Error::ParseAddressError)?,
+        ))
+    }
+
     /// Builds the full RFC822 compliant user address email.
     pub fn address(&self) -> Result<MailAddr> {
         let display_name = self

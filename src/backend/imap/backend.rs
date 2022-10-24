@@ -20,7 +20,7 @@ use thiserror::Error;
 use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
 
 use crate::{
-    account, backend, email, envelope, flag, process, AccountConfig, Backend, Email, EmailWrapper,
+    account, backend, email, envelope, flag, process, AccountConfig, Backend, Email, EmailParsed,
     Envelopes, Flags, Folder, Folders, ImapConfig,
 };
 
@@ -576,7 +576,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
 
     // New API
 
-    fn get_email(&mut self, folder: &str, seq: &str) -> backend::Result<EmailWrapper> {
+    fn get_email(&'a mut self, folder: &str, seq: &str) -> backend::Result<EmailParsed<'a>> {
         debug!("folder: {:?}", folder);
         debug!("seq: {:?}", seq);
 
@@ -593,14 +593,14 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
                 .map_err(|err| Error::FetchMsgsBySeqError(err, seq.to_owned()))?,
         );
 
-        let email = self
-            .fetches
-            .as_mut()
-            .and_then(|fetches| fetches.first())
-            .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?
-            .body()
-            .unwrap_or_default()
-            .try_into()?;
+        let email = EmailParsed::from(
+            self.fetches
+                .as_mut()
+                .and_then(|fetches| fetches.first())
+                .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?
+                .body()
+                .unwrap_or_default(),
+        );
         trace!("email: {:?}", email);
 
         Ok(email)

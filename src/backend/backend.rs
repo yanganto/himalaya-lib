@@ -7,7 +7,7 @@ use std::{any::Any, result};
 use thiserror::Error;
 
 use crate::{
-    account, backend, email, id_mapper, AccountConfig, BackendConfig, Email, EmailWrapper,
+    account, backend, email, id_mapper, AccountConfig, BackendConfig, Email, EmailParsed,
     Envelopes, Folders,
 };
 
@@ -77,7 +77,7 @@ pub trait Backend<'a> {
 
     // New API
 
-    fn get_email(&mut self, folder: &str, id: &str) -> Result<EmailWrapper>;
+    fn get_email(&'a mut self, folder: &str, id: &str) -> Result<EmailParsed<'a>>;
 
     fn as_any(&self) -> &(dyn Any + 'a);
 }

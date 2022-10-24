@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper,
-    AccountConfig, Backend, Email, EmailWrapper, Envelopes, Flags, Folder, Folders, IdMapper,
+    AccountConfig, Backend, Email, EmailParsed, Envelopes, Flags, Folder, Folders, IdMapper,
     MaildirConfig, DEFAULT_INBOX_FOLDER,
 };
 
@@ -436,7 +436,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
 
     // New API
 
-    fn get_email(&mut self, dir: &str, short_hash: &str) -> backend::Result<EmailWrapper> {
+    fn get_email(&'a mut self, dir: &str, short_hash: &str) -> backend::Result<EmailParsed<'a>> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
 
@@ -449,13 +449,14 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
                 .ok_or_else(|| Error::GetMsgError(id.to_owned()))?,
         );
 
-        let email = self
-            .mail_entry
-            .as_mut()
-            .unwrap()
-            .parsed()
-            .map_err(Error::ParseMsgError)?
-            .into();
+        let email = EmailParsed::from(
+            self.mail_entry
+                .as_mut()
+                .unwrap()
+                .parsed()
+                .map_err(Error::ParseMsgError)?,
+        );
+
         trace!("email: {:?}", email);
 
         Ok(email)

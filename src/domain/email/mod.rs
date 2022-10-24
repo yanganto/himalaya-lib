@@ -6,7 +6,9 @@ pub mod config;
 pub use config::{EmailHooks, EmailSender, EmailTextPlainFormat};
 
 mod parts;
-pub use parts::*;
+pub use parts::{
+    BinaryPart, Part, Parts, PartsIterator, PartsReaderOptions, TextHtmlPart, TextPlainPart,
+};
 
 mod addr;
 pub use addr::*;

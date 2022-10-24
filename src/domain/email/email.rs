@@ -1,10 +1,11 @@
 use chrono::{DateTime, Local, TimeZone, Utc};
 use convert_case::{Case, Casing};
-use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
+use lettre::message::{header::ContentType, Attachment, Mailbox, Mailboxes, MultiPart, SinglePart};
 use log::{info, trace, warn};
-use mailparse::ParsedMail;
+use mailparse::{MailHeaderMap, MailParseError, ParsedMail};
 use std::{
     borrow::Cow,
+    cell::RefCell,
     collections::HashMap,
     convert::TryInto,
     env::{self, temp_dir},
@@ -19,7 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     account, from_addrs_to_sendable_addrs, from_addrs_to_sendable_mbox, from_slice_to_addrs,
-    AccountConfig, Addr, Addrs, BinaryPart, Part, Parts, PartsReaderOptions, TextPlainPart,
+    AccountConfig, Addr, Addrs, BinaryPart, Part, Parts, PartsReaderOptions, TextPlainPart, Tpl,
     TplOverride, DEFAULT_SIGNATURE_DELIM,
 };
 
@@ -47,6 +48,10 @@ pub enum Error {
     ParseRecipientError,
     #[error("cannot parse email from raw data")]
     ParseRawEmailError(#[source] mailparse::MailParseError),
+    #[error("cannot parse email body")]
+    ParseBodyError(#[source] MailParseError),
+    #[error("cannot parse email from raw data")]
+    ParseRawEmailEmptyError,
 
     #[error("cannot parse message or address")]
     ParseAddressError(#[from] lettre::address::AddressError),
@@ -689,144 +694,177 @@ impl TryInto<lettre::address::Envelope> for &Email {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct EmailWrapper<'a> {
+#[derive(Debug)]
+pub struct EmailParsed<'a> {
     bytes: Cow<'a, [u8]>,
-    parsed: Option<ParsedMail<'a>>,
+    parsed: RefCell<Option<ParsedMail<'a>>>,
 }
 
-impl<'a> EmailWrapper<'a> {
-    pub fn parsed(&'a mut self) -> Result<&ParsedMail<'a>> {
-        match self.parsed {
-            Some(ref parsed) => Ok(parsed),
-            None => {
-                self.parsed =
-                    Some(mailparse::parse_mail(&self.bytes).map_err(Error::ParseRawEmailError)?);
-                Ok(self.parsed.as_ref().unwrap())
+impl<'a> EmailParsed<'a> {
+    pub fn parsed(&'a self) -> Result<ParsedMail<'a>> {
+        let mut parsed = self.parsed.borrow_mut();
+        if parsed.is_none() {
+            *parsed = Some(mailparse::parse_mail(&self.bytes).map_err(Error::ParseRawEmailError)?);
+        }
+        Ok(parsed.take().unwrap())
+    }
+
+    pub fn to_reply_tpl(&'a self, config: &AccountConfig, all: bool) -> Result<Tpl> {
+        let parsed = self.parsed()?;
+        let headers = parsed.get_headers();
+        let sender = config.addr()?;
+        let mut tpl = Tpl::default();
+
+        // From
+
+        tpl.add_header("From", &sender.to_string());
+
+        // To
+
+        let mut to = Mailboxes::new();
+        let reply_to = headers.get_all_values("Reply-To");
+        let from = headers.get_all_values("From");
+
+        let mut to_iter = if !reply_to.is_empty() {
+            reply_to.iter()
+        } else {
+            from.iter()
+        };
+
+        if let Some(addr) = to_iter.next() {
+            to.push((*addr).parse()?)
+        }
+
+        if all {
+            for addr in to_iter {
+                to.push((*addr).parse()?);
             }
         }
-    }
-}
 
-impl<'a> From<Vec<u8>> for EmailWrapper<'a> {
-    fn from(bytes: Vec<u8>) -> EmailWrapper<'a> {
-        EmailWrapper {
-            bytes: Cow::Owned(bytes),
-            parsed: None,
+        tpl.add_header("To", &to.to_string());
+
+        // In-Reply-To
+
+        if let Some(ref message_id) = headers.get_first_value("Message-Id") {
+            tpl.add_header("In-Reply-To", message_id);
         }
+
+        // Cc
+
+        if all {
+            let mut cc = Mailboxes::new();
+
+            for addr in headers.get_all_values("Cc") {
+                let addr: Mailbox = addr.parse()?;
+                if addr.email != sender.email {
+                    cc.push(addr);
+                }
+            }
+            tpl.add_header("Cc", cc.to_string());
+        }
+
+        // Subject
+
+        if let Some(ref subject) = headers.get_first_value("Subject") {
+            tpl.add_header("Subject", String::from("Re: ") + subject);
+        }
+
+        // Body
+
+        // let text_bodies = PartsWrapper::new(self).concat_text_plain_bodies();
+        // let plain_content = {
+        //     let date = self
+        //         .date
+        //         .as_ref()
+        //         .map(|date| date.format("%d %b %Y, at %H:%M (%z)").to_string())
+        //         .unwrap_or_else(|| "unknown date".into());
+        //     let sender = self
+        //         .reply_to
+        //         .as_ref()
+        //         .or_else(|| self.from.as_ref())
+        //         .and_then(|addrs| addrs.clone().extract_single_info())
+        //         .map(|addr| addr.display_name.clone().unwrap_or_else(|| addr.addr))
+        //         .unwrap_or_else(|| "unknown sender".into());
+        //     let mut content = format!("\n\nOn {}, {} wrote:\n", date, sender);
+
+        //     let mut glue = "";
+        //     for line in self
+        //         .parts
+        //         .to_readable(PartsReaderOptions::default())
+        //         .trim()
+        //         .lines()
+        //     {
+        //         if line == DEFAULT_SIGNATURE_DELIM {
+        //             break;
+        //         }
+        //         content.push_str(glue);
+        //         content.push('>');
+        //         content.push_str(if line.starts_with('>') { "" } else { " " });
+        //         content.push_str(line);
+        //         glue = "\n";
+        //     }
+
+        //     content
+        // };
+
+        Ok(tpl)
     }
 }
 
-impl<'a> TryFrom<&'a [u8]> for EmailWrapper<'a> {
-    type Error = Error;
-
-    fn try_from(bytes: &'a [u8]) -> Result<EmailWrapper<'a>> {
-        Ok(EmailWrapper {
-            bytes: Cow::Borrowed(bytes),
-            parsed: Some(mailparse::parse_mail(&bytes).map_err(Error::ParseRawEmailError)?),
-        })
-    }
-}
-
-impl<'a> From<ParsedMail<'a>> for EmailWrapper<'a> {
+impl<'a> From<ParsedMail<'a>> for EmailParsed<'a> {
     fn from(parsed: ParsedMail<'a>) -> Self {
         Self {
             bytes: Cow::Borrowed(parsed.raw_bytes),
-            parsed: Some(parsed),
+            parsed: RefCell::new(Some(parsed)),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct EmailPartsIterator<'a> {
-    pub pos: usize,
-    pub parts: Vec<&'a ParsedMail<'a>>,
-}
-
-impl<'a> EmailPartsIterator<'a> {
-    pub fn new(part: &'a ParsedMail<'a>) -> Self {
+impl<'a> From<Vec<u8>> for EmailParsed<'a> {
+    fn from(vec: Vec<u8>) -> Self {
         Self {
-            pos: 0,
-            parts: vec![part],
+            bytes: Cow::Owned(vec),
+            parsed: RefCell::new(None),
         }
     }
 }
 
-impl<'a> Iterator for EmailPartsIterator<'a> {
-    type Item = &'a ParsedMail<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.parts.len() {
-            return None;
+impl<'a> From<&'a [u8]> for EmailParsed<'a> {
+    fn from(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes: Cow::Borrowed(bytes),
+            parsed: RefCell::new(None),
         }
+    }
+}
 
-        for part in &self.parts[self.pos].subparts {
-            self.parts.push(part)
-        }
-
-        let item = self.parts[self.pos];
-        self.pos += 1;
-        Some(item)
+impl<'a> From<&'a str> for EmailParsed<'a> {
+    fn from(str: &'a str) -> Self {
+        str.as_bytes().into()
     }
 }
 
 #[cfg(test)]
-mod email_iterator_tests {
-    use lettre::{
-        message::{MultiPart, SinglePart},
-        Message,
-    };
-    use mailparse::MailHeaderMap;
-
-    use crate::EmailPartsIterator;
+mod email_tests {
+    use crate::{AccountConfig, EmailParsed};
 
     #[test]
-    fn test_one_part_no_subpart() {
-        let email = Message::builder()
-            .from("from@localhost".parse().unwrap())
-            .to("to@localhost".parse().unwrap())
-            .singlepart(SinglePart::plain(String::new()))
-            .unwrap()
-            .formatted();
-        let email = mailparse::parse_mail(&email).unwrap();
+    fn test_to_reply_tpl() {
+        let config = AccountConfig {
+            display_name: Some("Tȯ".into()),
+            email: "to@localhost".into(),
+            ..AccountConfig::default()
+        };
 
-        let parts = EmailPartsIterator::new(&email)
-            .into_iter()
-            .collect::<Vec<_>>();
+        let email = EmailParsed::try_from(
+            "From: from@localhost\nTo: to@localhost\nSubject: subject\n\nHello!",
+        )
+        .unwrap();
 
-        assert_eq!(1, parts.len());
-        assert!(parts[0]
-            .get_headers()
-            .get_first_value("Content-Type")
-            .unwrap()
-            .starts_with("text/plain"));
-    }
-
-    #[test]
-    fn test_one_part_one_subpart() {
-        let email = Message::builder()
-            .from("from@localhost".parse().unwrap())
-            .to("to@localhost".parse().unwrap())
-            .multipart(MultiPart::mixed().singlepart(SinglePart::plain(String::new())))
-            .unwrap()
-            .formatted();
-        let email = mailparse::parse_mail(&email).unwrap();
-
-        let parts = EmailPartsIterator::new(&email)
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        assert_eq!(2, parts.len());
-        assert!(parts[0]
-            .get_headers()
-            .get_first_value("Content-Type")
-            .unwrap()
-            .starts_with("multipart/mixed"));
-        assert!(parts[1]
-            .get_headers()
-            .get_first_value("Content-Type")
-            .unwrap()
-            .starts_with("text/plain"));
+        assert_eq!(
+            "From: Tȯ <to@localhost>\nTo: from@localhost\nSubject: Re: subject\n\nHello!",
+            email.to_reply_tpl(&config, false).unwrap().0
+        );
     }
 }
 

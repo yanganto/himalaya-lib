@@ -8,7 +8,10 @@ use lettre::{
 };
 use log::warn;
 use mailparse::MailParseError;
-use std::{ops, result, string};
+use std::{
+    ops::{Deref, DerefMut},
+    result, string,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -26,7 +29,7 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Tpl(pub String);
 
-impl ops::Deref for Tpl {
+impl Deref for Tpl {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -34,7 +37,21 @@ impl ops::Deref for Tpl {
     }
 }
 
+impl DerefMut for Tpl {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 impl Tpl {
+    pub fn add_header<V: AsRef<str>>(&mut self, header: &str, value: V) -> &mut Self {
+        self.push_str(header);
+        self.push_str(": ");
+        self.push_str(value.as_ref());
+        self.push_str("\n");
+        self
+    }
+
     pub fn compile(&self) -> Result<Message> {
         let input = mailparse::parse_mail(self.0.as_bytes()).map_err(Error::ParseTplError)?;
         let mut output = Message::builder();
