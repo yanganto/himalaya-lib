@@ -2,14 +2,12 @@
 //!
 //! This module contains the definition of the IMAP backend.
 
-use imap::{
-    extensions::idle::SetReadTimeout,
-    types::{Fetch, NameAttribute, ZeroCopy},
-};
+use imap::{extensions::idle::SetReadTimeout, types::NameAttribute};
 use log::{debug, log_enabled, trace, Level};
 use native_tls::{TlsConnector, TlsStream};
 use std::{
     any::Any,
+    cell::RefCell,
     collections::HashSet,
     convert::TryInto,
     io::{self, Read, Write},
@@ -20,12 +18,17 @@ use thiserror::Error;
 use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
 
 use crate::{
-    account, backend, email, envelope, flag, process, AccountConfig, Backend, Email, EmailParsed,
-    Envelopes, Flags, Folder, Folders, ImapConfig,
+    account, backend, email, envelope, flag, process, Backend, Email, Envelopes, Flags, Folder,
+    Folders, ImapConfig,
 };
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("cannet get imap session: session not initialized")]
+    GetSessionNotInitializedError,
+    #[error("cannet get imap fetches: fetches not initialized")]
+    GetFetchesNotInitializedError,
+
     #[error("cannot get imap backend from config")]
     GetBackendFromConfigError,
     #[error("cannot get envelope of message {0}")]
@@ -149,70 +152,48 @@ impl Write for ImapSessionStream {
 type ImapSession = imap::Session<ImapSessionStream>;
 
 pub struct ImapBackend<'a> {
-    account_config: &'a AccountConfig,
     imap_config: &'a ImapConfig,
-    sess: Option<ImapSession>,
-    fetches: Option<ZeroCopy<Vec<Fetch>>>,
+    session: RefCell<ImapSession>,
 }
 
 impl<'a> ImapBackend<'a> {
-    pub fn new(account_config: &'a AccountConfig, imap_config: &'a ImapConfig) -> Self {
-        Self {
-            account_config,
+    pub fn new(imap_config: &'a ImapConfig) -> Result<Self> {
+        let builder = TlsConnector::builder()
+            .danger_accept_invalid_certs(imap_config.insecure())
+            .danger_accept_invalid_hostnames(imap_config.insecure())
+            .build()
+            .map_err(Error::CreateTlsConnectorError)?;
+
+        let mut client_builder = imap::ClientBuilder::new(&imap_config.host, imap_config.port);
+        if imap_config.starttls() {
+            client_builder.starttls();
+        }
+
+        let client = if imap_config.ssl() {
+            client_builder.connect(|domain, tcp| {
+                let connector = TlsConnector::connect(&builder, domain, tcp)?;
+                Ok(ImapSessionStream::Tls(connector))
+            })
+        } else {
+            client_builder.connect(|_, tcp| Ok(ImapSessionStream::Tcp(tcp)))
+        }
+        .map_err(Error::ConnectImapServerError)?;
+
+        let mut session = client
+            .login(&imap_config.login, &imap_config.passwd()?)
+            .map_err(|res| Error::LoginImapServerError(res.0))?;
+        session.debug = log_enabled!(Level::Trace);
+
+        Ok(Self {
             imap_config,
-            sess: None,
-            fetches: None,
-        }
+            session: RefCell::new(session),
+        })
     }
 
-    fn sess(&mut self) -> Result<&mut ImapSession> {
-        if self.sess.is_none() {
-            debug!("create TLS builder");
-            debug!("insecure: {}", self.imap_config.insecure());
-            let builder = TlsConnector::builder()
-                .danger_accept_invalid_certs(self.imap_config.insecure())
-                .danger_accept_invalid_hostnames(self.imap_config.insecure())
-                .build()
-                .map_err(Error::CreateTlsConnectorError)?;
+    fn search_new_msgs(&'a self, query: &str) -> Result<Vec<u32>> {
+        let mut session = self.session.borrow_mut();
 
-            debug!("create client");
-            debug!("host: {}", self.imap_config.host);
-            debug!("port: {}", self.imap_config.port);
-            debug!("starttls: {}", self.imap_config.starttls());
-            let mut client_builder =
-                imap::ClientBuilder::new(&self.imap_config.host, self.imap_config.port);
-            if self.imap_config.starttls() {
-                client_builder.starttls();
-            }
-
-            let client = if self.imap_config.ssl() {
-                client_builder.connect(|domain, tcp| {
-                    let connector = TlsConnector::connect(&builder, domain, tcp)?;
-                    Ok(ImapSessionStream::Tls(connector))
-                })
-            } else {
-                client_builder.connect(|_, tcp| Ok(ImapSessionStream::Tcp(tcp)))
-            }
-            .map_err(Error::ConnectImapServerError)?;
-
-            let mut sess = client
-                .login(&self.imap_config.login, &self.imap_config.passwd()?)
-                .map_err(|res| Error::LoginImapServerError(res.0))?;
-            sess.debug = log_enabled!(Level::Trace);
-            self.sess = Some(sess);
-        }
-
-        let sess = match self.sess {
-            Some(ref mut sess) => Ok(sess),
-            None => Err(Error::GetSessionError),
-        }?;
-
-        Ok(sess)
-    }
-
-    fn search_new_msgs(&mut self, query: &str) -> Result<Vec<u32>> {
-        let uids: Vec<u32> = self
-            .sess()?
+        let uids: Vec<u32> = session
             .uid_search(query)
             .map_err(Error::SearchNewMsgsError)?
             .into_iter()
@@ -223,11 +204,10 @@ impl<'a> ImapBackend<'a> {
         Ok(uids)
     }
 
-    pub fn notify(&mut self, keepalive: u64, mbox: &str) -> Result<()> {
-        debug!("notify");
+    pub fn notify(&'a self, keepalive: u64, mbox: &str) -> Result<()> {
+        let mut session = self.session.borrow_mut();
 
-        debug!("examine folder {:?}", mbox);
-        self.sess()?
+        session
             .examine(mbox)
             .map_err(|err| Error::ExamineMboxError(err, mbox.to_owned()))?;
 
@@ -241,7 +221,7 @@ impl<'a> ImapBackend<'a> {
 
         loop {
             debug!("begin loop");
-            self.sess()?
+            session
                 .idle()
                 .and_then(|mut idle| {
                     idle.set_keepalive(std::time::Duration::new(keepalive, 0));
@@ -267,8 +247,7 @@ impl<'a> ImapBackend<'a> {
                     .map(|uid| uid.to_string())
                     .collect::<Vec<_>>()
                     .join(",");
-                let fetches = self
-                    .sess()?
+                let fetches = session
                     .uid_fetch(uids, "(UID ENVELOPE)")
                     .map_err(Error::FetchNewMsgsEnvelopeError)?;
 
@@ -292,16 +271,17 @@ impl<'a> ImapBackend<'a> {
         }
     }
 
-    pub fn watch(&mut self, keepalive: u64, mbox: &str) -> Result<()> {
+    pub fn watch(&'a self, keepalive: u64, mbox: &str) -> Result<()> {
         debug!("examine folder: {}", mbox);
+        let mut session = self.session.borrow_mut();
 
-        self.sess()?
+        session
             .examine(mbox)
             .map_err(|err| Error::ExamineMboxError(err, mbox.to_owned()))?;
 
         loop {
             debug!("begin loop");
-            self.sess()?
+            session
                 .idle()
                 .and_then(|mut idle| {
                     idle.set_keepalive(std::time::Duration::new(keepalive, 0));
@@ -325,24 +305,28 @@ impl<'a> ImapBackend<'a> {
             debug!("end loop");
         }
     }
+
+    pub fn disconnect(&'a self) -> Result<()> {
+        let mut session = self.session.borrow_mut();
+        Ok(session.logout().map_err(Error::LogoutError)?)
+    }
 }
 
 impl<'a> Backend<'a> for ImapBackend<'a> {
-    // Old API
-
-    fn folder_add(&mut self, folder: &str) -> backend::Result<()> {
+    fn add_folder(&'a self, folder: &'a str) -> backend::Result<()> {
+        let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
 
-        self.sess()?
+        session
             .create(&folder)
             .map_err(|err| Error::CreateMboxError(err, folder.to_owned()))?;
 
         Ok(())
     }
 
-    fn folder_list(&mut self) -> backend::Result<Folders> {
-        let imap_mboxes = self
-            .sess()?
+    fn list_folder(&'a self) -> backend::Result<Folders> {
+        let mut session = self.session.borrow_mut();
+        let imap_mboxes = session
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
         let mboxes = Folders(
@@ -372,25 +356,26 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(mboxes)
     }
 
-    fn folder_delete(&mut self, folder: &str) -> backend::Result<()> {
+    fn delete_folder(&'a self, folder: &'a str) -> backend::Result<()> {
+        let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
 
-        self.sess()?
+        session
             .delete(&folder)
             .map_err(|err| Error::DeleteMboxError(err, folder.to_owned()))?;
 
         Ok(())
     }
 
-    fn envelope_list(
-        &mut self,
-        folder: &str,
+    fn list_envelope(
+        &'a self,
+        folder: &'a str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
+        let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
-        let last_seq = self
-            .sess()?
+        let last_seq = session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
             .exists as usize;
@@ -409,8 +394,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         };
         debug!("range: {:?}", range);
 
-        let fetches = self
-            .sess()?
+        let fetches = session
             .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
@@ -418,17 +402,17 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(envelopes)
     }
 
-    fn envelope_search(
-        &mut self,
-        folder: &str,
-        query: &str,
-        sort: &str,
+    fn search_envelope(
+        &'a self,
+        folder: &'a str,
+        query: &'a str,
+        sort: &'a str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
+        let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
-        let last_seq = self
-            .sess()?
+        let last_seq = session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
             .exists;
@@ -440,7 +424,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         let begin = page * page_size;
         let end = begin + (page_size - 1);
         let seqs: Vec<String> = if sort.is_empty() {
-            self.sess()?
+            session
                 .search(query)
                 .map_err(|err| Error::SearchMsgsError(err, folder.to_owned(), query.to_owned()))?
                 .iter()
@@ -448,7 +432,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
                 .collect()
         } else {
             let sort: envelope::imap::SortCriteria = sort.try_into()?;
-            self.sess()?
+            session
                 .sort(&sort, imap::extensions::sort::SortCharset::Utf8, query)
                 .map_err(|err| Error::SortMsgsError(err, folder.to_owned(), query.to_owned()))?
                 .iter()
@@ -460,8 +444,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         }
 
         let range = seqs[begin..end.min(seqs.len())].join(",");
-        let fetches = self
-            .sess()?
+        let fetches = session
             .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
@@ -469,141 +452,140 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(envelopes)
     }
 
-    fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> backend::Result<String> {
+    fn add_email(
+        &'a self,
+        folder: &'a str,
+        email: &'a [u8],
+        flags: &'a str,
+    ) -> backend::Result<String> {
+        let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
-        self.sess()?
-            .append(&folder, msg)
+        session
+            .append(&folder, email)
             .flags(flag::imap::into_raws(&flags))
             .finish()
             .map_err(|err| Error::AppendMsgError(err, folder.to_owned()))?;
-        let last_seq = self
-            .sess()?
+        let last_seq = session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
             .exists;
         Ok(last_seq.to_string())
     }
 
-    fn email_get(&mut self, folder: &str, seq: &str) -> backend::Result<Email> {
-        let folder = encode_utf7(folder.to_owned());
-        self.sess()?
-            .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
-        let fetches = self
-            .sess()?
-            .fetch(seq, "(FLAGS INTERNALDATE BODY[])")
-            .map_err(|err| Error::FetchMsgsBySeqError(err, seq.to_owned()))?;
-        let fetch = fetches
-            .first()
-            .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?;
-        let msg_raw = fetch.body().unwrap_or_default().to_owned();
-        let mut msg = Email::from_parsed_mail(
-            mailparse::parse_mail(&msg_raw)
-                .map_err(|err| Error::ParseMsgError(err, seq.to_owned()))?,
-            &self.account_config,
-        )?;
-        msg.raw = msg_raw;
-        Ok(msg)
-    }
-
-    fn email_copy(&mut self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
-        let email = self.email_get(folder, seq)?.raw;
-        self.email_add(folder_target, &email, "seen")?;
-        Ok(())
-    }
-
-    fn email_move(&mut self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
-        let msg = self.email_get(folder, seq)?.raw;
-        self.flags_add(folder, seq, "seen deleted")?;
-        self.email_add(folder_target, &msg, "seen")?;
-        Ok(())
-    }
-
-    fn email_delete(&mut self, folder: &str, seq: &str) -> backend::Result<()> {
-        self.flags_add(folder, seq, "deleted")
-    }
-
-    fn flags_add(&mut self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
-        let folder = encode_utf7(folder.to_owned());
-        let flags: Flags = flags.into();
-        self.sess()?
-            .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
-        self.sess()?
-            .store(seq_range, format!("+FLAGS ({})", flags))
-            .map_err(|err| Error::AddFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
-        self.sess()?
-            .expunge()
-            .map_err(|err| Error::ExpungeError(err, folder.to_owned()))?;
-        Ok(())
-    }
-
-    fn flags_set(&mut self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
-        let folder = encode_utf7(folder.to_owned());
-        let flags: Flags = flags.into();
-        self.sess()?
-            .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
-        self.sess()?
-            .store(seq_range, format!("FLAGS ({})", flags))
-            .map_err(|err| Error::SetFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
-        Ok(())
-    }
-
-    fn flags_delete(&mut self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
-        let folder = encode_utf7(folder.to_owned());
-        let flags: Flags = flags.into();
-        self.sess()?
-            .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
-        self.sess()?
-            .store(seq_range, format!("-FLAGS ({})", flags))
-            .map_err(|err| Error::DelFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
-        Ok(())
-    }
-
-    fn disconnect(&mut self) -> backend::Result<()> {
-        if let Some(ref mut sess) = self.sess {
-            debug!("logout from imap server");
-            sess.logout().map_err(Error::LogoutError)?;
-        } else {
-            debug!("no session found");
-        }
-
-        Ok(())
-    }
-
-    // New API
-
-    fn get_email(&'a mut self, folder: &str, seq: &str) -> backend::Result<EmailParsed<'a>> {
+    fn get_email(&'a self, folder: &'a str, seq: &'a str) -> backend::Result<Email> {
         debug!("folder: {:?}", folder);
         debug!("seq: {:?}", seq);
 
         let folder = encode_utf7(folder.to_owned());
         debug!("utf7 decoded folder: {:?}", folder);
 
-        self.sess()?
+        let mut session = self.session.borrow_mut();
+
+        session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
 
-        self.fetches = Some(
-            self.sess()?
-                .fetch(seq, "BODY[]")
-                .map_err(|err| Error::FetchMsgsBySeqError(err, seq.to_owned()))?,
-        );
+        let fetch = session
+            .fetch(seq, "BODY[]")
+            .map_err(|err| Error::FetchMsgsBySeqError(err, seq.to_owned()))?;
+        let body = fetch
+            .iter()
+            .next()
+            .and_then(|fetch| fetch.body())
+            .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?;
 
-        let email = EmailParsed::from(
-            self.fetches
-                .as_mut()
-                .and_then(|fetches| fetches.first())
-                .ok_or_else(|| Error::FindMsgError(seq.to_owned()))?
-                .body()
-                .unwrap_or_default(),
-        );
+        // FIXME: find why borrowing does not work here
+        let email = Email::from(body.to_vec());
         trace!("email: {:?}", email);
 
         Ok(email)
+    }
+
+    fn copy_email(
+        &'a self,
+        folder: &'a str,
+        folder_target: &'a str,
+        seq: &'a str,
+    ) -> backend::Result<()> {
+        let email = self.get_email(folder, seq)?;
+        let email = email.parsed()?;
+        self.add_email(folder_target, email.raw_bytes, "seen")?;
+        Ok(())
+    }
+
+    fn move_email(
+        &'a self,
+        folder: &'a str,
+        folder_target: &'a str,
+        seq: &'a str,
+    ) -> backend::Result<()> {
+        let email = self.get_email(folder, seq)?;
+        let email = email.parsed()?;
+        self.add_flags(folder, seq, "seen deleted")?;
+        self.add_email(folder_target, email.raw_bytes, "seen")?;
+        Ok(())
+    }
+
+    fn delete_email(&'a self, folder: &'a str, seq: &'a str) -> backend::Result<()> {
+        self.add_flags(folder, seq, "deleted")
+    }
+
+    fn add_flags(
+        &'a self,
+        folder: &'a str,
+        seq_range: &'a str,
+        flags: &'a str,
+    ) -> backend::Result<()> {
+        let mut session = self.session.borrow_mut();
+        let folder = encode_utf7(folder.to_owned());
+        let flags: Flags = flags.into();
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+        session
+            .store(seq_range, format!("+FLAGS ({})", flags))
+            .map_err(|err| Error::AddFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
+        session
+            .expunge()
+            .map_err(|err| Error::ExpungeError(err, folder.to_owned()))?;
+        Ok(())
+    }
+
+    fn set_flags(
+        &'a self,
+        folder: &'a str,
+        seq_range: &'a str,
+        flags: &'a str,
+    ) -> backend::Result<()> {
+        let mut session = self.session.borrow_mut();
+        let folder = encode_utf7(folder.to_owned());
+        let flags: Flags = flags.into();
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+        session
+            .store(seq_range, format!("FLAGS ({})", flags))
+            .map_err(|err| Error::SetFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
+        Ok(())
+    }
+
+    fn delete_flags(
+        &'a self,
+        folder: &'a str,
+        seq_range: &'a str,
+        flags: &'a str,
+    ) -> backend::Result<()> {
+        let mut session = self.session.borrow_mut();
+        let folder = encode_utf7(folder.to_owned());
+        let flags: Flags = flags.into();
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+        session
+            .store(seq_range, format!("-FLAGS ({})", flags))
+            .map_err(|err| Error::DelFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
+        Ok(())
     }
 
     fn as_any(&self) -> &(dyn Any + 'a) {

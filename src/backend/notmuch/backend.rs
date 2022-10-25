@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, envelope::notmuch::envelopes, id_mapper, AccountConfig, Backend,
-    Email, EmailParsed, Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig,
+    Email, Email, Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig,
     NotmuchConfig,
 };
 
@@ -431,7 +431,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
 
     // New API
 
-    fn get_email(&'a mut self, _: &str, short_hash: &str) -> backend::Result<EmailParsed<'a>> {
+    fn get_email(&'a mut self, _: &str, short_hash: &str) -> backend::Result<Email<'a>> {
         debug!("short hash: {:?}", short_hash);
 
         let dir = &self.notmuch_config.db_path;
@@ -447,7 +447,7 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
             .to_owned();
         debug!("email filepath: {:?}", email_filepath);
 
-        let email = EmailParsed::from(fs::read(&email_filepath).map_err(Error::ReadMsgError)?);
+        let email = Email::from(fs::read(&email_filepath).map_err(Error::ReadMsgError)?);
         trace!("email: {:?}", email);
 
         Ok(email)

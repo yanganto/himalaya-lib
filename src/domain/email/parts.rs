@@ -10,7 +10,7 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{email, AccountConfig, EmailParsed};
+use crate::{email, AccountConfig, Email};
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct TextPlainPart {
@@ -267,10 +267,10 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
-pub struct PartsWrapper<'a>(&'a EmailParsed<'a>);
+pub struct PartsWrapper<'a>(&'a Email<'a>);
 
 impl<'a> PartsWrapper<'a> {
-    pub fn new(email: &'a EmailParsed<'a>) -> Self {
+    pub fn new(email: &'a Email<'a>) -> Self {
         Self(email)
     }
 
@@ -304,7 +304,7 @@ mod parts_tests {
 
     #[test]
     fn test_concat_text_plain_bodies_no_part() {
-        let email = EmailParsed::try_from(concat!(
+        let email = Email::try_from(concat!(
             "From: from@localhost",
             "To: to@localhost",
             "Subject: subject",
@@ -319,7 +319,7 @@ mod parts_tests {
 
     #[test]
     fn test_concat_text_plain_bodies_multipart() {
-        let email = EmailParsed::try_from(concat!(
+        let email = Email::try_from(concat!(
             "From: from@localhost",
             "To: to@localhost",
             "Subject: subject",

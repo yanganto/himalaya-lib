@@ -16,24 +16,21 @@ fn test_imap_backend() {
         passwd_cmd: "echo 'password'".into(),
         ..ImapConfig::default()
     };
-    let mut imap = ImapBackend::new(&account_config, &imap_config);
-
-    // checking that the backend can connect
-    imap.connect().unwrap();
+    let mut imap = ImapBackend::new(&imap_config).unwrap();
 
     // setting up folders
-    if let Err(_) = imap.folder_add("Sent") {};
-    if let Err(_) = imap.folder_add("&BB4EQgQ,BEAEMAQyBDsENQQ9BD0ESwQ1-") {};
-    imap.email_delete("INBOX", "1:*").unwrap();
-    imap.email_delete("Sent", "1:*").unwrap();
-    imap.email_delete("Отправленные", "1:*").unwrap();
+    if let Err(_) = imap.add_folder("Sent") {};
+    if let Err(_) = imap.add_folder("&BB4EQgQ,BEAEMAQyBDsENQQ9BD0ESwQ1-") {};
+    imap.delete_email("INBOX", "1:*").unwrap();
+    imap.delete_email("Sent", "1:*").unwrap();
+    imap.delete_email("Отправленные", "1:*").unwrap();
 
     // checking that an email can be added
     let email = include_bytes!("./emails/alice-to-patrick.eml");
-    let id = imap.email_add("Sent", email, "seen").unwrap().to_string();
+    let id = imap.add_email("Sent", email, "seen").unwrap().to_string();
 
     // checking that the added email exists
-    let email = imap.email_get("Sent", &id).unwrap();
+    let email = imap.get_email("Sent", &id).unwrap();
     assert_eq!("alice@localhost", email.from.clone().unwrap().to_string());
     assert_eq!("patrick@localhost", email.to.clone().unwrap().to_string());
     assert_eq!(
@@ -42,32 +39,32 @@ fn test_imap_backend() {
     );
 
     // checking that the envelope of the added email exists
-    let envelopes = imap.envelope_list("Sent", 10, 0).unwrap();
+    let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.sender);
     assert_eq!("Plain message", envelope.subject);
 
     // checking that the email can be copied
-    imap.email_copy("Sent", "Отправленные", &envelope.id.to_string())
+    imap.copy_email("Sent", "Отправленные", &envelope.id.to_string())
         .unwrap();
-    let envelopes = imap.envelope_list("Sent", 10, 0).unwrap();
+    let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
-    let envelopes = imap.envelope_list("Отправленные", 10, 0).unwrap();
+    let envelopes = imap.list_envelope("Отправленные", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
 
     // checking that the email can be moved
-    imap.email_move("Sent", "Отправленные", &envelope.id.to_string())
+    imap.move_email("Sent", "Отправленные", &envelope.id.to_string())
         .unwrap();
-    let envelopes = imap.envelope_list("Sent", 10, 0).unwrap();
+    let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
     assert_eq!(0, envelopes.len());
-    let envelopes = imap.envelope_list("Отправленные", 10, 0).unwrap();
+    let envelopes = imap.list_envelope("Отправленные", 10, 0).unwrap();
     assert_eq!(2, envelopes.len());
     let id = envelopes.first().unwrap().id.to_string();
 
     // checking that the email can be deleted
-    imap.email_delete("Отправленные", &id).unwrap();
-    assert!(imap.email_get("Отправленные", &id).is_err());
+    imap.delete_email("Отправленные", &id).unwrap();
+    assert!(imap.get_email("Отправленные", &id).is_err());
 
     // checking that the backend can disconnect
     imap.disconnect().unwrap();
