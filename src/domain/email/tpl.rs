@@ -44,7 +44,7 @@ impl DerefMut for Tpl {
 }
 
 impl Tpl {
-    pub fn add_header<V: AsRef<str>>(&mut self, header: &str, value: V) -> &mut Self {
+    pub fn push_header<V: AsRef<str>>(&mut self, header: &str, value: V) -> &mut Self {
         self.push_str(header);
         self.push_str(": ");
         self.push_str(value.as_ref());

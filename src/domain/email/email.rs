@@ -24,6 +24,8 @@ use crate::{
     TplOverride, DEFAULT_SIGNATURE_DELIM,
 };
 
+use super::parts::PartsWrapper;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("cannot expand attachment path {1}")]
@@ -717,7 +719,7 @@ impl<'a> EmailParsed<'a> {
 
         // From
 
-        tpl.add_header("From", &sender.to_string());
+        tpl.push_header("From", &sender.to_string());
 
         // To
 
@@ -741,12 +743,12 @@ impl<'a> EmailParsed<'a> {
             }
         }
 
-        tpl.add_header("To", &to.to_string());
+        tpl.push_header("To", &to.to_string());
 
         // In-Reply-To
 
         if let Some(ref message_id) = headers.get_first_value("Message-Id") {
-            tpl.add_header("In-Reply-To", message_id);
+            tpl.push_header("In-Reply-To", message_id);
         }
 
         // Cc
@@ -760,52 +762,43 @@ impl<'a> EmailParsed<'a> {
                     cc.push(addr);
                 }
             }
-            tpl.add_header("Cc", cc.to_string());
+            tpl.push_header("Cc", cc.to_string());
         }
 
         // Subject
 
         if let Some(ref subject) = headers.get_first_value("Subject") {
-            tpl.add_header("Subject", String::from("Re: ") + subject);
+            tpl.push_header("Subject", String::from("Re: ") + subject);
         }
 
         // Body
 
-        // let text_bodies = PartsWrapper::new(self).concat_text_plain_bodies();
-        // let plain_content = {
-        //     let date = self
-        //         .date
-        //         .as_ref()
-        //         .map(|date| date.format("%d %b %Y, at %H:%M (%z)").to_string())
-        //         .unwrap_or_else(|| "unknown date".into());
-        //     let sender = self
-        //         .reply_to
-        //         .as_ref()
-        //         .or_else(|| self.from.as_ref())
-        //         .and_then(|addrs| addrs.clone().extract_single_info())
-        //         .map(|addr| addr.display_name.clone().unwrap_or_else(|| addr.addr))
-        //         .unwrap_or_else(|| "unknown sender".into());
-        //     let mut content = format!("\n\nOn {}, {} wrote:\n", date, sender);
+        tpl.push_str("\n");
+        let text_bodies = PartsWrapper::new(self).concat_text_plain_bodies().unwrap();
 
-        //     let mut glue = "";
-        //     for line in self
-        //         .parts
-        //         .to_readable(PartsReaderOptions::default())
-        //         .trim()
-        //         .lines()
-        //     {
-        //         if line == DEFAULT_SIGNATURE_DELIM {
-        //             break;
-        //         }
-        //         content.push_str(glue);
-        //         content.push('>');
-        //         content.push_str(if line.starts_with('>') { "" } else { " " });
-        //         content.push_str(line);
-        //         glue = "\n";
-        //     }
+        let mut glue = "";
+        for line in text_bodies.lines() {
+            // removes existing signature from the original body
+            if line[..] == DEFAULT_SIGNATURE_DELIM[0..3] {
+                break;
+            }
 
-        //     content
-        // };
+            tpl.push_str(glue);
+            tpl.push('>');
+            if !line.starts_with('>') {
+                tpl.push_str(" ")
+            }
+            tpl.push_str(line);
+
+            glue = "\n";
+        }
+
+        // Signature
+
+        if let Some(ref sig) = config.signature()? {
+            tpl.push_str("\n\n");
+            tpl.push_str(sig);
+        }
 
         Ok(tpl)
     }
@@ -845,26 +838,72 @@ impl<'a> From<&'a str> for EmailParsed<'a> {
 }
 
 #[cfg(test)]
-mod email_tests {
+mod test_email_to_reply_tpl {
     use crate::{AccountConfig, EmailParsed};
 
     #[test]
-    fn test_to_reply_tpl() {
+    fn test_empty_config() {
         let config = AccountConfig {
-            display_name: Some("Tȯ".into()),
             email: "to@localhost".into(),
             ..AccountConfig::default()
         };
 
-        let email = EmailParsed::try_from(
-            "From: from@localhost\nTo: to@localhost\nSubject: subject\n\nHello!",
-        )
-        .unwrap();
+        let email = EmailParsed::from(concat!(
+            "From: from@localhost\n",
+            "To: to@localhost\n",
+            "Subject: subject\n",
+            "\n",
+            "Hello!\n",
+            "\n",
+            "-- \n",
+            "From regards,"
+        ));
 
-        assert_eq!(
-            "From: Tȯ <to@localhost>\nTo: from@localhost\nSubject: Re: subject\n\nHello!",
-            email.to_reply_tpl(&config, false).unwrap().0
+        let expected_tpl = concat!(
+            "From: to@localhost\n",
+            "To: from@localhost\n",
+            "Subject: Re: subject\n",
+            "\n",
+            "> Hello!\n",
+            "> "
         );
+
+        assert_eq!(expected_tpl, email.to_reply_tpl(&config, false).unwrap().0);
+    }
+
+    #[test]
+    fn test_with_display_name_and_signature() {
+        let config = AccountConfig {
+            email: "to@localhost".into(),
+            display_name: Some("Tȯ".into()),
+            signature: Some("To regards,".into()),
+            ..AccountConfig::default()
+        };
+
+        let email = EmailParsed::from(concat!(
+            "From: from@localhost\n",
+            "To: to@localhost\n",
+            "Subject: subject\n",
+            "\n",
+            "Hello!\n",
+            "\n",
+            "-- \n",
+            "From Regards,"
+        ));
+
+        let expected_tpl = concat!(
+            "From: Tȯ <to@localhost>\n",
+            "To: from@localhost\n",
+            "Subject: Re: subject\n",
+            "\n",
+            "> Hello!\n",
+            "> \n",
+            "\n",
+            "-- \n",
+            "To regards,"
+        );
+
+        assert_eq!(expected_tpl, email.to_reply_tpl(&config, false).unwrap().0);
     }
 }
 
