@@ -274,27 +274,36 @@ impl<'a> PartsWrapper<'a> {
         Self(email)
     }
 
-    pub fn concat_text_plain_bodies(&self) -> Result<String> {
-        let mut text_bodies = String::new();
-        let parsed = self.0.parsed()?;
-
-        for part in PartsIterator::new(&parsed) {
-            if part.ctype.mimetype == "text/plain" {
-                if !text_bodies.is_empty() {
-                    text_bodies.push_str("\n\n")
+    pub fn concat_text_plain_bodies(&'a self) -> Result<String> {
+        let text_bodies = self.0.with_parsed(|parsed| {
+            let mut text_bodies = String::new();
+            for part in PartsIterator::new(&parsed) {
+                if part.ctype.mimetype == "text/plain" {
+                    if !text_bodies.is_empty() {
+                        text_bodies.push_str("\n\n")
+                    }
+                    println!("part: {:?}", &part.get_body());
+                    text_bodies.push_str(&part.get_body().unwrap_or_default())
                 }
-                println!("part: {:?}", &part.get_body());
-                text_bodies.push_str(&part.get_body().unwrap_or_default())
             }
-        }
 
-        // trims consecutive new lines bigger than two
-        let text_bodies = Regex::new(r"(\r?\n\s*){2,}")
-            .unwrap()
-            .replace_all(&text_bodies, "\n\n")
-            .to_string();
+            // trims consecutive new lines bigger than two
+            let text_bodies = Regex::new(r"(\r?\n\s*){2,}")
+                .unwrap()
+                .replace_all(&text_bodies, "\n\n")
+                .to_string();
 
+            email::Result::Ok(text_bodies)
+        })?;
         Ok(text_bodies)
+    }
+}
+
+impl<'a> Deref for PartsWrapper<'a> {
+    type Target = Email<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

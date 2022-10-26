@@ -25,6 +25,8 @@ use crate::{
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("cannet get imap session: session not initialized")]
+    CopyEmailError(#[source] email::Error),
+    #[error("cannet get imap session: session not initialized")]
     GetSessionNotInitializedError,
     #[error("cannet get imap fetches: fetches not initialized")]
     GetFetchesNotInitializedError,
@@ -509,8 +511,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         seq: &'a str,
     ) -> backend::Result<()> {
         let email = self.get_email(folder, seq)?;
-        let email = email.parsed()?;
-        self.add_email(folder_target, email.raw_bytes, "seen")?;
+        email.with_parsed(|parsed| self.add_email(folder_target, parsed.raw_bytes, "seen"))?;
         Ok(())
     }
 
@@ -521,9 +522,11 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         seq: &'a str,
     ) -> backend::Result<()> {
         let email = self.get_email(folder, seq)?;
-        let email = email.parsed()?;
-        self.add_flags(folder, seq, "seen deleted")?;
-        self.add_email(folder_target, email.raw_bytes, "seen")?;
+        email.with_parsed(|parsed| {
+            self.add_flags(folder, seq, "seen deleted")?;
+            self.add_email(folder_target, parsed.raw_bytes, "seen")?;
+            backend::Result::Ok(())
+        })?;
         Ok(())
     }
 
