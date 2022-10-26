@@ -127,7 +127,7 @@ impl<'a> Email<'a> {
     }
 
     pub fn to_reply_tpl(&'a self, config: &AccountConfig, all: bool) -> Result<Tpl> {
-        self.with_parsed(|parsed| {
+        let mut tpl = self.with_parsed(|parsed| {
             let headers = parsed.get_headers();
             let sender = config.addr()?;
             let mut tpl = Tpl::default();
@@ -187,37 +187,39 @@ impl<'a> Email<'a> {
                 tpl.push_header("Subject", String::from("Re: ") + subject);
             }
 
-            // Body
-
-            tpl.push_str("\n");
-            let text_bodies = self.concat_text_plain_bodies()?;
-
-            let mut glue = "";
-            for line in text_bodies.lines() {
-                // removes existing signature from the original body
-                if line[..] == DEFAULT_SIGNATURE_DELIM[0..3] {
-                    break;
-                }
-
-                tpl.push_str(glue);
-                tpl.push('>');
-                if !line.starts_with('>') {
-                    tpl.push_str(" ")
-                }
-                tpl.push_str(line);
-
-                glue = "\n";
-            }
-
-            // Signature
-
-            if let Some(ref sig) = config.signature()? {
-                tpl.push_str("\n\n");
-                tpl.push_str(sig);
-            }
-
             Result::Ok(tpl)
-        })
+        })?;
+
+        // Body
+
+        let text_bodies = self.concat_text_plain_bodies()?;
+        tpl.push_str("\n");
+
+        let mut glue = "";
+        for line in text_bodies.lines() {
+            // removes existing signature from the original body
+            if line[..] == DEFAULT_SIGNATURE_DELIM[0..3] {
+                break;
+            }
+
+            tpl.push_str(glue);
+            tpl.push('>');
+            if !line.starts_with('>') {
+                tpl.push_str(" ")
+            }
+            tpl.push_str(line);
+
+            glue = "\n";
+        }
+
+        // Signature
+
+        if let Some(ref sig) = config.signature()? {
+            tpl.push_str("\n\n");
+            tpl.push_str(sig);
+        }
+
+        Ok(tpl)
     }
 
     pub fn concat_text_plain_bodies(&'a self) -> Result<String> {
