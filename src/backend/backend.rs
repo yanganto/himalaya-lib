@@ -25,7 +25,7 @@ pub enum Error {
     BuildBackendError,
 
     #[error(transparent)]
-    EmailError(#[from] email::Error),
+    EmailError(#[from] email::EmailError),
     #[error(transparent)]
     IdMapper(#[from] id_mapper::Error),
     #[error(transparent)]
@@ -45,30 +45,29 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Backend<'a> {
-    fn add_folder(&'a self, folder: &'a str) -> Result<()>;
+    fn add_folder(&'a self, folder: &str) -> Result<()>;
     fn list_folder(&'a self) -> Result<Folders>;
-    fn delete_folder(&'a self, folder: &'a str) -> Result<()>;
+    fn delete_folder(&'a self, folder: &str) -> Result<()>;
 
-    fn list_envelope(&'a self, folder: &'a str, page_size: usize, page: usize)
-        -> Result<Envelopes>;
+    fn list_envelope(&'a self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn search_envelope(
         &'a self,
-        folder: &'a str,
-        query: &'a str,
-        sort: &'a str,
+        folder: &str,
+        query: &str,
+        sort: &str,
         page_size: usize,
         page: usize,
     ) -> Result<Envelopes>;
 
-    fn add_email(&'a self, folder: &'a str, email: &'a [u8], flags: &'a str) -> Result<String>;
-    fn get_email(&'a self, folder: &'a str, id: &'a str) -> Result<Email<'a>>;
-    fn copy_email(&'a self, folder: &'a str, folder_target: &'a str, ids: &'a str) -> Result<()>;
-    fn move_email(&'a self, folder: &'a str, folder_target: &'a str, ids: &'a str) -> Result<()>;
-    fn delete_email(&'a self, folder: &'a str, ids: &'a str) -> Result<()>;
+    fn add_email(&'a self, folder: &str, email: &'a [u8], flags: &str) -> Result<String>;
+    fn get_email(&'a self, folder: &str, id: &str) -> Result<Email<'a>>;
+    fn copy_email(&'a self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
+    fn move_email(&'a self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
+    fn delete_email(&'a self, folder: &str, ids: &str) -> Result<()>;
 
-    fn add_flags(&'a self, folder: &'a str, ids: &'a str, flags: &'a str) -> Result<()>;
-    fn set_flags(&'a self, folder: &'a str, ids: &'a str, flags: &'a str) -> Result<()>;
-    fn delete_flags(&'a self, folder: &'a str, ids: &'a str, flags: &'a str) -> Result<()>;
+    fn add_flags(&'a self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn set_flags(&'a self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn delete_flags(&'a self, folder: &str, ids: &str, flags: &str) -> Result<()>;
 
     // only for downcasting
     fn as_any(&self) -> &(dyn Any + 'a);

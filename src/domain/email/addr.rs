@@ -5,7 +5,7 @@
 use mailparse;
 use std::{fmt, result};
 
-use crate::email::Result;
+use crate::EmailError;
 
 /// Defines a single email address.
 pub type Addr = mailparse::MailAddr;
@@ -22,7 +22,9 @@ pub fn from_slice_to_addrs<S: AsRef<str> + fmt::Debug>(
 }
 
 /// Converts a list of addresses into a list of [`lettre::message::Mailbox`].
-pub fn from_addrs_to_sendable_mbox(addrs: &Addrs) -> Result<Vec<lettre::message::Mailbox>> {
+pub fn from_addrs_to_sendable_mbox(
+    addrs: &Addrs,
+) -> Result<Vec<lettre::message::Mailbox>, EmailError> {
     let mut sendable_addrs: Vec<lettre::message::Mailbox> = vec![];
     for addr in addrs.iter() {
         match addr {
@@ -43,7 +45,7 @@ pub fn from_addrs_to_sendable_mbox(addrs: &Addrs) -> Result<Vec<lettre::message:
 }
 
 /// Converts a list of addresses into a list of [`lettre::Address`].
-pub fn from_addrs_to_sendable_addrs(addrs: &Addrs) -> Result<Vec<lettre::Address>> {
+pub fn from_addrs_to_sendable_addrs(addrs: &Addrs) -> Result<Vec<lettre::Address>, EmailError> {
     let mut sendable_addrs = vec![];
     for addr in addrs.iter() {
         match addr {

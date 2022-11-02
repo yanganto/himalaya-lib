@@ -1,11 +1,12 @@
-use himalaya_lib::{AccountConfig, PartsReaderOptions};
 #[cfg(feature = "imap-backend")]
-use himalaya_lib::{Backend, ImapBackend, ImapConfig};
+use mailparse::MailHeaderMap;
+
+#[cfg(feature = "imap-backend")]
+use himalaya_lib::{Backend, ImapBackend, ImapConfig, Parts};
 
 #[cfg(feature = "imap-backend")]
 #[test]
 fn test_imap_backend() {
-    let account_config = AccountConfig::default();
     let imap_config = ImapConfig {
         host: "localhost".into(),
         port: 3143,
@@ -16,7 +17,7 @@ fn test_imap_backend() {
         passwd_cmd: "echo 'password'".into(),
         ..ImapConfig::default()
     };
-    let mut imap = ImapBackend::new(&imap_config).unwrap();
+    let imap = ImapBackend::new(&imap_config).unwrap();
 
     // setting up folders
     if let Err(_) = imap.add_folder("Sent") {};
@@ -30,12 +31,14 @@ fn test_imap_backend() {
     let id = imap.add_email("Sent", email, "seen").unwrap().to_string();
 
     // checking that the added email exists
-    let email = imap.get_email("Sent", &id).unwrap();
-    assert_eq!("alice@localhost", email.from.clone().unwrap().to_string());
-    assert_eq!("patrick@localhost", email.to.clone().unwrap().to_string());
+    let mut email = imap.get_email("Sent", &id).unwrap();
+    let parsed = email.parsed().unwrap();
+    let headers = parsed.get_headers();
+    assert_eq!("alice@localhost", headers.get_first_value("From").unwrap());
+    assert_eq!("patrick@localhost", headers.get_first_value("To").unwrap());
     assert_eq!(
         "Ceci est un message.",
-        email.parts.to_readable(PartsReaderOptions::default())
+        Parts::concat_text_plain_bodies(&parsed).unwrap()
     );
 
     // checking that the envelope of the added email exists

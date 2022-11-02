@@ -26,7 +26,7 @@ regex = "1.5.4"
 rfc2047-decoder = "=0.2.0"
 serde = { version = "1.0.118", features = ["derive"] }
 shellexpand = "2.1.0"
-thiserror = "1.0.31"
+thiserror = "1.0.37"
 tree_magic = "0.2.3"
 uuid = { version = "0.8", features = ["v4"] }
 

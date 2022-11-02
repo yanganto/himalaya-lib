@@ -1,6 +1,6 @@
+#[cfg(feature = "imap-backend")]
 use std::{thread, time::Duration};
 
-use himalaya_lib::Email;
 #[cfg(feature = "imap-backend")]
 use himalaya_lib::{Backend, ImapBackend, Sender, Sendmail};
 
@@ -32,7 +32,7 @@ fn test_sendmail_sender() {
     };
 
     let mut sendmail = Sendmail::new(&account_config, &sendmail_config);
-    let mut imap = ImapBackend::new(&imap_config).unwrap();
+    let imap = ImapBackend::new(&imap_config).unwrap();
 
     // setting up folders
     imap.delete_email("INBOX", "1:*").unwrap();

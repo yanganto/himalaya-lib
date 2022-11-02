@@ -5,7 +5,7 @@
 use std::result;
 use thiserror::Error;
 
-use crate::{account, email, sendmail, AccountConfig, EmailSender, Sendmail};
+use crate::{account, sendmail, AccountConfig, EmailError, EmailSender, Sendmail};
 
 #[cfg(feature = "smtp-sender")]
 use crate::{smtp, Smtp};
@@ -16,7 +16,7 @@ pub enum Error {
     BuildEmailSenderMissingError,
 
     #[error(transparent)]
-    EmailError(#[from] email::Error),
+    EmailError(#[from] EmailError),
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
     #[cfg(feature = "smtp-sender")]
