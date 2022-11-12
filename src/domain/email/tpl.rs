@@ -24,7 +24,7 @@ type PartMime = String;
 type PartBody = String;
 
 #[derive(Debug, Clone)]
-enum HeaderVal {
+pub enum HeaderVal {
     String(String),
     Addrs(Vec<String>),
 }
@@ -220,14 +220,14 @@ impl Default for ShowTextPartStrategy {
 #[derive(Debug, Clone)]
 pub enum ShowHeaders {
     All,
-    Only(HashSet<HeaderKey>),
+    Only(Vec<HeaderKey>),
 }
 
 impl ShowHeaders {
-    pub fn contains<K: AsRef<str>>(&self, key: K) -> bool {
+    pub fn contains(&self, key: &String) -> bool {
         match self {
             Self::All => true,
-            Self::Only(set) => set.contains(key.as_ref()),
+            Self::Only(headers) => headers.contains(key),
         }
     }
 }
@@ -282,12 +282,11 @@ impl TplBuilderOpts {
     pub fn show_header<H: ToString>(mut self, header: H) -> Self {
         match self.show_headers_or_default() {
             ShowHeaders::All => {
-                self.show_headers =
-                    Some(ShowHeaders::Only(HashSet::from_iter([header.to_string()])));
+                self.show_headers = Some(ShowHeaders::Only(vec![header.to_string()]));
             }
-            ShowHeaders::Only(set) => {
-                let mut set = set.clone();
-                set.insert(header.to_string());
+            ShowHeaders::Only(prev_headers) => {
+                let mut set = prev_headers.clone();
+                set.push(header.to_string());
                 self.show_headers = Some(ShowHeaders::Only(set));
             }
         };
@@ -296,19 +295,27 @@ impl TplBuilderOpts {
     }
 
     pub fn show_headers<S: ToString, B: Iterator<Item = S>>(mut self, headers: B) -> Self {
-        let headers = headers.into_iter().map(|header| header.to_string());
+        let headers = headers
+            .into_iter()
+            .map(|header| header.to_string())
+            .collect();
 
         match self.show_headers_or_default() {
             ShowHeaders::All => {
-                self.show_headers = Some(ShowHeaders::Only(HashSet::from_iter(headers)));
+                self.show_headers = Some(ShowHeaders::Only(headers));
             }
-            ShowHeaders::Only(set) => {
-                let mut set = set.clone();
+            ShowHeaders::Only(prev_headers) => {
+                let mut set = prev_headers.clone();
                 set.extend(headers);
                 self.show_headers = Some(ShowHeaders::Only(set));
             }
         };
 
+        self
+    }
+
+    pub fn show_all_headers(mut self) -> Self {
+        self.show_headers = Some(ShowHeaders::All);
         self
     }
 
@@ -339,10 +346,10 @@ impl TplBuilderOpts {
 
 #[derive(Debug, Default, Clone)]
 pub struct TplBuilder {
-    headers: HashMap<HeaderKey, HeaderVal>,
-    headers_order: Vec<HeaderKey>,
-    parts: HashMap<PartMime, PartBody>,
-    parts_order: Vec<PartMime>,
+    pub headers: HashMap<HeaderKey, HeaderVal>,
+    pub headers_order: Vec<HeaderKey>,
+    pub parts: HashMap<PartMime, PartBody>,
+    pub parts_order: Vec<PartMime>,
 }
 
 impl TplBuilder {

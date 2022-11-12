@@ -5,7 +5,7 @@ use lettre::{
 };
 use log::{trace, warn};
 use mailparse::{DispositionType, MailHeaderMap, MailParseError, ParsedMail};
-use std::{collections::HashSet, fmt::Debug, io, path::PathBuf};
+use std::{fmt::Debug, io, path::PathBuf};
 use thiserror::Error;
 use tree_magic;
 
@@ -156,24 +156,33 @@ impl<'a> Email<'a> {
         let parsed = self.parsed()?;
         let parsed_headers = parsed.get_headers();
 
-        let mut headers_to_show = config.email_reading_headers().clone();
-
-        if let ShowHeaders::Only(headers) = opts.show_headers_or_default() {
-            headers_to_show.extend(headers.to_owned());
-        }
-
-        let opts = TplBuilderOpts {
-            show_headers: Some(ShowHeaders::Only(HashSet::from_iter(
-                headers_to_show.clone(),
-            ))),
-            ..opts
+        if let Some(show_headers) = opts.show_headers {
+            match show_headers {
+                ShowHeaders::All => {
+                    for header in parsed_headers {
+                        tpl = tpl.header(header.get_key(), header.get_value())
+                    }
+                }
+                ShowHeaders::Only(ref headers) => {
+                    for header in headers {
+                        if let Some(header) = parsed_headers.get_first_header(header) {
+                            tpl = tpl.header(header.get_key(), header.get_value())
+                        }
+                    }
+                }
+            }
+        } else {
+            for header in &config.email_reading_headers() {
+                if let Some(header) = parsed_headers.get_first_header(header) {
+                    tpl = tpl.header(header.get_key(), header.get_value())
+                }
+            }
         };
 
-        for ref header in headers_to_show {
-            if let Some(header) = parsed_headers.get_first_header(header) {
-                tpl = tpl.header(header.get_key(), header.get_value())
-            }
-        }
+        let opts = TplBuilderOpts {
+            show_headers: Some(ShowHeaders::Only(tpl.headers_order.clone())),
+            ..opts
+        };
 
         for part in PartsIterator::new(parsed) {
             match part.ctype.mimetype.as_str() {
@@ -189,6 +198,7 @@ impl<'a> Email<'a> {
         Ok(tpl.build(opts))
     }
 
+    // TODO: next
     pub fn to_reply_tpl(
         &'a mut self,
         config: &AccountConfig,
@@ -407,7 +417,7 @@ mod test_to_read_tpl {
     }
 
     #[test]
-    fn test_with_email_reading_headers_only() {
+    fn test_with_email_reading_headers() {
         let config = AccountConfig {
             email_reading_headers: Some(vec![
                 // existing headers
@@ -449,22 +459,54 @@ mod test_to_read_tpl {
     }
 
     #[test]
-    fn test_with_email_reading_headers_and_show_headers() {
+    fn test_with_show_all_headers() {
         let config = AccountConfig {
-            email_reading_headers: Some(vec![
-                // existing headers
-                "From".into(),
-                "Subject".into(),
-                // nonexisting headers
-                "Cc".into(),
-                "Bcc".into(),
-            ]),
+            // config should be overriden by the options
+            email_reading_headers: Some(vec!["Content-Type".into()]),
+            ..AccountConfig::default()
+        };
+
+        let opts = TplBuilderOpts::default().show_all_headers();
+
+        let mut email = Email::from(concat_line!(
+            "From: from@localhost",
+            "To: to@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        ));
+
+        let tpl = email.to_read_tpl(&config, opts).unwrap();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "To: to@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn test_with_show_only_headers() {
+        let config = AccountConfig {
+            // config should be overriden by the options
+            email_reading_headers: Some(vec!["From".into()]),
             ..AccountConfig::default()
         };
 
         let opts = TplBuilderOpts::default().show_headers(
             [
                 // existing headers
+                "Subject",
                 "To",
                 // nonexisting header
                 "Content-Type",
@@ -486,7 +528,6 @@ mod test_to_read_tpl {
         let tpl = email.to_read_tpl(&config, opts).unwrap();
 
         let expected_tpl = concat_line!(
-            "From: from@localhost",
             "Subject: subject",
             "To: to@localhost",
             "",
