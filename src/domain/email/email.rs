@@ -5,14 +5,16 @@ use lettre::{
 };
 use log::{trace, warn};
 use mailparse::{DispositionType, MailHeaderMap, MailParseError, ParsedMail};
-use std::{fmt::Debug, io, path::PathBuf};
+use std::{collections::HashSet, fmt::Debug, io, path::PathBuf};
 use thiserror::Error;
 use tree_magic;
 
 use crate::{
-    account, AccountConfig, Attachment, Parts, PartsIterator, Tpl, TplBuilder,
+    account, AccountConfig, Attachment, Parts, PartsIterator, Tpl, TplBuilder, TplBuilderOpts,
     DEFAULT_SIGNATURE_DELIM,
 };
+
+use super::tpl::ShowHeaders;
 
 #[derive(Error, Debug)]
 pub enum EmailError {
@@ -117,6 +119,21 @@ impl<'a> Email<'a> {
         Ok(attachments.collect())
     }
 
+    pub fn text_parts(
+        &'a self,
+        parsed: &'a ParsedMail,
+    ) -> Result<Vec<&ParsedMail<'a>>, EmailError> {
+        let text_parts = PartsIterator::new(parsed).filter_map(|part| {
+            if part.ctype.mimetype.starts_with("text") {
+                Some(part)
+            } else {
+                None
+            }
+        });
+
+        Ok(text_parts.collect())
+    }
+
     pub fn as_raw(&self) -> Result<&[u8], EmailError> {
         match self.raw {
             RawEmail::Vec(ref vec) => Ok(vec),
@@ -129,21 +146,47 @@ impl<'a> Email<'a> {
         }
     }
 
-    pub fn to_tpl(&mut self, opts: TplBuilder) -> Result<Tpl, EmailError> {
-        Ok(Tpl::default())
-    }
+    pub fn to_read_tpl(
+        &'a mut self,
+        config: &'a AccountConfig,
+        opts: TplBuilderOpts,
+    ) -> Result<Tpl, EmailError> {
+        let mut tpl = TplBuilder::default();
 
-    pub fn to_new_tpl(&self, config: &AccountConfig) -> Result<Tpl, EmailError> {
-        let tpl = TplBuilder::default()
-            .from(config.addr()?)
-            .to("")
-            .text_plain_part(if let Some(ref sig) = config.signature()? {
-                format!("\n{}\n", sig)
-            } else {
-                String::default()
-            });
+        let parsed = self.parsed()?;
+        let parsed_headers = parsed.get_headers();
 
-        Ok(tpl.build())
+        let mut headers_to_show = config.email_reading_headers().clone();
+
+        if let ShowHeaders::Only(headers) = opts.show_headers_or_default() {
+            headers_to_show.extend(headers.to_owned());
+        }
+
+        let opts = TplBuilderOpts {
+            show_headers: Some(ShowHeaders::Only(HashSet::from_iter(
+                headers_to_show.clone(),
+            ))),
+            ..opts
+        };
+
+        for ref header in headers_to_show {
+            if let Some(header) = parsed_headers.get_first_header(header) {
+                tpl = tpl.header(header.get_key(), header.get_value())
+            }
+        }
+
+        for part in PartsIterator::new(parsed) {
+            match part.ctype.mimetype.as_str() {
+                "text/plain" => {
+                    tpl =
+                        tpl.text_plain_part(part.get_body().map_err(EmailError::ParseEmailError)?);
+                }
+                // TODO: manage other mime types
+                _ => (),
+            }
+        }
+
+        Ok(tpl.build(opts))
     }
 
     pub fn to_reply_tpl(
@@ -155,6 +198,8 @@ impl<'a> Email<'a> {
         let parsed = self.parsed()?;
         let headers = parsed.get_headers();
         let sender = config.addr()?;
+
+        println!("sender: {:?}", sender.to_string());
 
         // From
 
@@ -235,7 +280,6 @@ impl<'a> Email<'a> {
         if let Some(ref sig) = config.signature()? {
             tpl.push_str("\n");
             tpl.push_str(sig);
-            tpl.push_str("\n");
         }
 
         Ok(tpl)
@@ -333,84 +377,202 @@ impl TryFrom<ZeroCopy<Vec<Fetch>>> for Email<'_> {
     }
 }
 
-// #[cfg(test)]
-// mod test_to_reply_tpl {
-//     use crate::{AccountConfig, Email};
+#[cfg(test)]
+mod test_to_read_tpl {
+    use concat_with::concat_line;
 
-//     #[test]
-//     fn test_default_config() {
-//         let config = AccountConfig {
-//             email: "to@localhost".into(),
-//             ..AccountConfig::default()
-//         };
+    use crate::{AccountConfig, Email, TplBuilderOpts};
 
-//         let tpl = r#"
-// From: from@localhost
-// To: to@localhost
-// Subject: subject
+    #[test]
+    fn test_default() {
+        let config = AccountConfig::default();
+        let opts = TplBuilderOpts::default();
 
-// Hello!
+        let mut email = Email::from(concat_line!(
+            "From: from@localhost",
+            "To: to@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        ));
 
-// --
-// Regards,
-// "#;
+        let tpl = email.to_read_tpl(&config, opts).unwrap();
 
-//         let expected_tpl = r#"
-// From: to@localhost
-// To: from@localhost
-// Subject: Re: subject
+        let expected_tpl = concat_line!("Hello!", "", "-- ", "Regards,");
 
-// > Hello!
-// >
-// "#;
+        assert_eq!(expected_tpl, *tpl);
+    }
 
-//         assert_eq!(
-//             expected_tpl.trim_start(),
-//             Email::from(tpl.trim_start())
-//                 .to_reply_tpl(&config, false)
-//                 .unwrap()
-//                 .0
-//         );
-//     }
+    #[test]
+    fn test_with_email_reading_headers_only() {
+        let config = AccountConfig {
+            email_reading_headers: Some(vec![
+                // existing headers
+                "From".into(),
+                "Subject".into(),
+                // nonexisting headers
+                "Cc".into(),
+                "Bcc".into(),
+            ]),
+            ..AccountConfig::default()
+        };
 
-//     #[test]
-//     fn test_with_display_name_and_signature() {
-//         let config = AccountConfig {
-//             email: "to@localhost".into(),
-//             display_name: Some("Tȯ".into()),
-//             signature: Some("Cordialement,".into()),
-//             ..AccountConfig::default()
-//         };
+        let opts = TplBuilderOpts::default();
 
-//         let tpl = r#"
-// From: from@localhost
-// To: to@localhost
-// Subject: subject
+        let mut email = Email::from(concat_line!(
+            "From: from@localhost",
+            "To: to@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        ));
 
-// Hello!
+        let tpl = email.to_read_tpl(&config, opts).unwrap();
 
-// --
-// Regards,
-// "#;
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        );
 
-//         let expected_tpl = r#"
-// From: Tȯ <to@localhost>
-// To: from@localhost
-// Subject: Re: subject
+        assert_eq!(expected_tpl, *tpl);
+    }
 
-// > Hello!
-// >
+    #[test]
+    fn test_with_email_reading_headers_and_show_headers() {
+        let config = AccountConfig {
+            email_reading_headers: Some(vec![
+                // existing headers
+                "From".into(),
+                "Subject".into(),
+                // nonexisting headers
+                "Cc".into(),
+                "Bcc".into(),
+            ]),
+            ..AccountConfig::default()
+        };
 
-// --
-// Cordialement,
-// "#;
+        let opts = TplBuilderOpts::default().show_headers(
+            [
+                // existing headers
+                "To",
+                // nonexisting header
+                "Content-Type",
+            ]
+            .iter(),
+        );
 
-//         assert_eq!(
-//             expected_tpl.trim_start(),
-//             Email::from(tpl.trim_start())
-//                 .to_reply_tpl(&config, false)
-//                 .unwrap()
-//                 .0
-//         );
-//     }
-// }
+        let mut email = Email::from(concat_line!(
+            "From: from@localhost",
+            "To: to@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        ));
+
+        let tpl = email.to_read_tpl(&config, opts).unwrap();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "Subject: subject",
+            "To: to@localhost",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+}
+
+#[cfg(test)]
+mod test_to_reply_tpl {
+    use crate::{AccountConfig, Email};
+
+    #[test]
+    fn test_default_config() {
+        let config = AccountConfig {
+            email: "to@localhost".into(),
+            ..AccountConfig::default()
+        };
+
+        let tpl = r#"From: from@localhost
+To: to@localhost
+Subject: subject
+
+Hello!
+
+-- 
+Regards,
+"#;
+
+        let expected_tpl = r#"From: to@localhost
+To: from@localhost
+Subject: Re: subject
+
+> Hello!
+> 
+"#;
+
+        assert_eq!(
+            expected_tpl,
+            Email::from(tpl)
+                .to_reply_tpl(&config, false)
+                .unwrap()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn test_with_display_name_and_signature() {
+        let config = AccountConfig {
+            email: "to@localhost".into(),
+            display_name: Some("To".into()),
+            signature: Some("Cordialement,".into()),
+            ..AccountConfig::default()
+        };
+
+        let tpl = r#"From: from@localhost
+To: to@localhost
+Subject: subject
+
+Hello!
+
+-- 
+Regards,
+"#;
+
+        let expected_tpl = r#"From: To <to@localhost>
+To: from@localhost
+Subject: Re: subject
+
+> Hello!
+> 
+
+-- 
+Cordialement,"#;
+
+        assert_eq!(
+            expected_tpl,
+            Email::from(tpl.trim_start())
+                .to_reply_tpl(&config, false)
+                .unwrap()
+                .to_string()
+        );
+    }
+}

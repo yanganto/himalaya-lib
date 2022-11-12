@@ -2,18 +2,22 @@
 //!
 //! This module provides subcommands, arguments and a command matcher related to message template.
 
+use ammonia;
 use lettre::{
     error::Error as LettreError,
     message::{Message, SinglePart},
 };
 use log::warn;
 use mailparse::MailParseError;
+use regex::Regex;
 use std::{
     collections::{HashMap, HashSet},
     ops::{Deref, DerefMut},
-    result, string,
+    string,
 };
 use thiserror::Error;
+
+use crate::{account, AccountConfig};
 
 type HeaderKey = String;
 type PartMime = String;
@@ -32,16 +36,17 @@ impl Default for HeaderVal {
 }
 
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum TplError {
     #[error("cannot parse encrypted part of multipart")]
     ParseTplError(#[source] MailParseError),
     #[error("cannot compile template")]
     CompileTplError(#[source] LettreError),
     #[error("cannot decode compiled template using utf-8")]
     DecodeCompiledTplError(#[source] string::FromUtf8Error),
-}
 
-pub type Result<T> = result::Result<T, Error>;
+    #[error(transparent)]
+    ConfigError(#[from] account::config::Error),
+}
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Tpl(String);
@@ -61,6 +66,21 @@ impl DerefMut for Tpl {
 }
 
 impl Tpl {
+    pub fn new(config: &AccountConfig) -> Result<Self, TplError> {
+        let tpl = TplBuilder::default()
+            .from(config.addr()?)
+            .to("")
+            .subject("")
+            .text_plain_part(
+                config
+                    .signature()?
+                    .map(|ref signature| String::from("\n\n") + signature)
+                    .unwrap_or_default(),
+            );
+
+        Ok(tpl.build(TplBuilderOpts::default()))
+    }
+
     pub fn push_header<V: AsRef<str>>(&mut self, header: &str, value: V) -> &mut Self {
         self.push_str(header);
         self.push_str(": ");
@@ -69,8 +89,8 @@ impl Tpl {
         self
     }
 
-    pub fn compile(&self) -> Result<Message> {
-        let input = mailparse::parse_mail(self.as_bytes()).map_err(Error::ParseTplError)?;
+    pub fn compile(&self) -> Result<Message, TplError> {
+        let input = mailparse::parse_mail(self.as_bytes()).map_err(TplError::ParseTplError)?;
         let mut output = Message::builder();
 
         for header in input.get_headers() {
@@ -124,7 +144,52 @@ impl Tpl {
 
         output
             .singlepart(SinglePart::plain(input.get_body().unwrap_or_default()))
-            .map_err(Error::CompileTplError)
+            .map_err(TplError::CompileTplError)
+    }
+}
+
+#[cfg(test)]
+mod test_tpl {
+    use concat_with::concat_line;
+
+    use crate::{AccountConfig, Tpl};
+
+    #[test]
+    fn test_new_tpl() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            ..AccountConfig::default()
+        };
+
+        let tpl = Tpl::new(&config).unwrap();
+
+        let expected_tpl = concat_line!("From: from@localhost", "To: ", "Subject: ", "", "");
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn test_new_tpl_with_signature() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            signature: Some("Regards,".into()),
+            ..AccountConfig::default()
+        };
+
+        let tpl = Tpl::new(&config).unwrap();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "To: ",
+            "Subject: ",
+            "",
+            "",
+            "",
+            "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
     }
 }
 
@@ -142,14 +207,28 @@ pub struct TplOverride<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ShowTextPartStrategy {
-    Raw,
     PlainOtherwiseHtml,
     HtmlOtherwisePlain,
 }
 
 impl Default for ShowTextPartStrategy {
     fn default() -> Self {
-        Self::Raw
+        Self::PlainOtherwiseHtml
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ShowHeaders {
+    All,
+    Only(HashSet<HeaderKey>),
+}
+
+impl ShowHeaders {
+    pub fn contains<K: AsRef<str>>(&self, key: K) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(set) => set.contains(key.as_ref()),
+        }
     }
 }
 
@@ -157,51 +236,99 @@ impl Default for ShowTextPartStrategy {
 // ReadEmailOpts. For now it should be used only for reading. Get
 // email => build Tpl based on those opts.
 #[derive(Debug, Default, Clone)]
-pub struct TplFromEmailOpts {
-    show_headers: HashSet<HeaderKey>,
-    show_text_part_strategy: ShowTextPartStrategy,
-    show_text_parts_only: bool,
-    sanitize_text_plain_parts: bool,
-    sanitize_text_html_parts: bool,
+pub struct TplBuilderOpts {
+    pub show_headers: Option<ShowHeaders>,
+    pub show_text_part_strategy: Option<ShowTextPartStrategy>,
+    pub show_text_parts_only: Option<bool>,
+    pub sanitize_text_plain_parts: Option<bool>,
+    pub sanitize_text_html_parts: Option<bool>,
 }
 
-impl TplFromEmailOpts {
+impl TplBuilderOpts {
+    pub const DEFAULT_SHOW_HEADERS: ShowHeaders = ShowHeaders::All;
+    pub const DEFAULT_SHOW_TEXT_PART_STRATEGY: ShowTextPartStrategy =
+        ShowTextPartStrategy::PlainOtherwiseHtml;
+    pub const DEFAULT_SHOW_TEXT_PARTS_ONLY: bool = true;
+    pub const DEFAULT_SANITIZE_TEXT_PLAIN_PARTS: bool = true;
+    pub const DEFAULT_SANITIZE_TEXT_HTML_PARTS: bool = true;
+
+    pub fn show_headers_or_default(&self) -> &ShowHeaders {
+        self.show_headers
+            .as_ref()
+            .unwrap_or(&Self::DEFAULT_SHOW_HEADERS)
+    }
+
+    pub fn show_text_part_strategy_or_default(&self) -> &ShowTextPartStrategy {
+        self.show_text_part_strategy
+            .as_ref()
+            .unwrap_or(&Self::DEFAULT_SHOW_TEXT_PART_STRATEGY)
+    }
+
+    pub fn show_text_parts_only_or_default(&self) -> bool {
+        self.show_text_parts_only
+            .unwrap_or(Self::DEFAULT_SHOW_TEXT_PARTS_ONLY)
+    }
+
+    pub fn sanitize_text_plain_parts_or_default(&self) -> bool {
+        self.sanitize_text_plain_parts
+            .unwrap_or(Self::DEFAULT_SANITIZE_TEXT_PLAIN_PARTS)
+    }
+
+    pub fn sanitize_text_html_parts_or_default(&self) -> bool {
+        self.sanitize_text_html_parts
+            .unwrap_or(Self::DEFAULT_SANITIZE_TEXT_HTML_PARTS)
+    }
+
     pub fn show_header<H: ToString>(mut self, header: H) -> Self {
-        self.show_headers.insert(header.to_string());
+        match self.show_headers_or_default() {
+            ShowHeaders::All => {
+                self.show_headers =
+                    Some(ShowHeaders::Only(HashSet::from_iter([header.to_string()])));
+            }
+            ShowHeaders::Only(set) => {
+                let mut set = set.clone();
+                set.insert(header.to_string());
+                self.show_headers = Some(ShowHeaders::Only(set));
+            }
+        };
+
         self
     }
 
     pub fn show_headers<S: ToString, B: Iterator<Item = S>>(mut self, headers: B) -> Self {
-        let headers = headers
-            .into_iter()
-            .map(|header| header.to_string())
-            .collect::<Vec<_>>();
-        self.show_headers.extend(headers);
-        self
-    }
+        let headers = headers.into_iter().map(|header| header.to_string());
 
-    pub fn hide_header<H: AsRef<str>>(mut self, header: H) -> Self {
-        self.show_headers.remove(header.as_ref());
+        match self.show_headers_or_default() {
+            ShowHeaders::All => {
+                self.show_headers = Some(ShowHeaders::Only(HashSet::from_iter(headers)));
+            }
+            ShowHeaders::Only(set) => {
+                let mut set = set.clone();
+                set.extend(headers);
+                self.show_headers = Some(ShowHeaders::Only(set));
+            }
+        };
+
         self
     }
 
     pub fn show_text_parts_only(mut self) -> Self {
-        self.show_text_parts_only = true;
+        self.show_text_parts_only = Some(true);
         self
     }
 
     pub fn use_show_text_part_strategy(mut self, strategy: ShowTextPartStrategy) -> Self {
-        self.show_text_part_strategy = strategy;
+        self.show_text_part_strategy = Some(strategy);
         self
     }
 
     pub fn sanitize_text_plain_parts(mut self) -> Self {
-        self.sanitize_text_plain_parts = true;
+        self.sanitize_text_plain_parts = Some(true);
         self
     }
 
     pub fn sanitize_text_html_parts(mut self) -> Self {
-        self.sanitize_text_html_parts = true;
+        self.sanitize_text_html_parts = Some(true);
         self
     }
 
@@ -279,10 +406,14 @@ impl TplBuilder {
         self.part("text/plain", part)
     }
 
-    pub fn build(&self) -> Tpl {
+    pub fn build(&self, opts: TplBuilderOpts) -> Tpl {
         let mut tpl = Tpl::default();
 
         for key in &self.headers_order {
+            if !opts.show_headers_or_default().contains(key) {
+                continue;
+            }
+
             if let Some(val) = self.headers.get(key) {
                 match val {
                     HeaderVal::String(string) => tpl.push_header(key, string),
@@ -291,13 +422,84 @@ impl TplBuilder {
             }
         }
 
-        tpl.push_str("\n");
-
-        if let Some(part) = self.parts.get("text/plain") {
-            tpl.push_str(part)
+        if !tpl.is_empty() {
+            tpl.push_str("\n");
         }
 
-        // TODO: manage other mime parts
+        let plain_part = self.parts.get("text/plain").map(|plain| {
+            if opts.sanitize_text_plain_parts_or_default() {
+                return {
+                    // merges new line chars
+                    let sanitized_plain = Regex::new(r"(\r?\n\s*){2,}")
+                        .unwrap()
+                        .replace_all(&plain, "\n\n")
+                        .to_string();
+                    // replaces tabulations by spaces
+                    let sanitized_plain = Regex::new(r"\t")
+                        .unwrap()
+                        .replace_all(&sanitized_plain, " ")
+                        .to_string();
+                    // merges spaces
+                    let sanitized_plain = Regex::new(r" {2,}")
+                        .unwrap()
+                        .replace_all(&sanitized_plain, "  ")
+                        .to_string();
+
+                    sanitized_plain
+                };
+            };
+            plain.to_owned()
+        });
+
+        let html_part = self.parts.get("text/html").map(|html| {
+            if opts.sanitize_text_html_parts_or_default() {
+                return {
+                    // removes html markup
+                    let sanitized_html = ammonia::Builder::new()
+                        .tags(HashSet::default())
+                        .clean(&html)
+                        .to_string();
+                    // merges new line chars
+                    let sanitized_html = Regex::new(r"(\r?\n\s*){2,}")
+                        .unwrap()
+                        .replace_all(&sanitized_html, "\n\n")
+                        .to_string();
+                    // replaces tabulations and &npsp; by spaces
+                    let sanitized_html = Regex::new(r"(\t|&nbsp;)")
+                        .unwrap()
+                        .replace_all(&sanitized_html, " ")
+                        .to_string();
+                    // merges spaces
+                    let sanitized_html = Regex::new(r" {2,}")
+                        .unwrap()
+                        .replace_all(&sanitized_html, "  ")
+                        .to_string();
+                    // decodes html entities
+                    let sanitized_html =
+                        html_escape::decode_html_entities(&sanitized_html).to_string();
+
+                    sanitized_html
+                };
+            };
+            html.to_owned()
+        });
+
+        match opts.show_text_part_strategy_or_default() {
+            ShowTextPartStrategy::PlainOtherwiseHtml => {
+                if let Some(ref part) = plain_part.or(html_part) {
+                    tpl.push_str(part)
+                }
+            }
+            ShowTextPartStrategy::HtmlOtherwisePlain => {
+                if let Some(ref part) = html_part.or(plain_part) {
+                    tpl.push_str(part)
+                }
+            }
+        }
+
+        if !opts.show_text_parts_only_or_default() {
+            // TODO: manage other mime parts
+        }
 
         tpl
     }
@@ -305,7 +507,9 @@ impl TplBuilder {
 
 #[cfg(test)]
 mod test_tpl_builder {
-    use super::*;
+    use concat_with::concat_line;
+
+    use crate::{TplBuilder, TplBuilderOpts};
 
     #[test]
     fn test_build() {
@@ -315,20 +519,20 @@ mod test_tpl_builder {
             .cc("cc")
             .subject("subject")
             .cc("cc2")
-            .text_plain_part("body\n")
+            .text_plain_part("body")
             .bcc("bcc")
-            .build();
+            .build(TplBuilderOpts::default());
 
-        let expected_tpl = r#"
-From: from
-To: 
-Cc: cc, cc2
-Subject: subject
-Bcc: bcc
+        let expected_tpl = concat_line!(
+            "From: from",
+            "To: ",
+            "Cc: cc, cc2",
+            "Subject: subject",
+            "Bcc: bcc",
+            "",
+            "body",
+        );
 
-body
-"#;
-
-        assert_eq!(expected_tpl.trim_start(), *tpl);
+        assert_eq!(expected_tpl, *tpl);
     }
 }

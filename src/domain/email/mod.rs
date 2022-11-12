@@ -15,7 +15,7 @@ mod addr;
 pub use addr::*;
 
 mod tpl;
-pub use tpl::{ShowTextPartStrategy, Tpl, TplBuilder, TplOverride};
+pub use tpl::{ShowTextPartStrategy, Tpl, TplBuilder, TplBuilderOpts, TplOverride};
 
 mod email;
 pub use email::*;
