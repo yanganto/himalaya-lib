@@ -17,7 +17,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{account, AccountConfig};
+use crate::{account, sanitize_text_plain_part, AccountConfig};
 
 type HeaderKey = String;
 type PartMime = String;
@@ -249,8 +249,8 @@ impl TplBuilderOpts {
     pub const DEFAULT_SHOW_TEXT_PART_STRATEGY: ShowTextPartStrategy =
         ShowTextPartStrategy::PlainOtherwiseHtml;
     pub const DEFAULT_SHOW_TEXT_PARTS_ONLY: bool = true;
-    pub const DEFAULT_SANITIZE_TEXT_PLAIN_PARTS: bool = true;
-    pub const DEFAULT_SANITIZE_TEXT_HTML_PARTS: bool = true;
+    pub const DEFAULT_SANITIZE_TEXT_PLAIN_PARTS: bool = false;
+    pub const DEFAULT_SANITIZE_TEXT_HTML_PARTS: bool = false;
 
     pub fn show_headers_or_default(&self) -> &ShowHeaders {
         self.show_headers
@@ -379,8 +379,12 @@ impl TplBuilder {
         self
     }
 
-    pub fn subject<S: ToString>(self, subject: S) -> Self {
-        self.header("Subject", subject)
+    pub fn in_reply_to<H: ToString>(self, header: H) -> Self {
+        self.header("In-Reply-To", header)
+    }
+
+    pub fn subject<H: ToString>(self, header: H) -> Self {
+        self.header("Subject", header)
     }
 
     pub fn from<A: ToString>(self, addr: A) -> Self {
@@ -435,27 +439,10 @@ impl TplBuilder {
 
         let plain_part = self.parts.get("text/plain").map(|plain| {
             if opts.sanitize_text_plain_parts_or_default() {
-                return {
-                    // merges new line chars
-                    let sanitized_plain = Regex::new(r"(\r?\n\s*){2,}")
-                        .unwrap()
-                        .replace_all(&plain, "\n\n")
-                        .to_string();
-                    // replaces tabulations by spaces
-                    let sanitized_plain = Regex::new(r"\t")
-                        .unwrap()
-                        .replace_all(&sanitized_plain, " ")
-                        .to_string();
-                    // merges spaces
-                    let sanitized_plain = Regex::new(r" {2,}")
-                        .unwrap()
-                        .replace_all(&sanitized_plain, "  ")
-                        .to_string();
-
-                    sanitized_plain
-                };
-            };
-            plain.to_owned()
+                sanitize_text_plain_part(plain)
+            } else {
+                plain.to_owned()
+            }
         });
 
         let html_part = self.parts.get("text/html").map(|html| {

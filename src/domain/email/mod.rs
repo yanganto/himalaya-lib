@@ -9,7 +9,7 @@ mod attachment;
 pub use attachment::Attachment;
 
 mod parts;
-pub use parts::{Parts, PartsIterator};
+pub use parts::{sanitize_text_plain_part, Parts, PartsIterator};
 
 mod addr;
 pub use addr::*;
