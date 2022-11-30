@@ -9,7 +9,7 @@ use shellexpand;
 use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf, result};
 use thiserror::Error;
 
-use crate::{process, EmailHooks, EmailSender, EmailTextPlainFormat};
+use crate::{process, EmailHooks, EmailSender, EmailTextPlainFormat, TplBuilder};
 
 pub const DEFAULT_PAGE_SIZE: usize = 10;
 pub const DEFAULT_SIGNATURE_DELIM: &str = "-- \n";
@@ -201,6 +201,18 @@ impl AccountConfig {
         Ok(alias)
     }
 
+    pub fn inbox_folder_alias(&self) -> Result<String> {
+        self.folder_alias(DEFAULT_INBOX_FOLDER)
+    }
+
+    pub fn drafts_folder_alias(&self) -> Result<String> {
+        self.folder_alias(DEFAULT_DRAFTS_FOLDER)
+    }
+
+    pub fn sent_folder_alias(&self) -> Result<String> {
+        self.folder_alias(DEFAULT_SENT_FOLDER)
+    }
+
     pub fn email_listing_page_size(&self) -> usize {
         self.email_listing_page_size.unwrap_or(DEFAULT_PAGE_SIZE)
     }
@@ -227,47 +239,102 @@ impl AccountConfig {
             .or_else(|| signature.map(ToOwned::to_owned))
             .map(|sig| format!("{}{}", delim, sig.trim_end())))
     }
+
+    pub fn to_write_tpl_builder(&self) -> Result<TplBuilder> {
+        let tpl = TplBuilder::default()
+            .from(self.addr()?)
+            .to("")
+            .subject("")
+            .text_plain_part(
+                self.signature()?
+                    .map(|ref signature| String::from("\n\n") + signature)
+                    .unwrap_or_default(),
+            );
+
+        Ok(tpl)
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod test_account_config {
+    use concat_with::concat_line;
+    use std::path::PathBuf;
+
+    use crate::AccountConfig;
 
     #[test]
-    fn get_unique_download_file_path() {
+    fn test_unique_download_file_path() {
         let config = AccountConfig::default();
         let path = PathBuf::from("downloads/file.ext");
 
-        // When file path is unique
+        // when file path is unique
         assert!(matches!(
             config.get_unique_download_file_path(&path, |_, _| false),
             Ok(path) if path == PathBuf::from("downloads/file.ext")
         ));
 
-        // When 1 file path already exist
+        // when 1 file path already exist
         assert!(matches!(
             config.get_unique_download_file_path(&path, |_, count| count <  1),
             Ok(path) if path == PathBuf::from("downloads/file_1.ext")
         ));
 
-        // When 5 file paths already exist
+        // when 5 file paths already exist
         assert!(matches!(
             config.get_unique_download_file_path(&path, |_, count| count < 5),
             Ok(path) if path == PathBuf::from("downloads/file_5.ext")
         ));
 
-        // When file path has no extension
+        // when file path has no extension
         let path = PathBuf::from("downloads/file");
         assert!(matches!(
             config.get_unique_download_file_path(&path, |_, count| count < 5),
             Ok(path) if path == PathBuf::from("downloads/file_5")
         ));
 
-        // When file path has 2 extensions
+        // when file path has 2 extensions
         let path = PathBuf::from("downloads/file.ext.ext2");
         assert!(matches!(
             config.get_unique_download_file_path(&path, |_, count| count < 5),
             Ok(path) if path == PathBuf::from("downloads/file.ext_5.ext2")
         ));
+    }
+
+    #[test]
+    fn test_to_write_tpl_builder() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            ..AccountConfig::default()
+        };
+
+        let tpl = config.to_write_tpl_builder().unwrap().build();
+
+        let expected_tpl = concat_line!("From: from@localhost", "To: ", "Subject: ", "", "");
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn test_to_write_tpl_builder_with_signature() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            signature: Some("Regards,".into()),
+            ..AccountConfig::default()
+        };
+
+        let tpl = config.to_write_tpl_builder().unwrap().build();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "To: ",
+            "Subject: ",
+            "",
+            "",
+            "",
+            "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
     }
 }

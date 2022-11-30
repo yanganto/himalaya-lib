@@ -1,10 +1,7 @@
 use log::{debug, trace};
-use std::{
-    env, fs,
-    path::{self, PathBuf},
-};
+use std::{env, fs, path::PathBuf};
 
-use crate::email::EmailError;
+use crate::email::Error;
 
 pub fn local_draft_path() -> PathBuf {
     trace!(">> get local draft path");
@@ -16,11 +13,11 @@ pub fn local_draft_path() -> PathBuf {
     path
 }
 
-pub fn remove_local_draft() -> Result<(), EmailError> {
+pub fn remove_local_draft() -> Result<(), Error> {
     trace!(">> remove local draft");
 
     let path = local_draft_path();
-    fs::remove_file(&path).map_err(|err| EmailError::DeleteLocalDraftError(err, path))?;
+    fs::remove_file(&path).map_err(|err| Error::DeleteLocalDraftError(err, path))?;
 
     trace!("<< remove local draft");
     Ok(())

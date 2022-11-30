@@ -2,19 +2,17 @@ use imap::types::{Fetch, ZeroCopy};
 use lettre::{address::AddressError, message::Mailboxes};
 use log::{trace, warn};
 use mailparse::{DispositionType, MailHeaderMap, MailParseError, ParsedMail};
-use std::{fmt::Debug, io, path::PathBuf};
+use std::{fmt::Debug, io, path::PathBuf, result};
 use thiserror::Error;
 use tree_magic;
 
 use crate::{
-    account, sanitize_text_plain_part, AccountConfig, Attachment, Parts, PartsIterator, Tpl,
+    account, sanitize_text_plain_part, AccountConfig, Attachment, PartsIterator, ShowHeaders, Tpl,
     TplBuilder, TplBuilderOpts, DEFAULT_SIGNATURE_DELIM,
 };
 
-use super::tpl::ShowHeaders;
-
 #[derive(Error, Debug)]
-pub enum EmailError {
+pub enum Error {
     #[error("cannot parse email")]
     ParseEmailError(#[source] MailParseError),
     #[error("cannot parse email body")]
@@ -48,8 +46,10 @@ pub enum EmailError {
     DecryptPartError(#[source] account::config::Error),
 }
 
+pub type Result<T> = result::Result<T, Error>;
+
 #[derive(Debug)]
-pub enum RawEmail<'a> {
+enum RawEmail<'a> {
     Vec(Vec<u8>),
     Bytes(&'a [u8]),
     #[cfg(feature = "imap-backend")]
@@ -63,32 +63,30 @@ pub struct Email<'a> {
 }
 
 impl<'a> Email<'a> {
-    pub fn parsed(&'a mut self) -> Result<&ParsedMail<'a>, EmailError> {
+    pub fn parsed(&'a mut self) -> Result<&ParsedMail<'a>> {
         if self.parsed.is_none() {
             self.parsed = Some(match &self.raw {
-                RawEmail::Vec(vec) => {
-                    mailparse::parse_mail(vec).map_err(EmailError::ParseEmailError)
-                }
+                RawEmail::Vec(vec) => mailparse::parse_mail(vec).map_err(Error::ParseEmailError),
                 RawEmail::Bytes(bytes) => {
-                    mailparse::parse_mail(*bytes).map_err(EmailError::ParseEmailError)
+                    mailparse::parse_mail(*bytes).map_err(Error::ParseEmailError)
                 }
                 #[cfg(feature = "imap-backend")]
                 RawEmail::ImapFetches(fetches) => {
                     let body = fetches
                         .first()
                         .and_then(|fetch| fetch.body())
-                        .ok_or(EmailError::ParseEmailFromImapFetchesEmptyError)?;
-                    mailparse::parse_mail(body).map_err(EmailError::ParseEmailError)
+                        .ok_or(Error::ParseEmailFromImapFetchesEmptyError)?;
+                    mailparse::parse_mail(body).map_err(Error::ParseEmailError)
                 }
             }?)
         }
 
         self.parsed
             .as_ref()
-            .ok_or_else(|| EmailError::ParseEmailEmptyRawError)
+            .ok_or_else(|| Error::ParseEmailEmptyRawError)
     }
 
-    pub fn attachments(&'a mut self) -> Result<Vec<Attachment>, EmailError> {
+    pub fn attachments(&'a mut self) -> Result<Vec<Attachment>> {
         let attachments = PartsIterator::new(self.parsed()?).filter_map(|part| {
             let cdisp = part.get_content_disposition();
             if let DispositionType::Attachment = cdisp.disposition {
@@ -118,10 +116,7 @@ impl<'a> Email<'a> {
         Ok(attachments.collect())
     }
 
-    pub fn text_parts(
-        &'a self,
-        parsed: &'a ParsedMail,
-    ) -> Result<Vec<&ParsedMail<'a>>, EmailError> {
+    pub fn text_parts(&'a self, parsed: &'a ParsedMail) -> Result<Vec<&ParsedMail<'a>>> {
         let text_parts = PartsIterator::new(parsed).filter_map(|part| {
             if part.ctype.mimetype.starts_with("text") {
                 Some(part)
@@ -133,7 +128,7 @@ impl<'a> Email<'a> {
         Ok(text_parts.collect())
     }
 
-    pub fn as_raw(&self) -> Result<&[u8], EmailError> {
+    pub fn as_raw(&self) -> Result<&[u8]> {
         match self.raw {
             RawEmail::Vec(ref vec) => Ok(vec),
             RawEmail::Bytes(bytes) => Ok(bytes),
@@ -141,7 +136,7 @@ impl<'a> Email<'a> {
             RawEmail::ImapFetches(ref fetches) => fetches
                 .first()
                 .and_then(|fetch| fetch.body())
-                .ok_or_else(|| EmailError::ParseEmailFromImapFetchesEmptyError),
+                .ok_or_else(|| Error::ParseEmailFromImapFetchesEmptyError),
         }
     }
 
@@ -149,7 +144,7 @@ impl<'a> Email<'a> {
         &'a mut self,
         config: &'a AccountConfig,
         opts: TplBuilderOpts,
-    ) -> Result<Tpl, EmailError> {
+    ) -> Result<Tpl> {
         let mut tpl = TplBuilder::default();
 
         let parsed = self.parsed()?;
@@ -186,22 +181,21 @@ impl<'a> Email<'a> {
         for part in PartsIterator::new(parsed) {
             match part.ctype.mimetype.as_str() {
                 "text/plain" => {
-                    tpl =
-                        tpl.text_plain_part(part.get_body().map_err(EmailError::ParseEmailError)?);
+                    tpl = tpl.text_plain_part(part.get_body().map_err(Error::ParseEmailError)?);
                 }
                 // TODO: manage other mime types
                 _ => (),
             }
         }
 
-        Ok(tpl.build(opts))
+        Ok(tpl.opts(opts).build())
     }
 
-    pub fn to_reply_tpl(
+    pub fn to_reply_tpl_builder(
         &'a mut self,
         config: &AccountConfig,
         all: bool,
-    ) -> Result<Tpl, EmailError> {
+    ) -> Result<TplBuilder> {
         let mut tpl = TplBuilder::default();
 
         let parsed = self.parsed()?;
@@ -284,9 +278,8 @@ impl<'a> Email<'a> {
                     continue;
                 }
 
-                let body = sanitize_text_plain_part(
-                    part.get_body().map_err(EmailError::ParseEmailBodyError)?,
-                );
+                let body =
+                    sanitize_text_plain_part(part.get_body().map_err(Error::ParseEmailBodyError)?);
 
                 lines.push_str("\n\n");
 
@@ -313,47 +306,82 @@ impl<'a> Email<'a> {
             lines
         });
 
-        Ok(tpl.build(TplBuilderOpts::default()))
+        Ok(tpl)
     }
 
-    pub fn to_forward_tpl(&'a mut self, config: &AccountConfig) -> Result<Tpl, EmailError> {
-        let mut tpl = Tpl::default();
+    pub fn to_forward_tpl_builder(&'a mut self, config: &AccountConfig) -> Result<TplBuilder> {
+        let mut tpl = TplBuilder::default();
+
         let parsed = self.parsed()?;
-        let headers = parsed.get_headers();
+        let parsed_headers = parsed.get_headers();
         let sender = config.addr()?;
 
         // From
 
-        tpl.push_header("From", &sender.to_string());
+        tpl = tpl.from(&sender);
 
         // To
 
-        tpl.push_header("To", "");
+        tpl = tpl.to("");
 
         // Subject
 
-        let subject = headers.get_first_value("Subject").unwrap_or_default();
-        tpl.push_header("Subject", format!("Fwd: {}", subject));
+        let subject = parsed_headers
+            .get_first_value("Subject")
+            .unwrap_or_default();
 
-        // Signature
-
-        if let Some(ref sig) = config.signature()? {
-            tpl.push_str("\n");
-            tpl.push_str(sig);
-            tpl.push_str("\n");
-        }
+        tpl = tpl.subject(format!("Fwd: {}", subject));
 
         // Body
 
-        tpl.push_str("\n-------- Forwarded Message --------\n");
-        tpl.push_header("Subject", subject);
-        if let Some(date) = headers.get_first_value("date") {
-            tpl.push_header("Date: ", date);
-        }
-        tpl.push_header("From: ", headers.get_all_values("from").join(", "));
-        tpl.push_header("To: ", headers.get_all_values("to").join(", "));
-        tpl.push_str("\n");
-        tpl.push_str(&Parts::concat_text_plain_bodies(&parsed)?);
+        tpl = tpl.text_plain_part({
+            let mut lines = String::from("\n");
+
+            if let Some(ref signature) = config.signature()? {
+                lines.push_str("\n");
+                lines.push_str(signature);
+            }
+
+            lines.push_str("\n-------- Forwarded Message --------\n");
+
+            if let Some(date) = parsed_headers.get_first_value("date") {
+                lines.push_str(&format!("Date: {}\n", date));
+            }
+
+            lines.push_str(&format!("From: {}\n", {
+                let mut from = Mailboxes::new();
+                for mboxes in parsed_headers.get_all_values("From") {
+                    let mboxes: Mailboxes = mboxes.parse()?;
+                    from.extend(mboxes)
+                }
+                from
+            }));
+
+            lines.push_str(&format!("To: {}\n", {
+                let mut to = Mailboxes::new();
+                for mboxes in parsed_headers.get_all_values("To") {
+                    let mboxes: Mailboxes = mboxes.parse()?;
+                    to.extend(mboxes)
+                }
+                to
+            }));
+
+            lines.push_str(&format!("Subject: {}\n", subject));
+
+            lines.push_str("\n");
+
+            for part in PartsIterator::new(&parsed) {
+                if part.ctype.mimetype != "text/plain" {
+                    continue;
+                }
+
+                lines.push_str(&sanitize_text_plain_part(
+                    part.get_body().map_err(Error::ParseEmailBodyError)?,
+                ));
+            }
+
+            lines
+        });
 
         Ok(tpl)
     }
@@ -394,11 +422,11 @@ impl<'a> From<ParsedMail<'a>> for Email<'a> {
 
 #[cfg(feature = "imap-backend")]
 impl TryFrom<ZeroCopy<Vec<Fetch>>> for Email<'_> {
-    type Error = EmailError;
+    type Error = Error;
 
-    fn try_from(fetches: ZeroCopy<Vec<Fetch>>) -> Result<Self, Self::Error> {
+    fn try_from(fetches: ZeroCopy<Vec<Fetch>>) -> Result<Self> {
         if fetches.is_empty() {
-            Err(EmailError::ParseEmailFromImapFetchesEmptyError)
+            Err(Error::ParseEmailFromImapFetchesEmptyError)
         } else {
             Ok(Self {
                 raw: RawEmail::ImapFetches(fetches),
@@ -409,13 +437,13 @@ impl TryFrom<ZeroCopy<Vec<Fetch>>> for Email<'_> {
 }
 
 #[cfg(test)]
-mod test_to_read_tpl {
+mod test_email {
     use concat_with::concat_line;
 
     use crate::{AccountConfig, Email, TplBuilderOpts};
 
     #[test]
-    fn test_default() {
+    fn test_to_read_tpl_builder() {
         let config = AccountConfig::default();
         let opts = TplBuilderOpts::default();
 
@@ -438,7 +466,7 @@ mod test_to_read_tpl {
     }
 
     #[test]
-    fn test_email_reading_headers() {
+    fn test_to_read_tpl_builder_with_email_reading_headers_config() {
         let config = AccountConfig {
             email_reading_headers: Some(vec![
                 // existing headers
@@ -480,7 +508,7 @@ mod test_to_read_tpl {
     }
 
     #[test]
-    fn test_show_all_headers() {
+    fn test_to_read_tpl_builder_with_show_all_headers_option() {
         let config = AccountConfig {
             // config should be overriden by the options
             email_reading_headers: Some(vec!["Content-Type".into()]),
@@ -517,7 +545,7 @@ mod test_to_read_tpl {
     }
 
     #[test]
-    fn test_show_only_headers() {
+    fn test_to_read_tpl_builder_with_show_only_headers_option() {
         let config = AccountConfig {
             // config should be overriden by the options
             email_reading_headers: Some(vec!["From".into()]),
@@ -560,16 +588,9 @@ mod test_to_read_tpl {
 
         assert_eq!(expected_tpl, *tpl);
     }
-}
-
-#[cfg(test)]
-mod test_to_reply_tpl {
-    use concat_with::concat_line;
-
-    use crate::{AccountConfig, Email};
 
     #[test]
-    fn test_default() {
+    fn test_to_reply_tpl_builder() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             ..AccountConfig::default()
@@ -588,7 +609,7 @@ mod test_to_reply_tpl {
             "Regards,"
         ));
 
-        let tpl = email.to_reply_tpl(&config, false).unwrap();
+        let tpl = email.to_reply_tpl_builder(&config, false).unwrap().build();
 
         let expected_tpl = concat_line!(
             "From: to@localhost",
@@ -606,7 +627,7 @@ mod test_to_reply_tpl {
     }
 
     #[test]
-    fn test_reply_all() {
+    fn test_to_reply_all_tpl_builder() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             ..AccountConfig::default()
@@ -625,7 +646,7 @@ mod test_to_reply_tpl {
             "Regards,"
         ));
 
-        let tpl = email.to_reply_tpl(&config, true).unwrap();
+        let tpl = email.to_reply_tpl_builder(&config, true).unwrap().build();
 
         let expected_tpl = concat_line!(
             "From: to@localhost",
@@ -644,7 +665,7 @@ mod test_to_reply_tpl {
     }
 
     #[test]
-    fn test_signature() {
+    fn test_to_reply_tpl_builder_with_signature() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             signature: Some("Cordialement,".into()),
@@ -662,7 +683,7 @@ mod test_to_reply_tpl {
             "Regards,"
         ));
 
-        let tpl = email.to_reply_tpl(&config, false).unwrap();
+        let tpl = email.to_reply_tpl_builder(&config, false).unwrap().build();
 
         let expected_tpl = concat_line!(
             "From: to@localhost",
@@ -676,6 +697,97 @@ mod test_to_reply_tpl {
             "",
             "-- ",
             "Cordialement,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn test_to_forward_tpl_builder() {
+        let config = AccountConfig {
+            email: "to@localhost".into(),
+            ..AccountConfig::default()
+        };
+
+        let mut email = Email::from(concat_line!(
+            "From: from@localhost",
+            "To: to@localhost, to2@localhost",
+            "Cc: cc@localhost, cc2@localhost",
+            "Bcc: bcc@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        ));
+
+        let tpl = email.to_forward_tpl_builder(&config).unwrap().build();
+
+        let expected_tpl = concat_line!(
+            "From: to@localhost",
+            "To: ",
+            "Subject: Fwd: subject",
+            "",
+            "",
+            "",
+            "-------- Forwarded Message --------",
+            "From: from@localhost",
+            "To: to@localhost, to2@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn test_to_forward_tpl_builder_with_date_and_signature() {
+        let config = AccountConfig {
+            email: "to@localhost".into(),
+            signature: Some("Cordialement,".into()),
+            ..AccountConfig::default()
+        };
+
+        let mut email = Email::from(concat_line!(
+            "Date: Thu, 10 Nov 2022 14:26:33 +0000",
+            "From: from@localhost",
+            "To: to@localhost, to2@localhost",
+            "Cc: cc@localhost, cc2@localhost",
+            "Bcc: bcc@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
+        ));
+
+        let tpl = email.to_forward_tpl_builder(&config).unwrap().build();
+
+        let expected_tpl = concat_line!(
+            "From: to@localhost",
+            "To: ",
+            "Subject: Fwd: subject",
+            "",
+            "",
+            "",
+            "-- ",
+            "Cordialement,",
+            "-------- Forwarded Message --------",
+            "Date: Thu, 10 Nov 2022 14:26:33 +0000",
+            "From: from@localhost",
+            "To: to@localhost, to2@localhost",
+            "Subject: subject",
+            "",
+            "Hello!",
+            "",
+            "-- ",
+            "Regards,"
         );
 
         assert_eq!(expected_tpl, *tpl);

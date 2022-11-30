@@ -25,7 +25,7 @@ pub enum Error {
     BuildBackendError,
 
     #[error(transparent)]
-    EmailError(#[from] email::EmailError),
+    EmailError(#[from] email::Error),
     #[error(transparent)]
     IdMapper(#[from] id_mapper::Error),
     #[error(transparent)]
@@ -44,14 +44,14 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub trait Backend<'a> {
-    fn add_folder(&'a self, folder: &str) -> Result<()>;
-    fn list_folder(&'a self) -> Result<Folders>;
-    fn delete_folder(&'a self, folder: &str) -> Result<()>;
+pub trait Backend {
+    fn add_folder(&self, folder: &str) -> Result<()>;
+    fn list_folder(&self) -> Result<Folders>;
+    fn delete_folder(&self, folder: &str) -> Result<()>;
 
-    fn list_envelope(&'a self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
+    fn list_envelope(&self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn search_envelope(
-        &'a self,
+        &self,
         folder: &str,
         query: &str,
         sort: &str,
@@ -59,18 +59,18 @@ pub trait Backend<'a> {
         page: usize,
     ) -> Result<Envelopes>;
 
-    fn add_email(&'a self, folder: &str, email: &'a [u8], flags: &str) -> Result<String>;
-    fn get_email(&'a self, folder: &str, id: &str) -> Result<Email<'a>>;
-    fn copy_email(&'a self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
-    fn move_email(&'a self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
-    fn delete_email(&'a self, folder: &str, ids: &str) -> Result<()>;
+    fn add_email(&self, folder: &str, email: &[u8], flags: &str) -> Result<String>;
+    fn get_email(&self, folder: &str, id: &str) -> Result<Email<'_>>;
+    fn copy_email(&self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
+    fn move_email(&self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
+    fn delete_email(&self, folder: &str, ids: &str) -> Result<()>;
 
-    fn add_flags(&'a self, folder: &str, ids: &str, flags: &str) -> Result<()>;
-    fn set_flags(&'a self, folder: &str, ids: &str, flags: &str) -> Result<()>;
-    fn delete_flags(&'a self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn add_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn set_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn remove_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
 
     // only for downcasting
-    fn as_any(&self) -> &(dyn Any + 'a);
+    fn as_any(&'static self) -> &(dyn Any);
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -78,9 +78,9 @@ pub struct BackendBuilder;
 
 impl<'a> BackendBuilder {
     pub fn build(
-        account_config: &'a AccountConfig,
+        _account_config: &'a AccountConfig,
         backend_config: &'a BackendConfig<'a>,
-    ) -> Result<Box<dyn Backend<'a> + 'a>> {
+    ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
             BackendConfig::Imap(config) => Ok(Box::new(ImapBackend::new(config)?)),

@@ -37,7 +37,7 @@ impl<'a> Sendmail<'a> {
 
 impl<'a> Sender for Sendmail<'a> {
     fn send(&mut self, email: &[u8]) -> sender::Result<()> {
-        let mut email = mailparse::parse_mail(&email).map_err(Error::ParseEmailError)?;
+        let mut email = mailparse::parse_mail(email).map_err(Error::ParseEmailError)?;
         let buffer;
 
         if let Some(cmd) = self.account_config.email_hooks.pre_send.as_deref() {

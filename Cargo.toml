@@ -14,23 +14,24 @@ smtp-sender = []
 default = ["imap-backend", "smtp-sender"]
 
 [dev-dependencies]
-concat-with = "0.2.8"
+concat-with = "0.2"
 
 [dependencies]
-ammonia = "3.2.1"
-chrono = "0.4.19"
-convert_case = "0.5.0"
-html-escape = "0.2.9"
+ammonia = "3.2"
+chrono = "0.4"
+convert_case = "0.5"
+html-escape = "0.2"
 lettre = { version = "=0.10.1", features = ["serde"] }
-log = "0.4.14"
-mailparse = "0.13.6"
-native-tls = "0.2.8"
-regex = "1.5.4"
+log = "0.4"
+mailparse = "0.13"
+native-tls = "0.2"
+regex = "1.5"
 rfc2047-decoder = "=0.2.0"
-serde = { version = "1.0.118", features = ["derive"] }
-shellexpand = "2.1.0"
-thiserror = "1.0.37"
-tree_magic = "0.2.3"
+rust-mml = { git = "https://git.sr.ht/~soywod/rust-mml", branch = "master" }
+serde = { version = "1.0", features = ["derive"] }
+shellexpand = "2.1"
+thiserror = "1.0"
+tree_magic = "0.2"
 uuid = { version = "0.8", features = ["v4"] }
 
 # [dependencies.optional]

@@ -25,7 +25,7 @@ use crate::{
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("cannet get imap session: session not initialized")]
-    CopyEmailError(#[source] email::EmailError),
+    CopyEmailError(#[source] email::Error),
     #[error("cannet get imap session: session not initialized")]
     GetSessionNotInitializedError,
     #[error("cannet get imap fetches: fetches not initialized")]
@@ -107,7 +107,7 @@ pub enum Error {
     #[error(transparent)]
     ImapConfigError(#[from] backend::imap::config::Error),
     #[error(transparent)]
-    MsgError(#[from] email::EmailError),
+    MsgError(#[from] email::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -314,8 +314,8 @@ impl<'a> ImapBackend<'a> {
     }
 }
 
-impl<'a> Backend<'a> for ImapBackend<'a> {
-    fn add_folder(&'a self, folder: &str) -> backend::Result<()> {
+impl Backend for ImapBackend<'_> {
+    fn add_folder(&self, folder: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
 
         session
@@ -325,7 +325,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn list_folder(&'a self) -> backend::Result<Folders> {
+    fn list_folder(&self) -> backend::Result<Folders> {
         let mut session = self.session.borrow_mut();
         let imap_mboxes = session
             .list(Some(""), Some("*"))
@@ -357,7 +357,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(mboxes)
     }
 
-    fn delete_folder(&'a self, folder: &str) -> backend::Result<()> {
+    fn delete_folder(&self, folder: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
 
@@ -369,7 +369,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
     }
 
     fn list_envelope(
-        &'a self,
+        &self,
         folder: &str,
         page_size: usize,
         page: usize,
@@ -404,7 +404,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
     }
 
     fn search_envelope(
-        &'a self,
+        &self,
         folder: &str,
         query: &str,
         sort: &str,
@@ -453,7 +453,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(envelopes)
     }
 
-    fn add_email(&'a self, folder: &str, email: &'a [u8], flags: &str) -> backend::Result<String> {
+    fn add_email(&self, folder: &str, email: &[u8], flags: &str) -> backend::Result<String> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
@@ -469,7 +469,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(last_seq.to_string())
     }
 
-    fn get_email(&'a self, folder: &str, seq: &str) -> backend::Result<Email> {
+    fn get_email(&self, folder: &str, seq: &str) -> backend::Result<Email> {
         debug!("folder: {:?}", folder);
         debug!("seq: {:?}", seq);
 
@@ -491,24 +491,24 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(email)
     }
 
-    fn copy_email(&'a self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
+    fn copy_email(&self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
         let email = self.get_email(folder, seq)?;
         self.add_email(folder_target, email.as_raw()?, "seen")?;
         Ok(())
     }
 
-    fn move_email(&'a self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
+    fn move_email(&self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
         let email = self.get_email(folder, seq)?;
         self.add_flags(folder, seq, "seen deleted")?;
         self.add_email(folder_target, email.as_raw()?, "seen")?;
         Ok(())
     }
 
-    fn delete_email(&'a self, folder: &str, seq: &str) -> backend::Result<()> {
+    fn delete_email(&self, folder: &str, seq: &str) -> backend::Result<()> {
         self.add_flags(folder, seq, "deleted")
     }
 
-    fn add_flags(&'a self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+    fn add_flags(&self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
@@ -524,7 +524,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn set_flags(&'a self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+    fn set_flags(&self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
@@ -537,7 +537,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn delete_flags(&'a self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
+    fn remove_flags(&self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
         let flags: Flags = flags.into();
@@ -550,7 +550,7 @@ impl<'a> Backend<'a> for ImapBackend<'a> {
         Ok(())
     }
 
-    fn as_any(&self) -> &(dyn Any + 'a) {
+    fn as_any(&'static self) -> &(dyn Any) {
         self
     }
 }

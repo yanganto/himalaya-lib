@@ -1,23 +1,15 @@
-//! Module related to message template CLI.
-//!
-//! This module provides subcommands, arguments and a command matcher related to message template.
-
 use ammonia;
-use lettre::{
-    error::Error as LettreError,
-    message::{Message, SinglePart},
-};
-use log::warn;
-use mailparse::MailParseError;
+use mailparse::{parse_header, MailParseError};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     ops::{Deref, DerefMut},
-    string,
+    result, string,
 };
 use thiserror::Error;
 
-use crate::{account, sanitize_text_plain_part, AccountConfig};
+use crate::{account, sanitize_text_plain_part};
 
 type HeaderKey = String;
 type PartMime = String;
@@ -36,19 +28,24 @@ impl Default for HeaderVal {
 }
 
 #[derive(Error, Debug)]
-pub enum TplError {
+pub enum Error {
     #[error("cannot parse encrypted part of multipart")]
     ParseTplError(#[source] MailParseError),
-    #[error("cannot compile template")]
-    CompileTplError(#[source] LettreError),
+    #[error("cannot parse template header {1}")]
+    ParseHeaderError(#[source] MailParseError, String),
     #[error("cannot decode compiled template using utf-8")]
     DecodeCompiledTplError(#[source] string::FromUtf8Error),
 
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
+
+    #[error(transparent)]
+    CompileTplError(#[from] mml::Error),
 }
 
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub type Result<T> = result::Result<T, Error>;
+
+#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Tpl(String);
 
 impl Deref for Tpl {
@@ -65,22 +62,19 @@ impl DerefMut for Tpl {
     }
 }
 
-impl Tpl {
-    pub fn new(config: &AccountConfig) -> Result<Self, TplError> {
-        let tpl = TplBuilder::default()
-            .from(config.addr()?)
-            .to("")
-            .subject("")
-            .text_plain_part(
-                config
-                    .signature()?
-                    .map(|ref signature| String::from("\n\n") + signature)
-                    .unwrap_or_default(),
-            );
-
-        Ok(tpl.build(TplBuilderOpts::default()))
+impl From<&str> for Tpl {
+    fn from(tpl: &str) -> Self {
+        Self(tpl.to_owned())
     }
+}
 
+impl From<String> for Tpl {
+    fn from(tpl: String) -> Self {
+        Self(tpl)
+    }
+}
+
+impl Tpl {
     pub fn push_header<V: AsRef<str>>(&mut self, header: &str, value: V) -> &mut Self {
         self.push_str(header);
         self.push_str(": ");
@@ -89,107 +83,8 @@ impl Tpl {
         self
     }
 
-    pub fn compile(&self) -> Result<Message, TplError> {
-        let input = mailparse::parse_mail(self.as_bytes()).map_err(TplError::ParseTplError)?;
-        let mut output = Message::builder();
-
-        for header in input.get_headers() {
-            output = match header.get_key().to_lowercase().as_str() {
-                "message-id" => output.message_id(Some(header.get_value())),
-                "in-reply-to" => output.in_reply_to(header.get_value()),
-                "subject" => output.subject(header.get_value()),
-                "from" => {
-                    if let Ok(header) = header.get_value().parse() {
-                        output.from(header)
-                    } else {
-                        warn!("cannot parse header From: {}", header.get_value());
-                        output
-                    }
-                }
-                "to" => {
-                    if let Ok(header) = header.get_value().parse() {
-                        output.to(header)
-                    } else {
-                        warn!("cannot parse header To: {}", header.get_value());
-                        output
-                    }
-                }
-                "reply-to" => {
-                    if let Ok(header) = header.get_value().parse() {
-                        output.reply_to(header)
-                    } else {
-                        warn!("cannot parse header Reply-To: {}", header.get_value());
-                        output
-                    }
-                }
-                "cc" => {
-                    if let Ok(header) = header.get_value().parse() {
-                        output.cc(header)
-                    } else {
-                        warn!("cannot parse header Cc: {}", header.get_value());
-                        output
-                    }
-                }
-                "bcc" => {
-                    if let Ok(header) = header.get_value().parse() {
-                        output.bcc(header)
-                    } else {
-                        warn!("cannot parse header Bcc: {}", header.get_value());
-                        output
-                    }
-                }
-                _ => output,
-            };
-        }
-
-        output
-            .singlepart(SinglePart::plain(input.get_body().unwrap_or_default()))
-            .map_err(TplError::CompileTplError)
-    }
-}
-
-#[cfg(test)]
-mod test_tpl {
-    use concat_with::concat_line;
-
-    use crate::{AccountConfig, Tpl};
-
-    #[test]
-    fn test_new_tpl() {
-        let config = AccountConfig {
-            email: "from@localhost".into(),
-            ..AccountConfig::default()
-        };
-
-        let tpl = Tpl::new(&config).unwrap();
-
-        let expected_tpl = concat_line!("From: from@localhost", "To: ", "Subject: ", "", "");
-
-        assert_eq!(expected_tpl, *tpl);
-    }
-
-    #[test]
-    fn test_new_tpl_with_signature() {
-        let config = AccountConfig {
-            email: "from@localhost".into(),
-            signature: Some("Regards,".into()),
-            ..AccountConfig::default()
-        };
-
-        let tpl = Tpl::new(&config).unwrap();
-
-        let expected_tpl = concat_line!(
-            "From: from@localhost",
-            "To: ",
-            "Subject: ",
-            "",
-            "",
-            "",
-            "-- ",
-            "Regards,"
-        );
-
-        assert_eq!(expected_tpl, *tpl);
+    pub fn compile(&self) -> Result<Vec<u8>> {
+        Ok(mml::compile(&self.0)?)
     }
 }
 
@@ -329,23 +224,25 @@ impl TplBuilderOpts {
         self
     }
 
-    pub fn sanitize_text_plain_parts(mut self) -> Self {
-        self.sanitize_text_plain_parts = Some(true);
+    pub fn sanitize_text_plain_parts(mut self, sanitize: bool) -> Self {
+        self.sanitize_text_plain_parts = Some(sanitize);
         self
     }
 
-    pub fn sanitize_text_html_parts(mut self) -> Self {
-        self.sanitize_text_html_parts = Some(true);
+    pub fn sanitize_text_html_parts(mut self, sanitize: bool) -> Self {
+        self.sanitize_text_html_parts = Some(sanitize);
         self
     }
 
-    pub fn sanitize_text_parts(self) -> Self {
-        self.sanitize_text_plain_parts().sanitize_text_html_parts()
+    pub fn sanitize_text_parts(self, sanitize: bool) -> Self {
+        self.sanitize_text_plain_parts(sanitize)
+            .sanitize_text_html_parts(sanitize)
     }
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct TplBuilder {
+    pub opts: TplBuilderOpts,
     pub headers: HashMap<HeaderKey, HeaderVal>,
     pub headers_order: Vec<HeaderKey>,
     pub parts: HashMap<PartMime, PartBody>,
@@ -353,6 +250,32 @@ pub struct TplBuilder {
 }
 
 impl TplBuilder {
+    pub fn opts(mut self, opts: TplBuilderOpts) -> Self {
+        self.opts = opts;
+        self
+    }
+
+    pub fn some_headers<'a, H: IntoIterator<Item = &'a str>>(
+        mut self,
+        headers: Option<H>,
+    ) -> Result<Self> {
+        if let Some(headers) = headers {
+            self = self.headers(headers)?;
+        }
+
+        Ok(self)
+    }
+
+    pub fn headers<'a, H: IntoIterator<Item = &'a str>>(mut self, headers: H) -> Result<Self> {
+        for header in headers {
+            let (header, _) = parse_header(header.as_bytes())
+                .map_err(|err| Error::ParseHeaderError(err, header.to_owned()))?;
+            self = self.header(header.get_key(), header.get_value());
+        }
+
+        Ok(self)
+    }
+
     pub fn header<K: AsRef<str> + ToString, V: ToString>(mut self, key: K, val: V) -> Self {
         if let Some(prev_val) = self.headers.get_mut(key.as_ref()) {
             if let HeaderVal::String(ref mut prev_val) = prev_val {
@@ -417,11 +340,19 @@ impl TplBuilder {
         self.part("text/plain", part)
     }
 
-    pub fn build(&self, opts: TplBuilderOpts) -> Tpl {
+    pub fn some_text_plain_part<P: ToString>(self, part: Option<P>) -> Self {
+        if let Some(part) = part {
+            self.text_plain_part(part)
+        } else {
+            self
+        }
+    }
+
+    pub fn build(&self) -> Tpl {
         let mut tpl = Tpl::default();
 
         for key in &self.headers_order {
-            if !opts.show_headers_or_default().contains(key) {
+            if !self.opts.show_headers_or_default().contains(key) {
                 continue;
             }
 
@@ -438,7 +369,7 @@ impl TplBuilder {
         }
 
         let plain_part = self.parts.get("text/plain").map(|plain| {
-            if opts.sanitize_text_plain_parts_or_default() {
+            if self.opts.sanitize_text_plain_parts_or_default() {
                 sanitize_text_plain_part(plain)
             } else {
                 plain.to_owned()
@@ -446,7 +377,7 @@ impl TplBuilder {
         });
 
         let html_part = self.parts.get("text/html").map(|html| {
-            if opts.sanitize_text_html_parts_or_default() {
+            if self.opts.sanitize_text_html_parts_or_default() {
                 return {
                     // removes html markup
                     let sanitized_html = ammonia::Builder::new()
@@ -478,7 +409,7 @@ impl TplBuilder {
             html.to_owned()
         });
 
-        match opts.show_text_part_strategy_or_default() {
+        match self.opts.show_text_part_strategy_or_default() {
             ShowTextPartStrategy::PlainOtherwiseHtml => {
                 if let Some(ref part) = plain_part.or(html_part) {
                     tpl.push_str(part)
@@ -491,7 +422,7 @@ impl TplBuilder {
             }
         }
 
-        if !opts.show_text_parts_only_or_default() {
+        if !self.opts.show_text_parts_only_or_default() {
             // TODO: manage other mime parts
         }
 
@@ -503,7 +434,7 @@ impl TplBuilder {
 mod test_tpl_builder {
     use concat_with::concat_line;
 
-    use crate::{TplBuilder, TplBuilderOpts};
+    use crate::TplBuilder;
 
     #[test]
     fn test_build() {
@@ -515,7 +446,7 @@ mod test_tpl_builder {
             .cc("cc2")
             .text_plain_part("body")
             .bcc("bcc")
-            .build(TplBuilderOpts::default());
+            .build();
 
         let expected_tpl = concat_line!(
             "From: from",

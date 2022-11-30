@@ -5,7 +5,7 @@
 use std::result;
 use thiserror::Error;
 
-use crate::{account, sendmail, AccountConfig, EmailError, EmailSender, Sendmail};
+use crate::{account, email, sendmail, AccountConfig, EmailSender, Sendmail};
 
 #[cfg(feature = "smtp-sender")]
 use crate::{smtp, Smtp};
@@ -16,7 +16,7 @@ pub enum Error {
     BuildEmailSenderMissingError,
 
     #[error(transparent)]
-    EmailError(#[from] EmailError),
+    EmailError(#[from] email::Error),
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
     #[cfg(feature = "smtp-sender")]
@@ -29,7 +29,7 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Sender {
-    fn send(&mut self, email: &[u8]) -> Result<()>;
+    fn send(&mut self, mime_msg: &[u8]) -> Result<()>;
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]

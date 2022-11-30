@@ -38,7 +38,7 @@ pub enum Error {
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
     #[error(transparent)]
-    MsgError(#[from] email::EmailError),
+    MsgError(#[from] email::email::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;

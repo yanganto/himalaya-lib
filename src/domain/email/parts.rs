@@ -1,14 +1,7 @@
 use mailparse::ParsedMail;
 use regex::Regex;
-use thiserror::Error;
 
-use crate::EmailError;
-
-#[derive(Error, Debug)]
-pub enum PartsError {
-    #[error(transparent)]
-    EmailError(#[from] EmailError),
-}
+use super::Result;
 
 pub fn sanitize_text_plain_part<P: AsRef<str>>(part: P) -> String {
     // keeps a maximum of 2 consecutive new lines
@@ -36,7 +29,7 @@ pub fn sanitize_text_plain_part<P: AsRef<str>>(part: P) -> String {
 pub struct Parts;
 
 impl Parts {
-    pub fn concat_text_plain_bodies<'a>(parsed: &ParsedMail<'a>) -> Result<String, EmailError> {
+    pub fn concat_text_plain_bodies<'a>(parsed: &ParsedMail<'a>) -> Result<String> {
         let mut text_bodies = String::new();
 
         for part in PartsIterator::new(parsed) {
