@@ -118,7 +118,12 @@ impl Default for ShowTextPartStrategy {
 pub enum ShowHeaders {
     All,
     Only(Vec<HeaderKey>),
-    None,
+}
+
+impl Default for ShowHeaders {
+    fn default() -> Self {
+        Self::All
+    }
 }
 
 impl ShowHeaders {
@@ -126,140 +131,26 @@ impl ShowHeaders {
         match self {
             Self::All => true,
             Self::Only(headers) => headers.contains(key),
-            Self::None => false,
         }
-    }
-}
-
-// TODO: find how to use this struct. Maybe rename to
-// ReadEmailOpts. For now it should be used only for reading. Get
-// email => build Tpl based on those opts.
-#[derive(Debug, Default, Clone)]
-pub struct TplBuilderOpts {
-    pub show_headers: Option<ShowHeaders>,
-    pub show_text_part_strategy: Option<ShowTextPartStrategy>,
-    pub show_text_parts_only: Option<bool>,
-    pub sanitize_text_plain_parts: Option<bool>,
-    pub sanitize_text_html_parts: Option<bool>,
-}
-
-impl TplBuilderOpts {
-    pub const DEFAULT_SHOW_HEADERS: ShowHeaders = ShowHeaders::None;
-    pub const DEFAULT_SHOW_TEXT_PART_STRATEGY: ShowTextPartStrategy =
-        ShowTextPartStrategy::PlainOtherwiseHtml;
-    pub const DEFAULT_SHOW_TEXT_PARTS_ONLY: bool = true;
-    pub const DEFAULT_SANITIZE_TEXT_PLAIN_PARTS: bool = false;
-    pub const DEFAULT_SANITIZE_TEXT_HTML_PARTS: bool = false;
-
-    pub fn show_headers_or_default(&self) -> &ShowHeaders {
-        self.show_headers
-            .as_ref()
-            .unwrap_or(&Self::DEFAULT_SHOW_HEADERS)
-    }
-
-    pub fn show_text_part_strategy_or_default(&self) -> &ShowTextPartStrategy {
-        self.show_text_part_strategy
-            .as_ref()
-            .unwrap_or(&Self::DEFAULT_SHOW_TEXT_PART_STRATEGY)
-    }
-
-    pub fn show_text_parts_only_or_default(&self) -> bool {
-        self.show_text_parts_only
-            .unwrap_or(Self::DEFAULT_SHOW_TEXT_PARTS_ONLY)
-    }
-
-    pub fn sanitize_text_plain_parts_or_default(&self) -> bool {
-        self.sanitize_text_plain_parts
-            .unwrap_or(Self::DEFAULT_SANITIZE_TEXT_PLAIN_PARTS)
-    }
-
-    pub fn sanitize_text_html_parts_or_default(&self) -> bool {
-        self.sanitize_text_html_parts
-            .unwrap_or(Self::DEFAULT_SANITIZE_TEXT_HTML_PARTS)
-    }
-
-    pub fn show_header<H: ToString>(mut self, header: H) -> Self {
-        match self.show_headers_or_default() {
-            ShowHeaders::All | ShowHeaders::None => {
-                self.show_headers = Some(ShowHeaders::Only(vec![header.to_string()]));
-            }
-            ShowHeaders::Only(prev_headers) => {
-                let mut set = prev_headers.clone();
-                set.push(header.to_string());
-                self.show_headers = Some(ShowHeaders::Only(set));
-            }
-        };
-
-        self
-    }
-
-    pub fn show_headers<S: ToString, B: IntoIterator<Item = S>>(mut self, headers: B) -> Self {
-        let headers = headers
-            .into_iter()
-            .map(|header| header.to_string())
-            .collect();
-
-        match self.show_headers_or_default() {
-            ShowHeaders::All | ShowHeaders::None => {
-                self.show_headers = Some(ShowHeaders::Only(headers));
-            }
-            ShowHeaders::Only(prev_headers) => {
-                let mut set = prev_headers.clone();
-                set.extend(headers);
-                self.show_headers = Some(ShowHeaders::Only(set));
-            }
-        };
-
-        self
-    }
-
-    pub fn show_all_headers(mut self) -> Self {
-        self.show_headers = Some(ShowHeaders::All);
-        self
-    }
-
-    pub fn show_text_parts_only(mut self) -> Self {
-        self.show_text_parts_only = Some(true);
-        self
-    }
-
-    pub fn use_show_text_part_strategy(mut self, strategy: ShowTextPartStrategy) -> Self {
-        self.show_text_part_strategy = Some(strategy);
-        self
-    }
-
-    pub fn sanitize_text_plain_parts(mut self, sanitize: bool) -> Self {
-        self.sanitize_text_plain_parts = Some(sanitize);
-        self
-    }
-
-    pub fn sanitize_text_html_parts(mut self, sanitize: bool) -> Self {
-        self.sanitize_text_html_parts = Some(sanitize);
-        self
-    }
-
-    pub fn sanitize_text_parts(self, sanitize: bool) -> Self {
-        self.sanitize_text_plain_parts(sanitize)
-            .sanitize_text_html_parts(sanitize)
     }
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct TplBuilder {
-    pub opts: TplBuilderOpts,
     pub headers: HashMap<HeaderKey, HeaderVal>,
     pub headers_order: Vec<HeaderKey>,
     pub parts: HashMap<PartMime, PartBody>,
     pub parts_order: Vec<PartMime>,
+    pub show_headers: ShowHeaders,
+    pub show_text_part_strategy: ShowTextPartStrategy,
+    pub show_text_parts_only: bool,
+    pub sanitize_text_plain_parts: bool,
+    pub sanitize_text_html_parts: bool,
 }
 
 impl TplBuilder {
     pub fn write(config: &AccountConfig) -> Result<Self> {
         let tpl = Self::default()
-            .opts(
-                TplBuilderOpts::default()
-                    .show_headers(config.email_writing_headers(["From", "To", "Subject"])),
-            )
             .from(config.addr()?)
             .to("")
             .subject("")
@@ -270,11 +161,6 @@ impl TplBuilder {
             });
 
         Ok(tpl)
-    }
-
-    pub fn opts(mut self, opts: TplBuilderOpts) -> Self {
-        self.opts = opts;
-        self
     }
 
     pub fn some_headers<'a, H: IntoIterator<Item = &'a str>>(
@@ -365,6 +251,10 @@ impl TplBuilder {
         self.part("text/plain", part)
     }
 
+    pub fn text_html_part<P: ToString>(self, part: P) -> Self {
+        self.part("text/html", part)
+    }
+
     pub fn some_text_plain_part<P: ToString>(self, part: Option<P>) -> Self {
         if let Some(part) = part {
             self.text_plain_part(part)
@@ -373,11 +263,82 @@ impl TplBuilder {
         }
     }
 
+    pub fn show_header<H: ToString>(mut self, header: H) -> Self {
+        match self.show_headers {
+            ShowHeaders::All => {
+                self.show_headers = ShowHeaders::Only(vec![header.to_string()]);
+            }
+            ShowHeaders::Only(prev_headers) => {
+                let mut set = prev_headers.clone();
+                set.push(header.to_string());
+                self.show_headers = ShowHeaders::Only(set);
+            }
+        };
+
+        self
+    }
+
+    pub fn show_headers<S: ToString, B: IntoIterator<Item = S>>(mut self, headers: B) -> Self {
+        let headers = headers
+            .into_iter()
+            .map(|header| header.to_string())
+            .collect();
+
+        match self.show_headers {
+            ShowHeaders::All => {
+                self.show_headers = ShowHeaders::Only(headers);
+            }
+            ShowHeaders::Only(prev_headers) => {
+                let mut set = prev_headers.clone();
+                set.extend(headers);
+                self.show_headers = ShowHeaders::Only(set);
+            }
+        };
+
+        self
+    }
+
+    pub fn show_all_headers(mut self) -> Self {
+        self.show_headers = ShowHeaders::All;
+        self
+    }
+
+    pub fn show_text_parts_only(mut self) -> Self {
+        self.show_text_parts_only = true;
+        self
+    }
+
+    pub fn use_show_text_part_strategy(mut self, strategy: ShowTextPartStrategy) -> Self {
+        self.show_text_part_strategy = strategy;
+        self
+    }
+
+    pub fn sanitize_text_plain_parts(mut self, sanitize: bool) -> Self {
+        self.sanitize_text_plain_parts = sanitize;
+        self
+    }
+
+    pub fn sanitize_text_html_parts(mut self, sanitize: bool) -> Self {
+        self.sanitize_text_html_parts = sanitize;
+        self
+    }
+
+    pub fn sanitize_text_parts(self, sanitize: bool) -> Self {
+        self.sanitize_text_plain_parts(sanitize)
+            .sanitize_text_html_parts(sanitize)
+    }
+
     pub fn build(&self) -> Tpl {
         let mut tpl = Tpl::default();
 
-        for key in &self.headers_order {
-            if !self.opts.show_headers_or_default().contains(key) {
+        let headers_order = if let ShowHeaders::Only(headers) = &self.show_headers {
+            headers
+        } else {
+            &self.headers_order
+        };
+
+        for key in headers_order {
+            if !self.show_headers.contains(key) {
                 continue;
             }
 
@@ -394,7 +355,7 @@ impl TplBuilder {
         }
 
         let plain_part = self.parts.get("text/plain").map(|plain| {
-            if self.opts.sanitize_text_plain_parts_or_default() {
+            if self.sanitize_text_plain_parts {
                 sanitize_text_plain_part(plain)
             } else {
                 plain.to_owned()
@@ -402,7 +363,7 @@ impl TplBuilder {
         });
 
         let html_part = self.parts.get("text/html").map(|html| {
-            if self.opts.sanitize_text_html_parts_or_default() {
+            if self.sanitize_text_html_parts {
                 return {
                     // removes html markup
                     let sanitized_html = ammonia::Builder::new()
@@ -434,7 +395,7 @@ impl TplBuilder {
             html.to_owned()
         });
 
-        match self.opts.show_text_part_strategy_or_default() {
+        match self.show_text_part_strategy {
             ShowTextPartStrategy::PlainOtherwiseHtml => {
                 if let Some(ref part) = plain_part.or(html_part) {
                     tpl.push_str(part)
@@ -457,7 +418,7 @@ impl TplBuilder {
             }
         }
 
-        if !self.opts.show_text_parts_only_or_default() {
+        if !self.show_text_parts_only {
             // TODO: manage other mime parts, maybe to do in rust-mml
         }
 
@@ -469,12 +430,11 @@ impl TplBuilder {
 mod test_tpl_builder {
     use concat_with::concat_line;
 
-    use crate::{AccountConfig, TplBuilder, TplBuilderOpts};
+    use crate::{AccountConfig, TplBuilder};
 
     #[test]
     fn test_build() {
         let tpl = TplBuilder::default()
-            .opts(TplBuilderOpts::default().show_all_headers())
             .from("from")
             .to("")
             .cc("cc")

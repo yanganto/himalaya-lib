@@ -1,5 +1,5 @@
 #[cfg(feature = "imap-backend")]
-use himalaya_lib::{Backend, ImapBackend, ImapConfig, TplBuilderOpts};
+use himalaya_lib::{Backend, ImapBackend, ImapConfig};
 
 #[cfg(feature = "imap-backend")]
 #[test]
@@ -32,8 +32,10 @@ fn test_imap_backend() {
     assert_eq!(
         "From: alice@localhost\nTo: patrick@localhost\n\nCeci est un message.",
         *email
-            .to_read_tpl(TplBuilderOpts::default().show_headers(["From", "To"]))
+            .to_read_tpl_builder()
             .unwrap()
+            .show_headers(["From", "To"])
+            .build()
     );
 
     // checking that the envelope of the added email exists

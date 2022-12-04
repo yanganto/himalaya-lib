@@ -4,7 +4,7 @@ use maildir::Maildir;
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "maildir-backend")]
-use himalaya_lib::{AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig, TplBuilderOpts};
+use himalaya_lib::{AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig};
 
 #[cfg(feature = "maildir-backend")]
 #[test]
@@ -42,8 +42,10 @@ fn test_maildir_backend() {
     assert_eq!(
         "From: alice@localhost\nTo: patrick@localhost\n\nCeci est un message.",
         *email
-            .to_read_tpl(TplBuilderOpts::default().show_headers(["From", "To"]))
+            .to_read_tpl_builder()
             .unwrap()
+            .show_headers(["From", "To"])
+            .build()
     );
 
     // check that the envelope of the added message exists

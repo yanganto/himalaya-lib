@@ -13,7 +13,5 @@ pub use attachment::Attachment;
 pub use config::{EmailHooks, EmailSender, EmailTextPlainFormat};
 pub use email::*;
 pub use parts::*;
-pub use tpl::{
-    HeaderVal, ShowHeaders, ShowTextPartStrategy, Tpl, TplBuilder, TplBuilderOpts, TplOverride,
-};
+pub use tpl::{HeaderVal, ShowHeaders, ShowTextPartStrategy, Tpl, TplBuilder, TplOverride};
 pub use utils::*;
