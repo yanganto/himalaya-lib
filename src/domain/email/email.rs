@@ -148,8 +148,8 @@ impl<'a> Email<'a> {
                 "text/html" => {
                     tpl = tpl.text_html_part(part.get_body().map_err(Error::ParseEmailError)?);
                 }
-                _mime => {
-                    // TODO
+                mime => {
+                    tpl = tpl.part(mime, part.get_body_raw().map_err(Error::ParseEmailError)?);
                 }
             }
         }

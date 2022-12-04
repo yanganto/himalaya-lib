@@ -13,7 +13,7 @@ use crate::{account, sanitize_text_plain_part, AccountConfig};
 
 type HeaderKey = String;
 type PartMime = String;
-type PartBody = String;
+type PartBody = Vec<u8>;
 
 #[derive(Debug, Clone)]
 pub enum HeaderVal {
@@ -237,25 +237,26 @@ impl TplBuilder {
         self.header_addr("Bcc", addr)
     }
 
-    pub fn part<M: AsRef<str> + ToString, P: ToString>(mut self, mime: M, part: P) -> Self {
+    pub fn part<M: AsRef<str> + ToString, P: AsRef<[u8]>>(mut self, mime: M, part: P) -> Self {
         if let Some(prev_part) = self.parts.get_mut(mime.as_ref()) {
-            *prev_part = part.to_string();
+            *prev_part = part.as_ref().to_owned()
         } else {
-            self.parts.insert(mime.to_string(), part.to_string());
+            self.parts
+                .insert(mime.to_string(), part.as_ref().to_owned());
             self.parts_order.push(mime.to_string());
         }
         self
     }
 
-    pub fn text_plain_part<P: ToString>(self, part: P) -> Self {
+    pub fn text_plain_part<P: AsRef<[u8]>>(self, part: P) -> Self {
         self.part("text/plain", part)
     }
 
-    pub fn text_html_part<P: ToString>(self, part: P) -> Self {
+    pub fn text_html_part<P: AsRef<[u8]>>(self, part: P) -> Self {
         self.part("text/html", part)
     }
 
-    pub fn some_text_plain_part<P: ToString>(self, part: Option<P>) -> Self {
+    pub fn some_text_plain_part<P: AsRef<[u8]>>(self, part: Option<P>) -> Self {
         if let Some(part) = part {
             self.text_plain_part(part)
         } else {
@@ -355,6 +356,8 @@ impl TplBuilder {
         }
 
         let plain_part = self.parts.get("text/plain").map(|plain| {
+            let plain = String::from_utf8_lossy(plain).to_string();
+
             if self.sanitize_text_plain_parts {
                 sanitize_text_plain_part(plain)
             } else {
@@ -363,6 +366,8 @@ impl TplBuilder {
         });
 
         let html_part = self.parts.get("text/html").map(|html| {
+            let html = String::from_utf8_lossy(html).to_string();
+
             if self.sanitize_text_html_parts {
                 return {
                     // removes html markup
@@ -427,13 +432,13 @@ impl TplBuilder {
 }
 
 #[cfg(test)]
-mod test_tpl_builder {
+mod tpl_builder {
     use concat_with::concat_line;
 
     use crate::{AccountConfig, TplBuilder};
 
     #[test]
-    fn test_build() {
+    fn build() {
         let tpl = TplBuilder::default()
             .from("from")
             .to("")
