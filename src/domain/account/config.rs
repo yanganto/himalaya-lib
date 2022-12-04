@@ -9,7 +9,7 @@ use shellexpand;
 use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf, result};
 use thiserror::Error;
 
-use crate::{process, EmailHooks, EmailSender, EmailTextPlainFormat, TplBuilder};
+use crate::{process, EmailHooks, EmailSender, EmailTextPlainFormat};
 
 pub const DEFAULT_PAGE_SIZE: usize = 10;
 pub const DEFAULT_SIGNATURE_DELIM: &str = "-- \n";
@@ -61,8 +61,8 @@ pub struct AccountConfig {
 
     /// Represents the page size when listing emails.
     pub email_listing_page_size: Option<usize>,
-    /// Represents the user downloads directory (mostly for
-    /// attachments).
+    /// Represents headers visible at the top of emails when reading
+    /// them.
     pub email_reading_headers: Option<Vec<String>>,
     /// Represents the text/plain format as defined in the
     /// [RFC 2646](https://www.ietf.org/rfc/rfc2646.txt).
@@ -71,6 +71,9 @@ pub struct AccountConfig {
     pub email_reading_decrypt_cmd: Option<String>,
     /// Represents the command used to encrypt an email.
     pub email_writing_encrypt_cmd: Option<String>,
+    /// Represents headers visible at the top of emails when writing
+    /// them (new/reply/forward).
+    pub email_writing_headers: Option<Vec<String>>,
     /// Represents the email sender provider.
     pub email_sender: EmailSender,
     /// Represents the email hooks.
@@ -180,6 +183,24 @@ impl AccountConfig {
             .unwrap_or_default()
     }
 
+    pub fn email_writing_headers<I: ToString, H: IntoIterator<Item = I>>(
+        &self,
+        more_headers: H,
+    ) -> Vec<String> {
+        let mut headers = self
+            .email_reading_headers
+            .as_ref()
+            .map(ToOwned::to_owned)
+            .unwrap_or_default();
+        headers.extend(
+            more_headers
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        );
+        headers
+    }
+
     pub fn signature(&self) -> Result<Option<String>> {
         let delim = self
             .signature_delim
@@ -195,25 +216,10 @@ impl AccountConfig {
             .or_else(|| signature.map(ToOwned::to_owned))
             .map(|sig| format!("{}{}", delim, sig.trim_end())))
     }
-
-    pub fn to_write_tpl_builder(&self) -> Result<TplBuilder> {
-        let tpl = TplBuilder::default()
-            .from(self.addr()?)
-            .to("")
-            .subject("")
-            .text_plain_part(
-                self.signature()?
-                    .map(|ref signature| String::from("\n\n") + signature)
-                    .unwrap_or_default(),
-            );
-
-        Ok(tpl)
-    }
 }
 
 #[cfg(test)]
 mod account_config {
-    use concat_with::concat_line;
     use std::path::PathBuf;
 
     use crate::AccountConfig;
@@ -254,68 +260,5 @@ mod account_config {
             config.get_unique_download_file_path(&path, |_, count| count < 5),
             Ok(path) if path == PathBuf::from("downloads/file.ext_5.ext2")
         ));
-    }
-
-    #[test]
-    fn to_write_tpl_builder() {
-        let config = AccountConfig {
-            email: "from@localhost".into(),
-            ..AccountConfig::default()
-        };
-
-        let tpl = config.to_write_tpl_builder().unwrap().build();
-
-        let expected_tpl = concat_line!("From: from@localhost", "To: ", "Subject: ", "", "");
-
-        assert_eq!(expected_tpl, *tpl);
-    }
-
-    #[test]
-    fn to_write_tpl_builder_with_signature() {
-        let config = AccountConfig {
-            email: "from@localhost".into(),
-            signature: Some("Regards,".into()),
-            ..AccountConfig::default()
-        };
-
-        let tpl = config.to_write_tpl_builder().unwrap().build();
-
-        let expected_tpl = concat_line!(
-            "From: from@localhost",
-            "To: ",
-            "Subject: ",
-            "",
-            "",
-            "",
-            "-- ",
-            "Regards,"
-        );
-
-        assert_eq!(expected_tpl, *tpl);
-    }
-
-    #[test]
-    fn to_write_tpl_builder_with_signature_delim() {
-        let config = AccountConfig {
-            email: "from@localhost".into(),
-            signature_delim: Some("~~\n".into()),
-            signature: Some("Regards,".into()),
-            ..AccountConfig::default()
-        };
-
-        let tpl = config.to_write_tpl_builder().unwrap().build();
-
-        let expected_tpl = concat_line!(
-            "From: from@localhost",
-            "To: ",
-            "Subject: ",
-            "",
-            "",
-            "",
-            "~~",
-            "Regards,"
-        );
-
-        assert_eq!(expected_tpl, *tpl);
     }
 }

@@ -78,16 +78,17 @@ pub struct BackendBuilder;
 
 impl<'a> BackendBuilder {
     pub fn build(
-        _account_config: &'a AccountConfig,
+        account_config: &'a AccountConfig,
         backend_config: &'a BackendConfig<'a>,
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(config) => Ok(Box::new(ImapBackend::new(config)?)),
+            BackendConfig::Imap(imap_config) => Ok(Box::new(ImapBackend::new(imap_config)?)),
             #[cfg(feature = "maildir-backend")]
-            BackendConfig::Maildir(config) => {
-                Ok(Box::new(MaildirBackend::new(account_config, config)))
-            }
+            BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
+                account_config,
+                maildir_config,
+            ))),
             #[cfg(feature = "notmuch-backend")]
             BackendConfig::Notmuch(config) => {
                 Ok(Box::new(NotmuchBackend::new(account_config, config)?))

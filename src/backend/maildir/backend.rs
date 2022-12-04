@@ -137,8 +137,8 @@ impl<'a> MaildirBackend<'a> {
     }
 }
 
-impl<'a> Backend<'a> for MaildirBackend<'a> {
-    fn add_folder(&'a self, subdir: &'a str) -> backend::Result<()> {
+impl<'a> Backend for MaildirBackend<'a> {
+    fn add_folder(&self, subdir: &str) -> backend::Result<()> {
         debug!("subdir: {:?}", subdir);
 
         let path = self.mdir.path().join(format!(".{}", subdir));
@@ -148,7 +148,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn list_folder(&'a self) -> backend::Result<Folders> {
+    fn list_folder(&self) -> backend::Result<Folders> {
         let mut folders = Folders::default();
 
         for (name, desc) in &self.account_config.folder_aliases {
@@ -177,7 +177,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(folders)
     }
 
-    fn delete_folder(&'a self, dir: &'a str) -> backend::Result<()> {
+    fn delete_folder(&self, dir: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
 
         let path = self.mdir.path().join(format!(".{}", dir));
@@ -188,8 +188,8 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
     }
 
     fn list_envelope(
-        &'a self,
-        dir: &'a str,
+        &self,
+        dir: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
@@ -243,22 +243,17 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
     }
 
     fn search_envelope(
-        &'a self,
-        _dir: &'a str,
-        _query: &'a str,
-        _sort: &'a str,
+        &self,
+        _dir: &str,
+        _query: &str,
+        _sort: &str,
         _page_size: usize,
         _page: usize,
     ) -> backend::Result<Envelopes> {
         Err(Error::SearchEnvelopesUnimplementedError)?
     }
 
-    fn add_email(
-        &'a self,
-        dir: &'a str,
-        email: &'a [u8],
-        flags: &'a str,
-    ) -> backend::Result<String> {
+    fn add_email(&self, dir: &str, email: &[u8], flags: &str) -> backend::Result<String> {
         debug!("dir: {:?}", dir);
         debug!("flags: {:?}", flags);
 
@@ -280,7 +275,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(hash)
     }
 
-    fn get_email(&'a self, dir: &'a str, short_hash: &'a str) -> backend::Result<Email<'a>> {
+    fn get_email(&self, dir: &str, short_hash: &str) -> backend::Result<Email<'a>> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
 
@@ -305,12 +300,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(email)
     }
 
-    fn copy_email(
-        &'a self,
-        dir_src: &'a str,
-        dir_dst: &'a str,
-        short_hash: &'a str,
-    ) -> backend::Result<()> {
+    fn copy_email(&self, dir_src: &str, dir_dst: &str, short_hash: &str) -> backend::Result<()> {
         debug!("source dir: {:?}", dir_src);
         debug!("destination dir: {:?}", dir_dst);
 
@@ -331,12 +321,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn move_email(
-        &'a self,
-        dir_src: &'a str,
-        dir_dst: &'a str,
-        short_hash: &'a str,
-    ) -> backend::Result<()> {
+    fn move_email(&self, dir_src: &str, dir_dst: &str, short_hash: &str) -> backend::Result<()> {
         debug!("source dir: {:?}", dir_src);
         debug!("destination dir: {:?}", dir_dst);
 
@@ -357,7 +342,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn delete_email(&'a self, dir: &'a str, short_hash: &'a str) -> backend::Result<()> {
+    fn delete_email(&self, dir: &str, short_hash: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
 
@@ -369,12 +354,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn add_flags(
-        &'a self,
-        dir: &'a str,
-        short_hash: &'a str,
-        flags: &'a str,
-    ) -> backend::Result<()> {
+    fn add_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
         let flags = Flags::from(flags);
@@ -390,12 +370,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn set_flags(
-        &'a self,
-        dir: &'a str,
-        short_hash: &'a str,
-        flags: &'a str,
-    ) -> backend::Result<()> {
+    fn set_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
         let flags = Flags::from(flags);
@@ -410,12 +385,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn delete_flags(
-        &'a self,
-        dir: &'a str,
-        short_hash: &'a str,
-        flags: &'a str,
-    ) -> backend::Result<()> {
+    fn remove_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
         let flags = Flags::from(flags);

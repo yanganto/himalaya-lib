@@ -9,7 +9,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{account, sanitize_text_plain_part};
+use crate::{account, sanitize_text_plain_part, AccountConfig};
 
 type HeaderKey = String;
 type PartMime = String;
@@ -118,6 +118,7 @@ impl Default for ShowTextPartStrategy {
 pub enum ShowHeaders {
     All,
     Only(Vec<HeaderKey>),
+    None,
 }
 
 impl ShowHeaders {
@@ -125,6 +126,7 @@ impl ShowHeaders {
         match self {
             Self::All => true,
             Self::Only(headers) => headers.contains(key),
+            Self::None => false,
         }
     }
 }
@@ -142,7 +144,7 @@ pub struct TplBuilderOpts {
 }
 
 impl TplBuilderOpts {
-    pub const DEFAULT_SHOW_HEADERS: ShowHeaders = ShowHeaders::All;
+    pub const DEFAULT_SHOW_HEADERS: ShowHeaders = ShowHeaders::None;
     pub const DEFAULT_SHOW_TEXT_PART_STRATEGY: ShowTextPartStrategy =
         ShowTextPartStrategy::PlainOtherwiseHtml;
     pub const DEFAULT_SHOW_TEXT_PARTS_ONLY: bool = true;
@@ -178,7 +180,7 @@ impl TplBuilderOpts {
 
     pub fn show_header<H: ToString>(mut self, header: H) -> Self {
         match self.show_headers_or_default() {
-            ShowHeaders::All => {
+            ShowHeaders::All | ShowHeaders::None => {
                 self.show_headers = Some(ShowHeaders::Only(vec![header.to_string()]));
             }
             ShowHeaders::Only(prev_headers) => {
@@ -198,7 +200,7 @@ impl TplBuilderOpts {
             .collect();
 
         match self.show_headers_or_default() {
-            ShowHeaders::All => {
+            ShowHeaders::All | ShowHeaders::None => {
                 self.show_headers = Some(ShowHeaders::Only(headers));
             }
             ShowHeaders::Only(prev_headers) => {
@@ -252,6 +254,24 @@ pub struct TplBuilder {
 }
 
 impl TplBuilder {
+    pub fn write(config: &AccountConfig) -> Result<Self> {
+        let tpl = Self::default()
+            .opts(
+                TplBuilderOpts::default()
+                    .show_headers(config.email_writing_headers(["From", "To", "Subject"])),
+            )
+            .from(config.addr()?)
+            .to("")
+            .subject("")
+            .text_plain_part(if let Some(ref signature) = config.signature()? {
+                String::from("\n\n") + signature
+            } else {
+                String::new()
+            });
+
+        Ok(tpl)
+    }
+
     pub fn opts(mut self, opts: TplBuilderOpts) -> Self {
         self.opts = opts;
         self
@@ -268,10 +288,13 @@ impl TplBuilder {
         Ok(self)
     }
 
-    pub fn headers<'a, H: IntoIterator<Item = &'a str>>(mut self, headers: H) -> Result<Self> {
+    pub fn headers<'a, S: AsRef<str>, H: IntoIterator<Item = S>>(
+        mut self,
+        headers: H,
+    ) -> Result<Self> {
         for header in headers {
-            let (header, _) = parse_header(header.as_bytes())
-                .map_err(|err| Error::ParseHeaderError(err, header.to_owned()))?;
+            let (header, _) = parse_header(header.as_ref().as_bytes())
+                .map_err(|err| Error::ParseHeaderError(err, header.as_ref().to_owned()))?;
             self = self.header(header.get_key(), header.get_value());
         }
 
@@ -446,11 +469,12 @@ impl TplBuilder {
 mod test_tpl_builder {
     use concat_with::concat_line;
 
-    use crate::TplBuilder;
+    use crate::{AccountConfig, TplBuilder, TplBuilderOpts};
 
     #[test]
     fn test_build() {
         let tpl = TplBuilder::default()
+            .opts(TplBuilderOpts::default().show_all_headers())
             .from("from")
             .to("")
             .cc("cc")
@@ -468,6 +492,69 @@ mod test_tpl_builder {
             "Bcc: bcc",
             "",
             "body",
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn write() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            ..AccountConfig::default()
+        };
+
+        let tpl = TplBuilder::write(&config).unwrap().build();
+
+        let expected_tpl = concat_line!("From: from@localhost", "To: ", "Subject: ", "", "");
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn write_with_signature() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            signature: Some("Regards,".into()),
+            ..AccountConfig::default()
+        };
+
+        let tpl = TplBuilder::write(&config).unwrap().build();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "To: ",
+            "Subject: ",
+            "",
+            "",
+            "",
+            "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn to_write_tpl_builder_with_signature_delim() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            signature_delim: Some("~~\n".into()),
+            signature: Some("Regards,".into()),
+            ..AccountConfig::default()
+        };
+
+        let tpl = TplBuilder::write(&config).unwrap().build();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "To: ",
+            "Subject: ",
+            "",
+            "",
+            "",
+            "~~",
+            "Regards,"
         );
 
         assert_eq!(expected_tpl, *tpl);

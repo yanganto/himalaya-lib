@@ -7,8 +7,8 @@ use thiserror::Error;
 use tree_magic;
 
 use crate::{
-    account, sanitize_text_plain_part, AccountConfig, Attachment, PartsIterator, ShowHeaders, Tpl,
-    TplBuilder, TplBuilderOpts, DEFAULT_SIGNATURE_DELIM,
+    account, sanitize_text_plain_part, tpl, AccountConfig, Attachment, PartsIterator, ShowHeaders,
+    Tpl, TplBuilder, TplBuilderOpts, DEFAULT_SIGNATURE_DELIM,
 };
 
 #[derive(Error, Debug)]
@@ -30,6 +30,8 @@ pub enum Error {
 
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
+    #[error(transparent)]
+    TplError(#[from] tpl::Error),
 
     // TODO: sort me
     #[error("cannot get content type of multipart")]
@@ -116,18 +118,6 @@ impl<'a> Email<'a> {
         Ok(attachments.collect())
     }
 
-    pub fn text_parts(&'a self, parsed: &'a ParsedMail) -> Result<Vec<&ParsedMail<'a>>> {
-        let text_parts = PartsIterator::new(parsed).filter_map(|part| {
-            if part.ctype.mimetype.starts_with("text") {
-                Some(part)
-            } else {
-                None
-            }
-        });
-
-        Ok(text_parts.collect())
-    }
-
     pub fn as_raw(&self) -> Result<&[u8]> {
         match self.raw {
             RawEmail::Vec(ref vec) => Ok(vec),
@@ -140,11 +130,7 @@ impl<'a> Email<'a> {
         }
     }
 
-    pub fn to_read_tpl(
-        &'a mut self,
-        config: &'a AccountConfig,
-        opts: TplBuilderOpts,
-    ) -> Result<Tpl> {
+    pub fn to_read_tpl(&'a mut self, opts: TplBuilderOpts) -> Result<Tpl> {
         let mut tpl = TplBuilder::default();
 
         let parsed = self.parsed()?;
@@ -164,12 +150,7 @@ impl<'a> Email<'a> {
                         }
                     }
                 }
-            }
-        } else {
-            for header in &config.email_reading_headers() {
-                if let Some(header) = parsed_headers.get_first_header(header) {
-                    tpl = tpl.header(header.get_key(), header.get_value())
-                }
+                ShowHeaders::None => (),
             }
         };
 
@@ -196,7 +177,9 @@ impl<'a> Email<'a> {
         config: &AccountConfig,
         all: bool,
     ) -> Result<TplBuilder> {
-        let mut tpl = TplBuilder::default();
+        let mut tpl = TplBuilder::default().opts(TplBuilderOpts::default().show_headers(
+            config.email_writing_headers(["From", "To", "In-Reply-To", "Cc", "Subject"]),
+        ));
 
         let parsed = self.parsed()?;
         let parsed_headers = parsed.get_headers();
@@ -310,7 +293,10 @@ impl<'a> Email<'a> {
     }
 
     pub fn to_forward_tpl_builder(&'a mut self, config: &AccountConfig) -> Result<TplBuilder> {
-        let mut tpl = TplBuilder::default();
+        let mut tpl = TplBuilder::default().opts(
+            TplBuilderOpts::default()
+                .show_headers(config.email_writing_headers(["From", "To", "Subject"])),
+        );
 
         let parsed = self.parsed()?;
         let parsed_headers = parsed.get_headers();
@@ -444,7 +430,6 @@ mod test_email {
 
     #[test]
     fn test_to_read_tpl_builder() {
-        let config = AccountConfig::default();
         let opts = TplBuilderOpts::default();
 
         let mut email = Email::from(concat_line!(
@@ -458,7 +443,7 @@ mod test_email {
             "Regards,"
         ));
 
-        let tpl = email.to_read_tpl(&config, opts).unwrap();
+        let tpl = email.to_read_tpl(opts).unwrap();
 
         let expected_tpl = concat_line!("Hello!", "", "-- ", "Regards,");
 
@@ -467,19 +452,10 @@ mod test_email {
 
     #[test]
     fn test_to_read_tpl_builder_with_email_reading_headers_config() {
-        let config = AccountConfig {
-            email_reading_headers: Some(vec![
-                // existing headers
-                "From".into(),
-                "Subject".into(),
-                // nonexisting headers
-                "Cc".into(),
-                "Bcc".into(),
-            ]),
-            ..AccountConfig::default()
-        };
-
-        let opts = TplBuilderOpts::default();
+        let opts = TplBuilderOpts::default().show_headers([
+            "From", "Subject", // existing headers
+            "Cc", "Bcc", // nonexisting headers
+        ]);
 
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
@@ -492,7 +468,7 @@ mod test_email {
             "Regards,"
         ));
 
-        let tpl = email.to_read_tpl(&config, opts).unwrap();
+        let tpl = email.to_read_tpl(opts).unwrap();
 
         let expected_tpl = concat_line!(
             "From: from@localhost",
@@ -509,12 +485,6 @@ mod test_email {
 
     #[test]
     fn test_to_read_tpl_builder_with_show_all_headers_option() {
-        let config = AccountConfig {
-            // config should be overriden by the options
-            email_reading_headers: Some(vec!["Content-Type".into()]),
-            ..AccountConfig::default()
-        };
-
         let opts = TplBuilderOpts::default().show_all_headers();
 
         let mut email = Email::from(concat_line!(
@@ -528,7 +498,7 @@ mod test_email {
             "Regards,"
         ));
 
-        let tpl = email.to_read_tpl(&config, opts).unwrap();
+        let tpl = email.to_read_tpl(opts).unwrap();
 
         let expected_tpl = concat_line!(
             "From: from@localhost",
@@ -546,22 +516,13 @@ mod test_email {
 
     #[test]
     fn test_to_read_tpl_builder_with_show_only_headers_option() {
-        let config = AccountConfig {
-            // config should be overriden by the options
-            email_reading_headers: Some(vec!["From".into()]),
-            ..AccountConfig::default()
-        };
-
-        let opts = TplBuilderOpts::default().show_headers(
-            [
-                // existing headers
-                "Subject",
-                "To",
-                // nonexisting header
-                "Content-Type",
-            ]
-            .iter(),
-        );
+        let opts = TplBuilderOpts::default().show_headers([
+            // existing headers
+            "Subject",
+            "To",
+            // nonexisting header
+            "Content-Type",
+        ]);
 
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
@@ -574,7 +535,7 @@ mod test_email {
             "Regards,"
         ));
 
-        let tpl = email.to_read_tpl(&config, opts).unwrap();
+        let tpl = email.to_read_tpl(opts).unwrap();
 
         let expected_tpl = concat_line!(
             "Subject: subject",

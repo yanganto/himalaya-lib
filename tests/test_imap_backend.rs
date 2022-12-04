@@ -1,8 +1,5 @@
 #[cfg(feature = "imap-backend")]
-use mailparse::MailHeaderMap;
-
-#[cfg(feature = "imap-backend")]
-use himalaya_lib::{Backend, ImapBackend, ImapConfig};
+use himalaya_lib::{Backend, ImapBackend, ImapConfig, TplBuilderOpts};
 
 #[cfg(feature = "imap-backend")]
 #[test]
@@ -32,13 +29,11 @@ fn test_imap_backend() {
 
     // checking that the added email exists
     let mut email = imap.get_email("Sent", &id).unwrap();
-    let parsed = email.parsed().unwrap();
-    let headers = parsed.get_headers();
-    assert_eq!("alice@localhost", headers.get_first_value("From").unwrap());
-    assert_eq!("patrick@localhost", headers.get_first_value("To").unwrap());
     assert_eq!(
-        "Ceci est un message.",
-        Parts::concat_text_plain_bodies(&parsed).unwrap()
+        "From: alice@localhost\nTo: patrick@localhost\n\nCeci est un message.",
+        *email
+            .to_read_tpl(TplBuilderOpts::default().show_headers(["From", "To"]))
+            .unwrap()
     );
 
     // checking that the envelope of the added email exists
