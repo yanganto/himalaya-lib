@@ -1,5 +1,5 @@
 use ammonia;
-use mailparse::{parse_header, MailParseError};
+use mailparse::{parse_header, MailParseError, ParsedMail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -9,7 +9,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{account, sanitize_text_plain_part, AccountConfig};
+use crate::{account, AccountConfig, PartsIterator};
 
 type HeaderKey = String;
 type PartMime = String;
@@ -33,6 +33,8 @@ pub enum Error {
     ParseTplError(#[source] MailParseError),
     #[error("cannot parse template header {1}")]
     ParseHeaderError(#[source] MailParseError, String),
+    #[error("cannot parse email body")]
+    ParseEmailBodyError(#[source] MailParseError),
     #[error("cannot decode compiled template using utf-8")]
     DecodeCompiledTplError(#[source] string::FromUtf8Error),
 
@@ -88,27 +90,15 @@ impl Tpl {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
-pub struct TplOverride<'a> {
-    pub subject: Option<&'a str>,
-    pub from: Option<Vec<&'a str>>,
-    pub to: Option<Vec<&'a str>>,
-    pub cc: Option<Vec<&'a str>>,
-    pub bcc: Option<Vec<&'a str>>,
-    pub headers: Option<Vec<&'a str>>,
-    pub body: Option<&'a str>,
-    pub signature: Option<&'a str>,
-}
-
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ShowTextPartStrategy {
+pub enum ShowTextPartsStrategy {
     PlainOtherwiseHtml,
     PlainOnly,
     HtmlOtherwisePlain,
     HtmlOnly,
 }
 
-impl Default for ShowTextPartStrategy {
+impl Default for ShowTextPartsStrategy {
     fn default() -> Self {
         Self::PlainOtherwiseHtml
     }
@@ -135,15 +125,15 @@ impl ShowHeaders {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct TplBuilder {
     pub headers: HashMap<HeaderKey, HeaderVal>,
     pub headers_order: Vec<HeaderKey>,
     pub parts: HashMap<PartMime, PartBody>,
     pub parts_order: Vec<PartMime>,
     pub show_headers: ShowHeaders,
-    pub show_text_part_strategy: ShowTextPartStrategy,
     pub show_text_parts_only: bool,
+    pub show_text_parts_strategy: ShowTextPartsStrategy,
     pub sanitize_text_plain_parts: bool,
     pub sanitize_text_html_parts: bool,
 }
@@ -163,12 +153,16 @@ impl TplBuilder {
         Ok(tpl)
     }
 
-    pub fn some_headers<'a, H: IntoIterator<Item = &'a str>>(
-        mut self,
-        headers: Option<H>,
-    ) -> Result<Self> {
-        if let Some(headers) = headers {
-            self = self.headers(headers)?;
+    pub fn from_parsed(mut self, parsed: &ParsedMail<'_>) -> Result<Self> {
+        for header in &parsed.headers {
+            self = self.header(header.get_key(), header.get_value());
+        }
+
+        for part in PartsIterator::new(parsed) {
+            self = self.part(
+                part.ctype.mimetype.clone(),
+                part.get_body_raw().map_err(Error::ParseEmailBodyError)?,
+            );
         }
 
         Ok(self)
@@ -213,6 +207,17 @@ impl TplBuilder {
         self
     }
 
+    pub fn some_headers<'a, H: IntoIterator<Item = &'a str>>(
+        mut self,
+        headers: Option<H>,
+    ) -> Result<Self> {
+        if let Some(headers) = headers {
+            self = self.headers(headers)?;
+        }
+
+        Ok(self)
+    }
+
     pub fn in_reply_to<H: ToString>(self, header: H) -> Self {
         self.header("In-Reply-To", header)
     }
@@ -252,13 +257,21 @@ impl TplBuilder {
         self.part("text/plain", part)
     }
 
+    pub fn some_text_plain_part<P: AsRef<[u8]>>(self, part: Option<P>) -> Self {
+        if let Some(part) = part {
+            self.text_plain_part(part)
+        } else {
+            self
+        }
+    }
+
     pub fn text_html_part<P: AsRef<[u8]>>(self, part: P) -> Self {
         self.part("text/html", part)
     }
 
-    pub fn some_text_plain_part<P: AsRef<[u8]>>(self, part: Option<P>) -> Self {
+    pub fn some_text_html_part<P: AsRef<[u8]>>(self, part: Option<P>) -> Self {
         if let Some(part) = part {
-            self.text_plain_part(part)
+            self.text_html_part(part)
         } else {
             self
         }
@@ -304,13 +317,13 @@ impl TplBuilder {
         self
     }
 
-    pub fn show_text_parts_only(mut self) -> Self {
-        self.show_text_parts_only = true;
+    pub fn show_text_parts_only(mut self, show_text_parts_only: bool) -> Self {
+        self.show_text_parts_only = show_text_parts_only;
         self
     }
 
-    pub fn use_show_text_part_strategy(mut self, strategy: ShowTextPartStrategy) -> Self {
-        self.show_text_part_strategy = strategy;
+    pub fn use_show_text_part_strategy(mut self, strategy: ShowTextPartsStrategy) -> Self {
+        self.show_text_parts_strategy = strategy;
         self
     }
 
@@ -359,7 +372,27 @@ impl TplBuilder {
             let plain = String::from_utf8_lossy(plain).to_string();
 
             if self.sanitize_text_plain_parts {
-                sanitize_text_plain_part(plain)
+                {
+                    // keeps a maximum of 2 consecutive new lines
+                    let sanitized_part = Regex::new(r"(\r?\n\s*){2,}")
+                        .unwrap()
+                        .replace_all(&plain, "\n\n")
+                        .to_string();
+
+                    // replaces tabulations by spaces
+                    let sanitized_part = Regex::new(r"\t")
+                        .unwrap()
+                        .replace_all(&sanitized_part, " ")
+                        .to_string();
+
+                    // keeps a maximum of 2 consecutive spaces
+                    let sanitized_part = Regex::new(r" {2,}")
+                        .unwrap()
+                        .replace_all(&sanitized_part, "  ")
+                        .to_string();
+
+                    sanitized_part
+                }
             } else {
                 plain.to_owned()
             }
@@ -369,54 +402,52 @@ impl TplBuilder {
             let html = String::from_utf8_lossy(html).to_string();
 
             if self.sanitize_text_html_parts {
-                return {
-                    // removes html markup
-                    let sanitized_html = ammonia::Builder::new()
-                        .tags(HashSet::default())
-                        .clean(&html)
-                        .to_string();
-                    // merges new line chars
-                    let sanitized_html = Regex::new(r"(\r?\n\s*){2,}")
-                        .unwrap()
-                        .replace_all(&sanitized_html, "\n\n")
-                        .to_string();
-                    // replaces tabulations and &npsp; by spaces
-                    let sanitized_html = Regex::new(r"(\t|&nbsp;)")
-                        .unwrap()
-                        .replace_all(&sanitized_html, " ")
-                        .to_string();
-                    // merges spaces
-                    let sanitized_html = Regex::new(r" {2,}")
-                        .unwrap()
-                        .replace_all(&sanitized_html, "  ")
-                        .to_string();
-                    // decodes html entities
-                    let sanitized_html =
-                        html_escape::decode_html_entities(&sanitized_html).to_string();
+                // removes html markup
+                let sanitized_html = ammonia::Builder::new()
+                    .tags(HashSet::default())
+                    .clean(&html)
+                    .to_string();
+                // merges new line chars
+                let sanitized_html = Regex::new(r"(\r?\n\s*){2,}")
+                    .unwrap()
+                    .replace_all(&sanitized_html, "\n\n")
+                    .to_string();
+                // replaces tabulations and &npsp; by spaces
+                let sanitized_html = Regex::new(r"(\t|&nbsp;)")
+                    .unwrap()
+                    .replace_all(&sanitized_html, " ")
+                    .to_string();
+                // merges spaces
+                let sanitized_html = Regex::new(r" {2,}")
+                    .unwrap()
+                    .replace_all(&sanitized_html, "  ")
+                    .to_string();
+                // decodes html entities
+                let sanitized_html = html_escape::decode_html_entities(&sanitized_html).to_string();
 
-                    sanitized_html
-                };
-            };
-            html.to_owned()
+                sanitized_html
+            } else {
+                html.to_owned()
+            }
         });
 
-        match self.show_text_part_strategy {
-            ShowTextPartStrategy::PlainOtherwiseHtml => {
+        match self.show_text_parts_strategy {
+            ShowTextPartsStrategy::PlainOtherwiseHtml => {
                 if let Some(ref part) = plain_part.or(html_part) {
                     tpl.push_str(part)
                 }
             }
-            ShowTextPartStrategy::PlainOnly => {
+            ShowTextPartsStrategy::PlainOnly => {
                 if let Some(ref part) = plain_part {
                     tpl.push_str(part)
                 }
             }
-            ShowTextPartStrategy::HtmlOtherwisePlain => {
+            ShowTextPartsStrategy::HtmlOtherwisePlain => {
                 if let Some(ref part) = html_part.or(plain_part) {
                     tpl.push_str(part)
                 }
             }
-            ShowTextPartStrategy::HtmlOnly => {
+            ShowTextPartsStrategy::HtmlOnly => {
                 if let Some(ref part) = html_part {
                     tpl.push_str(part)
                 }

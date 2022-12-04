@@ -1,27 +1,4 @@
 use mailparse::ParsedMail;
-use regex::Regex;
-
-pub fn sanitize_text_plain_part<P: AsRef<str>>(part: P) -> String {
-    // keeps a maximum of 2 consecutive new lines
-    let sanitized_part = Regex::new(r"(\r?\n\s*){2,}")
-        .unwrap()
-        .replace_all(part.as_ref(), "\n\n")
-        .to_string();
-
-    // replaces tabulations by spaces
-    let sanitized_part = Regex::new(r"\t")
-        .unwrap()
-        .replace_all(&sanitized_part, " ")
-        .to_string();
-
-    // keeps a maximum of 2 consecutive spaces
-    let sanitized_part = Regex::new(r" {2,}")
-        .unwrap()
-        .replace_all(&sanitized_part, "  ")
-        .to_string();
-
-    sanitized_part
-}
 
 #[derive(Debug)]
 pub struct PartsIterator<'a> {

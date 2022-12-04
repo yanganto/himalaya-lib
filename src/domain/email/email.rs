@@ -7,8 +7,7 @@ use thiserror::Error;
 use tree_magic;
 
 use crate::{
-    account, sanitize_text_plain_part, tpl, AccountConfig, Attachment, PartsIterator, TplBuilder,
-    DEFAULT_SIGNATURE_DELIM,
+    account, tpl, AccountConfig, Attachment, PartsIterator, TplBuilder, DEFAULT_SIGNATURE_DELIM,
 };
 
 #[derive(Error, Debug)]
@@ -244,10 +243,14 @@ impl<'a> Email<'a> {
                     continue;
                 }
 
-                let body =
-                    sanitize_text_plain_part(part.get_body().map_err(Error::ParseEmailBodyError)?);
-
                 lines.push_str("\n\n");
+
+                let body = TplBuilder::default()
+                    .from_parsed(&parsed)?
+                    .show_headers([] as [&str; 0])
+                    .show_text_parts_only(true)
+                    .sanitize_text_parts(true)
+                    .build();
 
                 for line in body.lines() {
                     // removes existing signature from the original body
@@ -310,41 +313,14 @@ impl<'a> Email<'a> {
 
             lines.push_str("\n-------- Forwarded Message --------\n");
 
-            if let Some(date) = parsed_headers.get_first_value("date") {
-                lines.push_str(&format!("Date: {}\n", date));
-            }
-
-            lines.push_str(&format!("From: {}\n", {
-                let mut from = Mailboxes::new();
-                for mboxes in parsed_headers.get_all_values("From") {
-                    let mboxes: Mailboxes = mboxes.parse()?;
-                    from.extend(mboxes)
-                }
-                from
-            }));
-
-            lines.push_str(&format!("To: {}\n", {
-                let mut to = Mailboxes::new();
-                for mboxes in parsed_headers.get_all_values("To") {
-                    let mboxes: Mailboxes = mboxes.parse()?;
-                    to.extend(mboxes)
-                }
-                to
-            }));
-
-            lines.push_str(&format!("Subject: {}\n", subject));
-
-            lines.push_str("\n");
-
-            for part in PartsIterator::new(&parsed) {
-                if part.ctype.mimetype != "text/plain" {
-                    continue;
-                }
-
-                lines.push_str(&sanitize_text_plain_part(
-                    part.get_body().map_err(Error::ParseEmailBodyError)?,
-                ));
-            }
+            lines.push_str(
+                &TplBuilder::default()
+                    .from_parsed(&parsed)?
+                    .show_headers(["Date", "From", "To", "Cc", "Subject"])
+                    .show_text_parts_only(true)
+                    .sanitize_text_parts(true)
+                    .build(),
+            );
 
             lines
         });
@@ -679,6 +655,7 @@ mod test_email {
             "-------- Forwarded Message --------",
             "From: from@localhost",
             "To: to@localhost, to2@localhost",
+            "Cc: cc@localhost, cc2@localhost",
             "Subject: subject",
             "",
             "Hello!",
@@ -727,6 +704,7 @@ mod test_email {
             "Date: Thu, 10 Nov 2022 14:26:33 +0000",
             "From: from@localhost",
             "To: to@localhost, to2@localhost",
+            "Cc: cc@localhost, cc2@localhost",
             "Subject: subject",
             "",
             "Hello!",
