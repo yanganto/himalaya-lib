@@ -103,7 +103,9 @@ pub struct TplOverride<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ShowTextPartStrategy {
     PlainOtherwiseHtml,
+    PlainOnly,
     HtmlOtherwisePlain,
+    HtmlOnly,
 }
 
 impl Default for ShowTextPartStrategy {
@@ -189,7 +191,7 @@ impl TplBuilderOpts {
         self
     }
 
-    pub fn show_headers<S: ToString, B: Iterator<Item = S>>(mut self, headers: B) -> Self {
+    pub fn show_headers<S: ToString, B: IntoIterator<Item = S>>(mut self, headers: B) -> Self {
         let headers = headers
             .into_iter()
             .map(|header| header.to_string())
@@ -415,15 +417,25 @@ impl TplBuilder {
                     tpl.push_str(part)
                 }
             }
+            ShowTextPartStrategy::PlainOnly => {
+                if let Some(ref part) = plain_part {
+                    tpl.push_str(part)
+                }
+            }
             ShowTextPartStrategy::HtmlOtherwisePlain => {
                 if let Some(ref part) = html_part.or(plain_part) {
+                    tpl.push_str(part)
+                }
+            }
+            ShowTextPartStrategy::HtmlOnly => {
+                if let Some(ref part) = html_part {
                     tpl.push_str(part)
                 }
             }
         }
 
         if !self.opts.show_text_parts_only_or_default() {
-            // TODO: manage other mime parts
+            // TODO: manage other mime parts, maybe to do in rust-mml
         }
 
         tpl

@@ -2,7 +2,7 @@
 use mailparse::MailHeaderMap;
 
 #[cfg(feature = "imap-backend")]
-use himalaya_lib::{Backend, ImapBackend, ImapConfig, Parts};
+use himalaya_lib::{Backend, ImapBackend, ImapConfig};
 
 #[cfg(feature = "imap-backend")]
 #[test]

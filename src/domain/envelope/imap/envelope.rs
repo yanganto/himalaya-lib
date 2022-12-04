@@ -8,8 +8,7 @@ use rfc2047_decoder;
 
 use crate::{
     backend::imap::{Error, Result},
-    domain::flag::imap::flags,
-    Envelope,
+    Envelope, Flags,
 };
 
 /// Represents the raw envelope returned by the `imap` crate.
@@ -22,7 +21,7 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
 
     let id = raw.message.to_string();
 
-    let flags = flags::from_raws(raw.flags());
+    let flags = Flags::from(raw.flags());
 
     let subject = envelope
         .subject

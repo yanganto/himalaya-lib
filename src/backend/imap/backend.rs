@@ -18,9 +18,12 @@ use thiserror::Error;
 use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
 
 use crate::{
-    account, backend, email, envelope, flag, process, Backend, Email, Envelopes, Flags, Folder,
-    Folders, ImapConfig,
+    account, backend, email, envelope, process, Backend, Email, Envelopes, Flags, Folder, Folders,
+    ImapConfig,
 };
+
+#[cfg(feature = "imap-backend")]
+use crate::flag::imap::ImapFlag;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -456,10 +459,10 @@ impl Backend for ImapBackend<'_> {
     fn add_email(&self, folder: &str, email: &[u8], flags: &str) -> backend::Result<String> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
-        let flags: Flags = flags.into();
+        let flags = Flags::from(flags);
         session
             .append(&folder, email)
-            .flags(flag::imap::into_raws(&flags))
+            .flags(<Flags as Into<Vec<ImapFlag>>>::into(flags))
             .finish()
             .map_err(|err| Error::AppendMsgError(err, folder.to_owned()))?;
         let last_seq = session

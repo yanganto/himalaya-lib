@@ -1,10 +1,10 @@
-//! Config module.
+//! Account config module.
 //!
-//! This module contains everything related to the user's
-//! configuration.
+//! This module contains the representation of the user's current
+//! account configuration.
 
 use lettre::{address::AddressError, message::Mailbox};
-use mailparse::MailAddr;
+use log::warn;
 use shellexpand;
 use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf, result};
 use thiserror::Error;
@@ -32,8 +32,6 @@ pub enum Error {
     ParseAccountAddrError(#[source] mailparse::MailParseError, String),
     #[error("cannot find account address in {0}")]
     ParseAccountAddrNotFoundError(String),
-    #[error("cannot expand folder alias {1}")]
-    ExpandFolderAliasError(#[source] shellexpand::LookupError<env::VarError>, String),
     #[error("cannot parse download file name from {0}")]
     ParseDownloadFileNameError(PathBuf),
     #[error("cannot parse address from config")]
@@ -58,7 +56,7 @@ pub struct AccountConfig {
 
     /// Represents the page size when listing folders.
     pub folder_listing_page_size: Option<usize>,
-    /// Represents the folder aliases map.
+    /// Represents the folder aliases hash map.
     pub folder_aliases: HashMap<String, String>,
 
     /// Represents the page size when listing emails.
@@ -67,7 +65,7 @@ pub struct AccountConfig {
     /// attachments).
     pub email_reading_headers: Option<Vec<String>>,
     /// Represents the text/plain format as defined in the
-    /// [RFC2646](https://www.ietf.org/rfc/rfc2646.txt)
+    /// [RFC 2646](https://www.ietf.org/rfc/rfc2646.txt).
     pub email_reading_format: EmailTextPlainFormat,
     /// Represents the command used to decrypt an email.
     pub email_reading_decrypt_cmd: Option<String>,
@@ -80,59 +78,14 @@ pub struct AccountConfig {
 }
 
 impl AccountConfig {
-    /// Builds the full RFC822 compliant user address email.
+    /// Builds the full [RFC 2822] compliant user email address.
+    ///
+    /// [RFC 2822]: https://www.rfc-editor.org/rfc/rfc2822
     pub fn addr(&self) -> Result<Mailbox> {
         Ok(Mailbox::new(
             self.display_name.clone(),
             self.email.parse().map_err(Error::ParseAddressError)?,
         ))
-    }
-
-    /// Builds the full RFC822 compliant user address email.
-    pub fn address(&self) -> Result<MailAddr> {
-        let display_name = self
-            .display_name
-            .as_ref()
-            .map(ToOwned::to_owned)
-            .unwrap_or_default();
-
-        let has_special_chars = "()<>[]:;@.,".contains(|c| display_name.contains(c));
-
-        let addr = if display_name.is_empty() {
-            self.email.clone()
-        } else if has_special_chars {
-            format!("\"{}\" <{}>", display_name, &self.email)
-        } else {
-            format!("{} <{}>", display_name, &self.email)
-        };
-
-        let addr = mailparse::addrparse(&addr)
-            .map_err(|err| Error::ParseAccountAddrError(err, addr.to_owned()))?
-            .first()
-            .ok_or_else(|| Error::ParseAccountAddrNotFoundError(addr.to_owned()))?
-            .to_owned();
-
-        Ok(addr)
-    }
-
-    pub fn pgp_encrypt_file(&self, addr: &str, path: PathBuf) -> Result<String> {
-        let cmd = self
-            .email_writing_encrypt_cmd
-            .as_ref()
-            .ok_or_else(|| Error::EncryptFileMissingCmdError)?;
-        let cmd = &format!("{} {} {:?}", cmd, addr, path);
-        let output = process::run(cmd, &[]).map_err(Error::EncryptFileError)?;
-        Ok(String::from_utf8_lossy(&output).to_string())
-    }
-
-    pub fn pgp_decrypt_file(&self, path: PathBuf) -> Result<String> {
-        let cmd = self
-            .email_reading_decrypt_cmd
-            .as_ref()
-            .ok_or_else(|| Error::DecryptFileMissingCmdError)?;
-        let cmd = &format!("{} {:?}", cmd, path);
-        let output = process::run(cmd, &[]).map_err(Error::DecryptFileError)?;
-        Ok(String::from_utf8_lossy(&output).to_string())
     }
 
     /// Gets the downloads directory path.
@@ -185,19 +138,22 @@ impl AccountConfig {
     /// variables.
     pub fn folder_alias(&self, folder: &str) -> Result<String> {
         let lowercase_folder = folder.trim().to_lowercase();
+
         let alias = self
             .folder_aliases
             .get(&lowercase_folder)
             .map(String::as_str)
             .unwrap_or_else(|| match lowercase_folder.as_str() {
                 "inbox" => DEFAULT_INBOX_FOLDER,
-                "drafts" => DEFAULT_DRAFTS_FOLDER,
+                "draft" | "drafts" => DEFAULT_DRAFTS_FOLDER,
                 "sent" => DEFAULT_SENT_FOLDER,
                 _ => folder,
             });
-        let alias = shellexpand::full(alias)
-            .map(String::from)
-            .map_err(|err| Error::ExpandFolderAliasError(err, alias.to_owned()))?;
+        let alias = shellexpand::full(alias).map(String::from).or_else(|err| {
+            warn!("skipping shell expand for folder alias {}: {}", alias, err);
+            Ok(alias.to_string())
+        })?;
+
         Ok(alias)
     }
 
@@ -256,14 +212,14 @@ impl AccountConfig {
 }
 
 #[cfg(test)]
-mod test_account_config {
+mod account_config {
     use concat_with::concat_line;
     use std::path::PathBuf;
 
     use crate::AccountConfig;
 
     #[test]
-    fn test_unique_download_file_path() {
+    fn unique_download_file_path() {
         let config = AccountConfig::default();
         let path = PathBuf::from("downloads/file.ext");
 
@@ -301,7 +257,7 @@ mod test_account_config {
     }
 
     #[test]
-    fn test_to_write_tpl_builder() {
+    fn to_write_tpl_builder() {
         let config = AccountConfig {
             email: "from@localhost".into(),
             ..AccountConfig::default()
@@ -315,7 +271,7 @@ mod test_account_config {
     }
 
     #[test]
-    fn test_to_write_tpl_builder_with_signature() {
+    fn to_write_tpl_builder_with_signature() {
         let config = AccountConfig {
             email: "from@localhost".into(),
             signature: Some("Regards,".into()),
@@ -332,6 +288,31 @@ mod test_account_config {
             "",
             "",
             "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn to_write_tpl_builder_with_signature_delim() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            signature_delim: Some("~~\n".into()),
+            signature: Some("Regards,".into()),
+            ..AccountConfig::default()
+        };
+
+        let tpl = config.to_write_tpl_builder().unwrap().build();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "To: ",
+            "Subject: ",
+            "",
+            "",
+            "",
+            "~~",
             "Regards,"
         );
 
