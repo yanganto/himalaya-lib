@@ -2,13 +2,12 @@ use imap::types::{Fetch, ZeroCopy};
 use lettre::{address::AddressError, message::Mailboxes};
 use log::{trace, warn};
 use mailparse::{DispositionType, MailHeaderMap, MailParseError, ParsedMail};
+use mime_msg_builder::TplBuilder;
 use std::{fmt::Debug, io, path::PathBuf, result};
 use thiserror::Error;
 use tree_magic;
 
-use crate::{
-    account, tpl, AccountConfig, Attachment, PartsIterator, TplBuilder, DEFAULT_SIGNATURE_DELIM,
-};
+use crate::{account, AccountConfig, Attachment, DEFAULT_SIGNATURE_DELIM};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -30,7 +29,7 @@ pub enum Error {
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
     #[error(transparent)]
-    TplError(#[from] tpl::Error),
+    MimeMsgBuilderError(#[from] mime_msg_builder::Error),
 
     // TODO: sort me
     #[error("cannot get content type of multipart")]
@@ -88,7 +87,7 @@ impl<'a> Email<'a> {
     }
 
     pub fn attachments(&'a mut self) -> Result<Vec<Attachment>> {
-        let attachments = PartsIterator::new(self.parsed()?).filter_map(|part| {
+        let attachments = self.parsed()?.parts().filter_map(|part| {
             let cdisp = part.get_content_disposition();
             if let DispositionType::Attachment = cdisp.disposition {
                 let filename = cdisp.params.get("filename");
@@ -129,17 +128,14 @@ impl<'a> Email<'a> {
         }
     }
 
-    pub fn to_read_tpl_builder(&'a mut self) -> Result<TplBuilder> {
+    fn tpl_builder_from_parsed(parsed: &ParsedMail<'_>) -> Result<TplBuilder> {
         let mut tpl = TplBuilder::default();
 
-        let parsed = self.parsed()?;
-        let parsed_headers = parsed.get_headers();
-
-        for header in parsed_headers {
-            tpl = tpl.header(header.get_key(), header.get_value())
+        for header in &parsed.headers {
+            tpl = tpl.set_header(header.get_key(), header.get_value());
         }
 
-        for part in PartsIterator::new(parsed) {
+        for part in parsed.parts() {
             match part.ctype.mimetype.as_str() {
                 "text/plain" => {
                     tpl = tpl.text_plain_part(part.get_body().map_err(Error::ParseEmailError)?);
@@ -154,6 +150,30 @@ impl<'a> Email<'a> {
         }
 
         Ok(tpl)
+    }
+
+    /// Preconfigures a template builder for building new emails. It
+    /// contains a "From" filled with the user's email address, an
+    /// empty "To" and "Subject" and a text/plain part containing the
+    /// user's signature (if existing). This function is useful when
+    /// you need to compose a new email from scratch.
+    pub fn new_tpl_builder(config: &AccountConfig) -> Result<TplBuilder> {
+        let tpl = TplBuilder::default()
+            .from(config.addr()?)
+            .to("")
+            .subject("")
+            .text_plain_part(if let Some(ref signature) = config.signature()? {
+                String::from("\n\n") + signature
+            } else {
+                String::new()
+            });
+
+        Ok(tpl)
+    }
+
+    pub fn to_read_tpl_builder(&'a mut self) -> Result<TplBuilder> {
+        let parsed = self.parsed()?;
+        Ok(Self::tpl_builder_from_parsed(parsed)?)
     }
 
     pub fn to_reply_tpl_builder(
@@ -238,15 +258,14 @@ impl<'a> Email<'a> {
         tpl = tpl.text_plain_part({
             let mut lines = String::default();
 
-            for part in PartsIterator::new(&parsed) {
+            for part in parsed.parts() {
                 if part.ctype.mimetype != "text/plain" {
                     continue;
                 }
 
                 lines.push_str("\n\n");
 
-                let body = TplBuilder::default()
-                    .from_parsed(&parsed)?
+                let body = Self::tpl_builder_from_parsed(parsed)?
                     .show_headers([] as [&str; 0])
                     .show_text_parts_only(true)
                     .sanitize_text_parts(true)
@@ -314,8 +333,7 @@ impl<'a> Email<'a> {
             lines.push_str("\n-------- Forwarded Message --------\n");
 
             lines.push_str(
-                &TplBuilder::default()
-                    .from_parsed(&parsed)?
+                &Self::tpl_builder_from_parsed(parsed)?
                     .show_headers(["Date", "From", "To", "Cc", "Subject"])
                     .show_text_parts_only(true)
                     .sanitize_text_parts(true)
@@ -379,10 +397,48 @@ impl TryFrom<ZeroCopy<Vec<Fetch>>> for Email<'_> {
 }
 
 #[cfg(test)]
-mod test_email {
+mod email {
     use concat_with::concat_line;
 
     use crate::{AccountConfig, Email};
+
+    #[test]
+    fn new_tpl_builder() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            ..AccountConfig::default()
+        };
+
+        let tpl = Email::new_tpl_builder(&config).unwrap().build();
+
+        let expected_tpl = concat_line!("From: from@localhost", "To: ", "Subject: ", "", "");
+
+        assert_eq!(expected_tpl, *tpl);
+    }
+
+    #[test]
+    fn new_tpl_builder_with_signature() {
+        let config = AccountConfig {
+            email: "from@localhost".into(),
+            signature: Some("Regards,".into()),
+            ..AccountConfig::default()
+        };
+
+        let tpl = Email::new_tpl_builder(&config).unwrap().build();
+
+        let expected_tpl = concat_line!(
+            "From: from@localhost",
+            "To: ",
+            "Subject: ",
+            "",
+            "",
+            "",
+            "-- ",
+            "Regards,"
+        );
+
+        assert_eq!(expected_tpl, *tpl);
+    }
 
     #[test]
     fn test_to_read_tpl_builder() {

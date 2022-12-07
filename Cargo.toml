@@ -23,11 +23,11 @@ convert_case = "0.5"
 html-escape = "0.2"
 lettre = { version = "=0.10.1", features = ["serde"] }
 log = "0.4"
-mailparse = "0.13"
+mailparse = "0.14"
 native-tls = "0.2"
 regex = "1.5"
 rfc2047-decoder = "=0.2.0"
-rust-mml = { git = "https://git.sr.ht/~soywod/rust-mml", branch = "master" }
+mime-msg-builder = { git = "https://git.sr.ht/~soywod/mime-msg-builder", branch = "master" }
 serde = { version = "1.0", features = ["derive"] }
 shellexpand = "2.1"
 thiserror = "1.0"
@@ -37,7 +37,7 @@ uuid = { version = "0.8", features = ["v4"] }
 # [dependencies.optional]
 imap = { version = "=3.0.0-alpha.4", optional = true }
 imap-proto = { version = "=0.14.3", optional = true }
-maildir = { version = "=0.6.1", optional = true }
+maildir = { version = "=0.6.3", optional = true }
 md5 = { version = "0.7.0", optional = true }
 notmuch = { version = "=0.7.1", optional = true }
 utf7-imap = { version = "=0.3.2", optional = true }
