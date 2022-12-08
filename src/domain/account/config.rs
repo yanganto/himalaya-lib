@@ -67,8 +67,12 @@ pub struct AccountConfig {
     /// Represents the text/plain format as defined in the
     /// [RFC 2646](https://www.ietf.org/rfc/rfc2646.txt).
     pub email_reading_format: EmailTextPlainFormat,
+    /// Represents the command used to verify an email.
+    pub email_reading_verify_cmd: Option<String>,
     /// Represents the command used to decrypt an email.
     pub email_reading_decrypt_cmd: Option<String>,
+    /// Represents the command used to sign an email.
+    pub email_writing_sign_cmd: Option<String>,
     /// Represents the command used to encrypt an email.
     pub email_writing_encrypt_cmd: Option<String>,
     /// Represents headers visible at the top of emails when writing

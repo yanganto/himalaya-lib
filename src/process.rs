@@ -48,15 +48,17 @@ pub fn run(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
 pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
     let mut output = Vec::new();
 
-    let pipeline = if cfg!(target_os = "windows")
+    let windows = cfg!(target_os = "windows")
         && env::var("MSYSTEM")
             .map(|env| !env.starts_with("MINGW"))
-            .unwrap_or_default()
-    {
+            .unwrap_or_default();
+
+    let pipeline = if windows {
         Command::new("cmd")
             .args(&["/C", cmd])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
     } else {
         Command::new("sh")
@@ -64,6 +66,7 @@ pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
             .arg(cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
     }
     .map_err(|err| Error::SpawnProcessError(err, cmd.to_string()))?;

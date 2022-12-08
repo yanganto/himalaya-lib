@@ -441,7 +441,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_read_tpl_builder() {
+    fn to_read_tpl_builder() {
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -465,7 +465,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_read_tpl_builder_with_email_reading_headers_config() {
+    fn to_read_tpl_builder_with_email_reading_headers_config() {
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -500,7 +500,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_read_tpl_builder_with_show_all_headers_option() {
+    fn to_read_tpl_builder_with_show_all_headers_option() {
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -529,7 +529,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_read_tpl_builder_with_show_only_headers_option() {
+    fn to_read_tpl_builder_with_show_only_headers_option() {
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -567,7 +567,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_reply_tpl_builder() {
+    fn to_reply_tpl_builder() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             ..AccountConfig::default()
@@ -604,7 +604,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_reply_all_tpl_builder() {
+    fn to_reply_all_tpl_builder() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             ..AccountConfig::default()
@@ -642,7 +642,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_reply_tpl_builder_with_signature() {
+    fn to_reply_tpl_builder_with_signature() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             signature: Some("Cordialement,".into()),
@@ -680,7 +680,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_forward_tpl_builder() {
+    fn to_forward_tpl_builder() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             ..AccountConfig::default()
@@ -724,7 +724,7 @@ mod email {
     }
 
     #[test]
-    fn test_to_forward_tpl_builder_with_date_and_signature() {
+    fn to_forward_tpl_builder_with_date_and_signature() {
         let config = AccountConfig {
             email: "to@localhost".into(),
             signature: Some("Cordialement,".into()),
