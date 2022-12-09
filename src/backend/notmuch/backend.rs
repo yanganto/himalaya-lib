@@ -1,3 +1,4 @@
+use lettre::address::AddressError;
 use log::{debug, info, trace};
 use std::{any::Any, fs, io, result};
 use thiserror::Error;
@@ -22,7 +23,7 @@ pub enum Error {
     #[error("cannot find notmuch message sender")]
     FindSenderError,
     #[error("cannot parse notmuch message senders {1}")]
-    ParseSendersError(#[source] mailparse::MailParseError, String),
+    ParseSendersError(#[source] AddressError, String),
     #[error("cannot open notmuch database")]
     OpenDbError(#[source] notmuch::Error),
     #[error("cannot build notmuch query")]
@@ -93,12 +94,7 @@ impl<'a> NotmuchBackend<'a> {
         })
     }
 
-    fn _search_envelopes(
-        &mut self,
-        query: &str,
-        page_size: usize,
-        page: usize,
-    ) -> Result<Envelopes> {
+    fn _search_envelopes(&self, query: &str, page_size: usize, page: usize) -> Result<Envelopes> {
         // Gets envelopes matching the given Notmuch query.
         let query_builder = self
             .db
@@ -150,12 +146,12 @@ impl<'a> NotmuchBackend<'a> {
     }
 }
 
-impl<'a> Backend<'a> for NotmuchBackend<'a> {
-    fn folder_add(&mut self, _mbox: &str) -> backend::Result<()> {
+impl<'a> Backend for NotmuchBackend<'a> {
+    fn add_folder(&self, _folder: &str) -> backend::Result<()> {
         Err(Error::AddMboxUnimplementedError)?
     }
 
-    fn folder_list(&mut self) -> backend::Result<Folders> {
+    fn list_folder(&self) -> backend::Result<Folders> {
         trace!(">> get notmuch virtual folders");
 
         let mut mboxes = Folders::default();
@@ -172,49 +168,36 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         Ok(mboxes)
     }
 
-    fn folder_delete(&mut self, _mbox: &str) -> backend::Result<()> {
+    fn delete_folder(&self, _folder: &str) -> backend::Result<()> {
         Err(Error::DelMboxUnimplementedError)?
     }
 
-    fn envelope_list(
-        &mut self,
-        virt_mbox: &str,
+    fn list_envelope(
+        &self,
+        virtual_folder: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        info!(">> get notmuch envelopes");
-        debug!("virtual folder: {:?}", virt_mbox);
-        debug!("page size: {:?}", page_size);
-        debug!("page: {:?}", page);
-
         let query = self
             .account_config
-            .folder_alias(virt_mbox)
+            .folder_alias(virtual_folder)
             .unwrap_or_else(|_| String::from("all"));
-        debug!("query: {:?}", query);
         let envelopes = self._search_envelopes(&query, page_size, page)?;
 
-        info!("<< get notmuch envelopes");
         Ok(envelopes)
     }
 
-    fn envelope_search(
-        &mut self,
-        virt_mbox: &str,
+    fn search_envelope(
+        &self,
+        virtual_folder: &str,
         query: &str,
         _sort: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        info!(">> search notmuch envelopes");
-        debug!("virtual folder: {:?}", virt_mbox);
-        debug!("query: {:?}", query);
-        debug!("page size: {:?}", page_size);
-        debug!("page: {:?}", page);
-
         let query = if query.is_empty() {
             self.account_config
-                .folder_alias(virt_mbox)
+                .folder_alias(virtual_folder)
                 .unwrap_or_else(|_| String::from("all"))
         } else {
             query.to_owned()
@@ -222,14 +205,10 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         debug!("final query: {:?}", query);
         let envelopes = self._search_envelopes(&query, page_size, page)?;
 
-        info!("<< search notmuch envelopes");
         Ok(envelopes)
     }
 
-    fn email_add(&mut self, _: &str, msg: &[u8], tags: &str) -> backend::Result<String> {
-        info!(">> add notmuch envelopes");
-        debug!("tags: {:?}", tags);
-
+    fn add_email(&self, _: &str, msg: &[u8], tags: &str) -> backend::Result<String> {
         let dir = &self.notmuch_config.db_path;
 
         // Adds the message to the maildir folder and gets its hash.
@@ -237,8 +216,8 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
             root_dir: self.notmuch_config.db_path.clone(),
         };
         // TODO: find a way to move this to the Backend::connect method.
-        let mut mdir = MaildirBackend::new(self.account_config, &mdir_config);
-        let hash = mdir.email_add("", msg, "seen")?;
+        let mdir = MaildirBackend::new(self.account_config, &mdir_config);
+        let hash = mdir.add_email("", msg, "seen")?;
         debug!("hash: {:?}", hash);
 
         // Retrieves the file path of the added message by its maildir
@@ -262,62 +241,45 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         mapper.append(vec![(hash.clone(), id.clone())])?;
 
         // Attaches tags to the notmuch message.
-        self.flags_add("", &hash, tags)?;
+        self.add_flags("", &hash, tags)?;
 
         info!("<< add notmuch envelopes");
         Ok(hash)
     }
 
-    fn email_get(&mut self, _: &str, short_hash: &str) -> backend::Result<Email> {
-        info!(">> add notmuch envelopes");
+    fn get_email(&self, _: &str, short_hash: &str) -> backend::Result<Email<'a>> {
         debug!("short hash: {:?}", short_hash);
 
         let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
-        let msg_file_path = self
+
+        let email_filepath = self
             .db
             .find_message(&id)
             .map_err(Error::FindMsgError)?
             .ok_or_else(|| Error::FindMsgEmptyError)?
             .filename()
             .to_owned();
-        debug!("message file path: {:?}", msg_file_path);
-        let raw_msg = fs::read(&msg_file_path).map_err(Error::ReadMsgError)?;
-        let msg = mailparse::parse_mail(&raw_msg).map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(msg, &self.account_config)?;
-        trace!("message: {:?}", msg);
+        debug!("email filepath: {:?}", email_filepath);
 
-        info!("<< get notmuch message");
-        Ok(msg)
+        let email = Email::from(fs::read(&email_filepath).map_err(Error::ReadMsgError)?);
+        trace!("email: {:?}", email);
+
+        Ok(email)
     }
 
-    fn email_copy(
-        &mut self,
-        _dir_src: &str,
-        _dir_dst: &str,
-        _short_hash: &str,
-    ) -> backend::Result<()> {
+    fn copy_email(&self, _dir_src: &str, _dir_dst: &str, _short_hash: &str) -> backend::Result<()> {
         info!(">> copy notmuch message");
         info!("<< copy notmuch message");
         Err(Error::CopyMsgUnimplementedError)?
     }
 
-    fn email_move(
-        &mut self,
-        _dir_src: &str,
-        _dir_dst: &str,
-        _short_hash: &str,
-    ) -> backend::Result<()> {
-        info!(">> move notmuch message");
-        info!("<< move notmuch message");
+    fn move_email(&self, _dir_src: &str, _dir_dst: &str, _short_hash: &str) -> backend::Result<()> {
         Err(Error::MoveMsgUnimplementedError)?
     }
 
-    fn email_delete(&mut self, _virt_mbox: &str, short_hash: &str) -> backend::Result<()> {
-        info!(">> delete notmuch message");
-        debug!("short hash: {:?}", short_hash);
-
+    fn delete_email(&self, _virt_mbox: &str, short_hash: &str) -> backend::Result<()> {
         let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
@@ -333,14 +295,10 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
             .remove_message(msg_file_path)
             .map_err(Error::DelMsgError)?;
 
-        info!("<< delete notmuch message");
         Ok(())
     }
 
-    fn flags_add(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
-        info!(">> add notmuch message flags");
-        debug!("tags: {:?}", tags);
-
+    fn add_flags(&self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
         let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
@@ -361,14 +319,10 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
             }
         }
 
-        info!("<< add notmuch message flags");
         Ok(())
     }
 
-    fn flags_set(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
-        info!(">> set notmuch message flags");
-        debug!("tags: {:?}", tags);
-
+    fn set_flags(&self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
         let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
@@ -390,19 +344,10 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
             }
         }
 
-        info!("<< set notmuch message flags");
         Ok(())
     }
 
-    fn flags_delete(
-        &mut self,
-        _virt_mbox: &str,
-        short_hash: &str,
-        tags: &str,
-    ) -> backend::Result<()> {
-        info!(">> delete notmuch message flags");
-        debug!("tags: {:?}", tags);
-
+    fn remove_flags(&self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
         let dir = &self.notmuch_config.db_path;
         let id = IdMapper::new(dir)?.find(short_hash)?;
         debug!("id: {:?}", id);
@@ -422,7 +367,6 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
             }
         }
 
-        info!("<< delete notmuch message flags");
         Ok(())
     }
 

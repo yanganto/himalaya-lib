@@ -4,9 +4,7 @@ use maildir::Maildir;
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "maildir-backend")]
-use himalaya_lib::{
-    AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig, PartsReaderOptions,
-};
+use himalaya_lib::{AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig};
 
 #[cfg(feature = "maildir-backend")]
 #[test]
@@ -28,71 +26,73 @@ fn test_maildir_backend() {
     let mdir_config = MaildirConfig {
         root_dir: mdir.path().to_owned(),
     };
-    let mut mdir = MaildirBackend::new(&account_config, &mdir_config);
+    let mdir = MaildirBackend::new(&account_config, &mdir_config);
 
     let submdir_config = MaildirConfig {
         root_dir: mdir_sub.path().to_owned(),
     };
-    let mut submdir = MaildirBackend::new(&account_config, &submdir_config);
+    let submdir = MaildirBackend::new(&account_config, &submdir_config);
 
     // check that a message can be added
-    let msg = include_bytes!("./emails/alice-to-patrick.eml");
-    let hash = mdir.email_add("inbox", msg, "seen").unwrap();
+    let email = include_bytes!("./emails/alice-to-patrick.eml");
+    let hash = mdir.add_email("inbox", email, "seen").unwrap();
 
     // check that the added message exists
-    let msg = mdir.email_get("inbox", &hash).unwrap();
-    assert_eq!("alice@localhost", msg.from.clone().unwrap().to_string());
-    assert_eq!("patrick@localhost", msg.to.clone().unwrap().to_string());
+    let mut email = mdir.get_email("inbox", &hash).unwrap();
     assert_eq!(
-        "Ceci est un message.",
-        msg.parts.to_readable(PartsReaderOptions::default())
+        "From: alice@localhost\nTo: patrick@localhost\n\nCeci est un message.",
+        *email
+            .to_read_tpl_builder()
+            .unwrap()
+            .show_headers(["From", "To"])
+            .build()
     );
 
     // check that the envelope of the added message exists
-    let envelopes = mdir.envelope_list("inbox", 10, 0).unwrap();
+    let envelopes = mdir.list_envelope("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert_eq!(1, envelopes.len());
     assert_eq!("alice@localhost", envelope.sender);
     assert_eq!("Plain message", envelope.subject);
 
     // check that a flag can be added to the message
-    mdir.flags_add("inbox", &envelope.id, "flagged").unwrap();
-    let envelopes = mdir.envelope_list("inbox", 1, 0).unwrap();
+    mdir.add_flags("inbox", &envelope.id, "flagged").unwrap();
+    let envelopes = mdir.list_envelope("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(envelope.flags.contains(&Flag::Seen));
     assert!(envelope.flags.contains(&Flag::Flagged));
 
     // check that the message flags can be changed
-    mdir.flags_set("inbox", &envelope.id, "answered").unwrap();
-    let envelopes = mdir.envelope_list("inbox", 1, 0).unwrap();
+    mdir.set_flags("inbox", &envelope.id, "answered").unwrap();
+    let envelopes = mdir.list_envelope("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(!envelope.flags.contains(&Flag::Seen));
     assert!(!envelope.flags.contains(&Flag::Flagged));
     assert!(envelope.flags.contains(&Flag::Answered));
 
     // check that a flag can be removed from the message
-    mdir.flags_delete("inbox", &envelope.id, "answered")
+    mdir.remove_flags("inbox", &envelope.id, "answered")
         .unwrap();
-    let envelopes = mdir.envelope_list("inbox", 1, 0).unwrap();
+    let envelopes = mdir.list_envelope("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(!envelope.flags.contains(&Flag::Seen));
     assert!(!envelope.flags.contains(&Flag::Flagged));
     assert!(!envelope.flags.contains(&Flag::Answered));
 
     // check that the message can be copied
-    mdir.email_copy("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.email_get("inbox", &hash).is_ok());
-    assert!(mdir.email_get("subdir", &hash).is_ok());
-    assert!(submdir.email_get("inbox", &hash).is_ok());
+    mdir.copy_email("inbox", "subdir", &envelope.id).unwrap();
+    assert!(mdir.get_email("inbox", &hash).is_ok());
+    assert!(mdir.get_email("subdir", &hash).is_ok());
+    assert!(submdir.get_email("inbox", &hash).is_ok());
 
     // check that the message can be moved
-    mdir.email_move("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.email_get("inbox", &hash).is_err());
-    assert!(mdir.email_get("subdir", &hash).is_ok());
-    assert!(submdir.email_get("inbox", &hash).is_ok());
+    mdir.move_email("inbox", "subdir", &envelope.id).unwrap();
+    assert!(mdir.get_email("inbox", &hash).is_err());
+    assert!(mdir.get_email("subdir", &hash).is_ok());
+    assert!(submdir.get_email("inbox", &hash).is_ok());
 
     // check that the message can be deleted
-    mdir.email_delete("subdir", &hash).unwrap();
-    assert!(mdir.email_get("subdir", &hash).is_err());
-    assert!(submdir.email_get("inbox", &hash).is_err());
+    mdir.delete_email("subdir", &hash).unwrap();
+    assert!(mdir.get_email("subdir", &hash).is_err());
+    assert!(submdir.get_email("inbox", &hash).is_err());
 }

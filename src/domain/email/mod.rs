@@ -1,21 +1,13 @@
 //! Message module.
 //!
-//! This module contains everything related to messages.
+//! This module contains everything related to emails.
 
+pub mod attachment;
 pub mod config;
+pub mod email;
+pub mod utils;
+
+pub use attachment::Attachment;
 pub use config::{EmailHooks, EmailSender, EmailTextPlainFormat};
-
-mod parts;
-pub use parts::*;
-
-mod addr;
-pub use addr::*;
-
-mod tpl;
-pub use tpl::*;
-
-mod email;
 pub use email::*;
-
-mod utils;
 pub use utils::*;

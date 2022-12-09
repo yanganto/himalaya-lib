@@ -5,7 +5,7 @@
 use std::result;
 use thiserror::Error;
 
-use crate::{account, email, sendmail, AccountConfig, Email, EmailSender, Sendmail};
+use crate::{account, email, sendmail, AccountConfig, EmailSender, Sendmail};
 
 #[cfg(feature = "smtp-sender")]
 use crate::{smtp, Smtp};
@@ -29,7 +29,7 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Sender {
-    fn send(&mut self, email: &Email) -> Result<Vec<u8>>;
+    fn send(&mut self, mime_msg: &[u8]) -> Result<()>;
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]

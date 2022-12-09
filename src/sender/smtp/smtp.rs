@@ -4,19 +4,24 @@
 
 use lettre::{
     self,
+    address::Envelope,
+    error::Error as LettreError,
     transport::smtp::{
         client::{Tls, TlsParameters},
         SmtpTransport,
     },
     Transport,
 };
-use std::{convert::TryInto, result};
+use mailparse::MailHeaderMap;
+use std::result;
 use thiserror::Error;
 
-use crate::{account, email, process, sender, AccountConfig, Email, Sender, SmtpConfig};
+use crate::{account, email, process, sender, AccountConfig, Sender, SmtpConfig};
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot build envelope")]
+    BuildEnvelopeError(#[source] LettreError),
     #[error("cannot build smtp transport relay")]
     BuildTransportRelayError(#[source] lettre::transport::smtp::Error),
     #[error("cannot build smtp tls parameters")]
@@ -33,7 +38,7 @@ pub enum Error {
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
     #[error(transparent)]
-    MsgError(#[from] email::Error),
+    MsgError(#[from] email::email::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -92,23 +97,33 @@ impl<'a> Smtp<'a> {
 }
 
 impl<'a> Sender for Smtp<'a> {
-    fn send(&mut self, email: &Email) -> sender::Result<Vec<u8>> {
-        let raw_email = email.into_sendable(self.account_config)?.formatted();
+    fn send(&mut self, email: &[u8]) -> sender::Result<()> {
+        let mut email = mailparse::parse_mail(&email).map_err(Error::ParseEmailError)?;
+        let buffer;
 
-        let envelope: lettre::address::Envelope = if let Some(cmd) =
-            self.account_config.email_hooks.pre_send.as_deref()
-        {
-            let raw_email =
-                process::run(cmd, &raw_email).map_err(Error::ExecutePreSendHookError)?;
-            let parsed_mail = mailparse::parse_mail(&raw_email).map_err(Error::ParseEmailError)?;
-            Email::from_parsed_mail(parsed_mail, self.account_config)?.try_into()
-        } else {
-            email.try_into()
-        }?;
+        if let Some(cmd) = self.account_config.email_hooks.pre_send.as_deref() {
+            buffer = process::run(cmd, email.raw_bytes).map_err(Error::ExecutePreSendHookError)?;
+            email = mailparse::parse_mail(&buffer).map_err(Error::ParseEmailError)?;
+        };
+
+        let envelope = Envelope::new(
+            email
+                .get_headers()
+                .get_first_value("from")
+                .and_then(|addr| addr.parse().ok()),
+            email
+                .get_headers()
+                .get_all_values("to")
+                .iter()
+                .flat_map(|addr| addr.parse())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(Error::BuildEnvelopeError)?;
 
         self.transport()?
-            .send_raw(&envelope, &raw_email)
+            .send_raw(&envelope, email.raw_bytes)
             .map_err(Error::SendError)?;
-        Ok(raw_email)
+
+        Ok(())
     }
 }

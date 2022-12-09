@@ -2,9 +2,8 @@
 //!
 //! This module contains the representation of the email folders.
 
-use std::ops;
-
 use serde::Serialize;
+use std::ops;
 
 use crate::Folder;
 

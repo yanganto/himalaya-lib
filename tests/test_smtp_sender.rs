@@ -1,6 +1,5 @@
 use std::{thread, time::Duration};
 
-use himalaya_lib::Email;
 #[cfg(feature = "imap-backend")]
 use himalaya_lib::{Backend, ImapBackend};
 #[cfg(feature = "smtp-sender")]
@@ -35,20 +34,19 @@ fn test_smtp_sender() {
         passwd_cmd: "echo password".into(),
         ..ImapConfig::default()
     };
-    let mut imap = ImapBackend::new(&account_config, &imap_config);
-    imap.connect().unwrap();
+    let imap = ImapBackend::new(&imap_config).unwrap();
 
     // setting up folders
-    imap.email_delete("INBOX", "1:*").unwrap();
+    imap.delete_email("INBOX", "1:*").unwrap();
 
     // checking that an email can be sent
-    let email = Email::from_tpl(include_str!("./emails/alice-to-patrick.eml")).unwrap();
-    smtp.send(&email).unwrap();
+    let email = include_bytes!("./emails/alice-to-patrick.eml");
+    smtp.send(email).unwrap();
 
     thread::sleep(Duration::from_secs(1));
 
     // checking that the envelope of the sent email exists
-    let envelopes = imap.envelope_list("INBOX", 10, 0).unwrap();
+    let envelopes = imap.list_envelope("INBOX", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.sender);

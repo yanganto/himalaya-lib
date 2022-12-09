@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+* Improved `Backend` method names. Also replaced the `self mut` by a
+  `RefCell`.
+* Simplified the `Email` struct: there is no custom implementation
+  with custom fields. Now, the `Email` struct is just a wrapper around
+  `mailparse::ParsedMail`.
+* Improved `Flag` structures.
+
+### Removed
+
+* The `email::Tpl` structure moved to its [own
+  repository](https://git.sr.ht/~soywod/mime-msg-builder).
+* Encryption and signed moved with the `email::Tpl` in its own
+  repository.
+
 ## [0.4.0] - 2022-10-12
 
 ### Added

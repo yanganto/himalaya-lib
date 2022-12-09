@@ -4,12 +4,13 @@
 //! related to the envelope
 
 use chrono::DateTime;
+use lettre::message::Mailboxes;
 use log::{info, trace};
 use notmuch;
 
 use crate::{
     backend::notmuch::{Error, Result},
-    from_slice_to_addrs, Addr, Envelope, Flag,
+    Envelope, Flag,
 };
 
 /// Represents the raw envelope returned by the `notmuch` crate.
@@ -30,22 +31,13 @@ pub fn from_raw(raw: RawEnvelope) -> Result<Envelope> {
         .map_err(|err| Error::ParseMsgHeaderError(err, String::from("from")))?
         .ok_or_else(|| Error::FindMsgHeaderError(String::from("from")))?
         .to_string();
-    let sender = from_slice_to_addrs(&sender)
-        .map_err(|err| Error::ParseSendersError(err, sender.to_owned()))?
-        .and_then(|senders| {
-            if senders.is_empty() {
-                None
-            } else {
-                Some(senders)
-            }
-        })
-        .map(|senders| match &senders[0] {
-            Addr::Single(mailparse::SingleInfo { display_name, addr }) => {
-                display_name.as_ref().unwrap_or_else(|| addr).to_owned()
-            }
-            Addr::Group(mailparse::GroupInfo { group_name, .. }) => group_name.to_owned(),
-        })
-        .ok_or_else(|| Error::FindSenderError)?;
+    let sender: Mailboxes = sender
+        .parse()
+        .map_err(|err| Error::ParseSendersError(err, sender.to_owned()))?;
+    let sender = sender
+        .into_single()
+        .ok_or_else(|| Error::FindSenderError)?
+        .to_string();
     let date = raw
         .header("date")
         .map_err(|err| Error::ParseMsgHeaderError(err, String::from("date")))?

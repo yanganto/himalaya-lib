@@ -3,7 +3,7 @@
 //! This module contains the definition of the maildir backend and its
 //! traits implementation.
 
-use log::{debug, info, trace};
+use log::{debug, trace};
 use std::{
     any::Any,
     env,
@@ -137,35 +137,32 @@ impl<'a> MaildirBackend<'a> {
     }
 }
 
-impl<'a> Backend<'a> for MaildirBackend<'a> {
-    fn folder_add(&mut self, subdir: &str) -> backend::Result<()> {
-        info!(">> add maildir subdir");
+impl<'a> Backend for MaildirBackend<'a> {
+    fn add_folder(&self, subdir: &str) -> backend::Result<()> {
         debug!("subdir: {:?}", subdir);
 
         let path = self.mdir.path().join(format!(".{}", subdir));
-        trace!("subdir path: {:?}", path);
+        debug!("subdir path: {:?}", path);
 
         fs::create_dir(&path).map_err(|err| Error::CreateSubdirError(err, subdir.to_owned()))?;
-
-        info!("<< add maildir subdir");
         Ok(())
     }
 
-    fn folder_list(&mut self) -> backend::Result<Folders> {
-        trace!(">> get maildir mailboxes");
+    fn list_folder(&self) -> backend::Result<Folders> {
+        let mut folders = Folders::default();
 
-        let mut mboxes = Folders::default();
         for (name, desc) in &self.account_config.folder_aliases {
-            mboxes.push(Folder {
+            folders.push(Folder {
                 delim: String::from("/"),
                 name: name.into(),
                 desc: desc.into(),
             })
         }
+
         for entry in self.mdir.list_subdirs() {
             let dir = entry.map_err(Error::DecodeSubdirError)?;
             let dirname = dir.path().file_name();
-            mboxes.push(Folder {
+            folders.push(Folder {
                 delim: String::from("/"),
                 name: dirname
                     .and_then(OsStr::to_str)
@@ -176,31 +173,26 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
             });
         }
 
-        trace!("maildir mailboxes: {:?}", mboxes);
-        trace!("<< get maildir mailboxes");
-        Ok(mboxes)
+        trace!("folders: {:?}", folders);
+        Ok(folders)
     }
 
-    fn folder_delete(&mut self, dir: &str) -> backend::Result<()> {
-        info!(">> delete maildir dir");
+    fn delete_folder(&self, dir: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
 
         let path = self.mdir.path().join(format!(".{}", dir));
-        trace!("dir path: {:?}", path);
+        debug!("dir path: {:?}", path);
 
         fs::remove_dir_all(&path).map_err(|err| Error::DeleteAllDirError(err, path.to_owned()))?;
-
-        info!("<< delete maildir dir");
         Ok(())
     }
 
-    fn envelope_list(
-        &mut self,
+    fn list_envelope(
+        &self,
         dir: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        info!(">> get maildir envelopes");
         debug!("dir: {:?}", dir);
         debug!("page size: {:?}", page_size);
         debug!("page: {:?}", page);
@@ -247,25 +239,21 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
             .iter_mut()
             .for_each(|env| env.id = env.id[0..short_hash_len].to_owned());
 
-        info!("<< get maildir envelopes");
         Ok(envelopes)
     }
 
-    fn envelope_search(
-        &mut self,
+    fn search_envelope(
+        &self,
         _dir: &str,
         _query: &str,
         _sort: &str,
         _page_size: usize,
         _page: usize,
     ) -> backend::Result<Envelopes> {
-        info!(">> search maildir envelopes");
-        info!("<< search maildir envelopes");
         Err(Error::SearchEnvelopesUnimplementedError)?
     }
 
-    fn email_add(&mut self, dir: &str, msg: &[u8], flags: &str) -> backend::Result<String> {
-        info!(">> add maildir message");
+    fn add_email(&self, dir: &str, email: &[u8], flags: &str) -> backend::Result<String> {
         debug!("dir: {:?}", dir);
         debug!("flags: {:?}", flags);
 
@@ -274,7 +262,7 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
 
         let mdir = self.get_mdir_from_dir(dir)?;
         let id = mdir
-            .store_cur_with_flags(msg, &flags::to_normalized_string(&flags))
+            .store_cur_with_flags(email, &flags::to_normalized_string(&flags))
             .map_err(Error::StoreWithFlagsError)?;
         debug!("id: {:?}", id);
         let hash = format!("{:x}", md5::compute(&id));
@@ -284,36 +272,35 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         let mut mapper = IdMapper::new(mdir.path())?;
         mapper.append(vec![(hash.clone(), id.clone())])?;
 
-        info!("<< add maildir message");
         Ok(hash)
     }
 
-    fn email_get(&mut self, dir: &str, short_hash: &str) -> backend::Result<Email> {
-        info!(">> get maildir message");
+    fn get_email(&self, dir: &str, short_hash: &str) -> backend::Result<Email<'a>> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
 
         let mdir = self.get_mdir_from_dir(dir)?;
         let id = IdMapper::new(mdir.path())?.find(short_hash)?;
         debug!("id: {:?}", id);
+
         let mut mail_entry = mdir
             .find(&id)
             .ok_or_else(|| Error::GetMsgError(id.to_owned()))?;
-        let parsed_mail = mail_entry.parsed().map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(parsed_mail, &self.account_config)?;
-        trace!("message: {:?}", msg);
 
-        info!("<< get maildir message");
-        Ok(msg)
+        // FIXME: find why borrowing does not work here
+        let email = Email::from(
+            mail_entry
+                .parsed()
+                .map_err(Error::ParseMsgError)?
+                .raw_bytes
+                .to_vec(),
+        );
+        trace!("email: {:?}", email);
+
+        Ok(email)
     }
 
-    fn email_copy(
-        &mut self,
-        dir_src: &str,
-        dir_dst: &str,
-        short_hash: &str,
-    ) -> backend::Result<()> {
-        info!(">> copy maildir message");
+    fn copy_email(&self, dir_src: &str, dir_dst: &str, short_hash: &str) -> backend::Result<()> {
         debug!("source dir: {:?}", dir_src);
         debug!("destination dir: {:?}", dir_dst);
 
@@ -331,17 +318,10 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         let hash = format!("{:x}", md5::compute(&id));
         mapper.append(vec![(hash.clone(), id.clone())])?;
 
-        info!("<< copy maildir message");
         Ok(())
     }
 
-    fn email_move(
-        &mut self,
-        dir_src: &str,
-        dir_dst: &str,
-        short_hash: &str,
-    ) -> backend::Result<()> {
-        info!(">> move maildir message");
+    fn move_email(&self, dir_src: &str, dir_dst: &str, short_hash: &str) -> backend::Result<()> {
         debug!("source dir: {:?}", dir_src);
         debug!("destination dir: {:?}", dir_dst);
 
@@ -359,12 +339,10 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         let hash = format!("{:x}", md5::compute(&id));
         mapper.append(vec![(hash.clone(), id.clone())])?;
 
-        info!("<< move maildir message");
         Ok(())
     }
 
-    fn email_delete(&mut self, dir: &str, short_hash: &str) -> backend::Result<()> {
-        info!(">> delete maildir message");
+    fn delete_email(&self, dir: &str, short_hash: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
 
@@ -373,12 +351,10 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         debug!("id: {:?}", id);
         mdir.delete(&id).map_err(Error::DelMsgError)?;
 
-        info!("<< delete maildir message");
         Ok(())
     }
 
-    fn flags_add(&mut self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
-        info!(">> add maildir message flags");
+    fn add_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
         let flags = Flags::from(flags);
@@ -391,12 +367,10 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         mdir.add_flags(&id, &flags::to_normalized_string(&flags))
             .map_err(Error::AddFlagsError)?;
 
-        info!("<< add maildir message flags");
         Ok(())
     }
 
-    fn flags_set(&mut self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
-        info!(">> set maildir message flags");
+    fn set_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
         let flags = Flags::from(flags);
@@ -408,12 +382,10 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         mdir.set_flags(&id, &flags::to_normalized_string(&flags))
             .map_err(Error::SetFlagsError)?;
 
-        info!("<< set maildir message flags");
         Ok(())
     }
 
-    fn flags_delete(&mut self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
-        info!(">> delete maildir message flags");
+    fn remove_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
         debug!("short hash: {:?}", short_hash);
         let flags = Flags::from(flags);
@@ -425,7 +397,6 @@ impl<'a> Backend<'a> for MaildirBackend<'a> {
         mdir.remove_flags(&id, &flags::to_normalized_string(&flags))
             .map_err(Error::DelFlagsError)?;
 
-        info!("<< delete maildir message flags");
         Ok(())
     }
 

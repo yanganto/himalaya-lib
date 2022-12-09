@@ -44,21 +44,14 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub trait Backend<'a> {
-    fn connect(&mut self) -> Result<()> {
-        Ok(())
-    }
-    fn disconnect(&mut self) -> Result<()> {
-        Ok(())
-    }
+pub trait Backend {
+    fn add_folder(&self, folder: &str) -> Result<()>;
+    fn list_folder(&self) -> Result<Folders>;
+    fn delete_folder(&self, folder: &str) -> Result<()>;
 
-    fn folder_add(&mut self, folder: &str) -> Result<()>;
-    fn folder_list(&mut self) -> Result<Folders>;
-    fn folder_delete(&mut self, folder: &str) -> Result<()>;
-
-    fn envelope_list(&mut self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
-    fn envelope_search(
-        &mut self,
+    fn list_envelope(&self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
+    fn search_envelope(
+        &self,
         folder: &str,
         query: &str,
         sort: &str,
@@ -66,17 +59,18 @@ pub trait Backend<'a> {
         page: usize,
     ) -> Result<Envelopes>;
 
-    fn email_add(&mut self, folder: &str, msg: &[u8], flags: &str) -> Result<String>;
-    fn email_get(&mut self, folder: &str, id: &str) -> Result<Email>;
-    fn email_copy(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
-    fn email_move(&mut self, folder_src: &str, folder_dst: &str, ids: &str) -> Result<()>;
-    fn email_delete(&mut self, folder: &str, ids: &str) -> Result<()>;
+    fn add_email(&self, folder: &str, email: &[u8], flags: &str) -> Result<String>;
+    fn get_email(&self, folder: &str, id: &str) -> Result<Email<'_>>;
+    fn copy_email(&self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
+    fn move_email(&self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
+    fn delete_email(&self, folder: &str, ids: &str) -> Result<()>;
 
-    fn flags_add(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
-    fn flags_set(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
-    fn flags_delete(&mut self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn add_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn set_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn remove_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
 
-    fn as_any(&self) -> &(dyn Any + 'a);
+    // only for downcasting
+    fn as_any(&'static self) -> &(dyn Any);
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -86,14 +80,15 @@ impl<'a> BackendBuilder {
     pub fn build(
         account_config: &'a AccountConfig,
         backend_config: &'a BackendConfig<'a>,
-    ) -> Result<Box<dyn Backend<'a> + 'a>> {
+    ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(config) => Ok(Box::new(ImapBackend::new(account_config, config))),
+            BackendConfig::Imap(imap_config) => Ok(Box::new(ImapBackend::new(imap_config)?)),
             #[cfg(feature = "maildir-backend")]
-            BackendConfig::Maildir(config) => {
-                Ok(Box::new(MaildirBackend::new(account_config, config)))
-            }
+            BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
+                account_config,
+                maildir_config,
+            ))),
             #[cfg(feature = "notmuch-backend")]
             BackendConfig::Notmuch(config) => {
                 Ok(Box::new(NotmuchBackend::new(account_config, config)?))
