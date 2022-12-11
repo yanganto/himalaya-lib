@@ -12,7 +12,7 @@ use lettre::{
     },
     Transport,
 };
-use mailparse::MailHeaderMap;
+use mailparse::{addrparse_header, MailAddr, MailHeaderMap};
 use std::result;
 use thiserror::Error;
 
@@ -109,12 +109,34 @@ impl<'a> Sender for Smtp<'a> {
         let envelope = Envelope::new(
             email
                 .get_headers()
-                .get_first_value("from")
-                .and_then(|addr| addr.parse().ok()),
+                .get_first_header("From")
+                .and_then(|header| addrparse_header(header).ok())
+                .and_then(|addrs| addrs.first().cloned())
+                .and_then(|addr| match addr {
+                    MailAddr::Group(group) => {
+                        group.addrs.first().and_then(|addr| addr.addr.parse().ok())
+                    }
+                    MailAddr::Single(single) => single.addr.parse().ok(),
+                }),
             email
                 .get_headers()
-                .get_all_values("to")
-                .iter()
+                .get_all_headers("To")
+                .into_iter()
+                .flat_map(|header| addrparse_header(header))
+                .flat_map(|addrs| {
+                    addrs
+                        .iter()
+                        .map(|addr| match addr {
+                            MailAddr::Group(group) => group
+                                .addrs
+                                .iter()
+                                .map(|addr| addr.addr.clone())
+                                .collect::<Vec<_>>(),
+                            MailAddr::Single(single) => vec![single.addr.clone()],
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .flatten()
                 .flat_map(|addr| addr.parse())
                 .collect::<Vec<_>>(),
         )
