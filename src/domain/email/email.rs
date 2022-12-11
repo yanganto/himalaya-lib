@@ -1,7 +1,12 @@
 use imap::types::{Fetch, ZeroCopy};
-use lettre::{address::AddressError, message::Mailboxes};
+use lettre::{
+    address::AddressError,
+    message::{Mailbox, Mailboxes},
+};
 use log::{trace, warn};
-use mailparse::{DispositionType, MailHeaderMap, MailParseError, ParsedMail};
+use mailparse::{
+    addrparse_header, DispositionType, MailAddr, MailHeaderMap, MailParseError, ParsedMail,
+};
 use mime_msg_builder::TplBuilder;
 use std::{fmt::Debug, io, path::PathBuf, result};
 use thiserror::Error;
@@ -196,9 +201,9 @@ impl<'a> Email<'a> {
         tpl = tpl.to({
             let mut all_mboxes = Mailboxes::new();
 
-            let from = parsed_headers.get_all_values("From");
-            let to = parsed_headers.get_all_values("To");
-            let reply_to = parsed_headers.get_all_values("Reply-To");
+            let from = parsed_headers.get_all_headers("From");
+            let to = parsed_headers.get_all_headers("To");
+            let reply_to = parsed_headers.get_all_headers("Reply-To");
 
             let reply_to_iter = if reply_to.is_empty() {
                 from.into_iter()
@@ -206,14 +211,35 @@ impl<'a> Email<'a> {
                 reply_to.into_iter()
             };
 
-            for reply_to in reply_to_iter {
-                let mboxes: Mailboxes = reply_to.parse()?;
-                all_mboxes.extend(mboxes.into_iter().filter(|mbox| mbox.email != sender.email));
-            }
-
-            for reply_to in to.into_iter() {
-                let mboxes: Mailboxes = reply_to.parse()?;
-                all_mboxes.extend(mboxes.into_iter().filter(|mbox| mbox.email != sender.email));
+            for reply_to in reply_to_iter.chain(to.into_iter()) {
+                match addrparse_header(reply_to) {
+                    Err(err) => warn!("skipping invalid addresses {:?}: {}", reply_to, err),
+                    Ok(addrs) => {
+                        for addr in addrs.iter() {
+                            match addr {
+                                MailAddr::Group(group) => match group.addrs.first() {
+                                    None => (),
+                                    Some(single) => {
+                                        if single.addr != sender.email.as_ref() {
+                                            all_mboxes.push(Mailbox::new(
+                                                single.display_name.clone(),
+                                                single.addr.parse().unwrap(),
+                                            ))
+                                        }
+                                    }
+                                },
+                                MailAddr::Single(single) => {
+                                    if single.addr != sender.email.as_ref() {
+                                        all_mboxes.push(Mailbox::new(
+                                            single.display_name.clone(),
+                                            single.addr.parse().unwrap(),
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if all {

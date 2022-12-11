@@ -218,7 +218,7 @@ impl AccountConfig {
             .map(String::from)
             .and_then(|sig| fs::read_to_string(sig).ok())
             .or_else(|| signature.map(ToOwned::to_owned))
-            .map(|sig| format!("{}{}", delim, sig.trim_end())))
+            .map(|sig| format!("{}{}", delim, sig)))
     }
 }
 
