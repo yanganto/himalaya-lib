@@ -27,11 +27,9 @@ use crate::flag::imap::ImapFlag;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("cannet get imap session: session not initialized")]
-    CopyEmailError(#[source] email::Error),
-    #[error("cannet get imap session: session not initialized")]
+    #[error("cannot get imap session: session not initialized")]
     GetSessionNotInitializedError,
-    #[error("cannet get imap fetches: fetches not initialized")]
+    #[error("cannot get imap fetches: fetches not initialized")]
     GetFetchesNotInitializedError,
 
     #[error("cannot get imap backend from config")]
@@ -58,6 +56,10 @@ pub enum Error {
     #[error("cannot decode sender host of message {1}")]
     DecodeSenderHostError(#[source] rfc2047_decoder::Error, u32),
 
+    #[error("cannot copy email(s) {1} from {2} to {3}")]
+    CopyEmailError(#[source] imap::Error, String, String, String),
+    #[error("cannot move email(s) {1} from {2} to {3}")]
+    MoveEmailError(#[source] imap::Error, String, String, String),
     #[error("cannot create tls connector")]
     CreateTlsConnectorError(#[source] native_tls::Error),
     #[error("cannot connect to imap server")]
@@ -477,7 +479,7 @@ impl Backend for ImapBackend<'_> {
         debug!("seq: {:?}", seq);
 
         let folder = encode_utf7(folder.to_owned());
-        debug!("utf7 decoded folder: {:?}", folder);
+        debug!("utf7 encoded folder: {:?}", folder);
 
         let mut session = self.session.borrow_mut();
 
@@ -494,16 +496,59 @@ impl Backend for ImapBackend<'_> {
         Ok(email)
     }
 
-    fn copy_email(&self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
-        let email = self.get_email(folder, seq)?;
-        self.add_email(folder_target, email.as_raw()?, "seen")?;
+    fn copy_email(&self, folder: &str, folder_target: &str, ids: &str) -> backend::Result<()> {
+        debug!("ids: {}", ids);
+        debug!("source folder: {}", folder);
+        debug!("target folder: {}", folder_target);
+
+        let encoded_folder = encode_utf7(folder.to_owned());
+        let encoded_folder_target = encode_utf7(folder_target.to_owned());
+        debug!("source folder (utf7 encoded): {}", encoded_folder);
+        debug!("target folder (utf7 encoded): {}", encoded_folder_target);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(encoded_folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+
+        session.copy(ids, encoded_folder_target).map_err(|err| {
+            Error::CopyEmailError(
+                err,
+                ids.to_owned(),
+                folder.to_owned(),
+                folder_target.to_owned(),
+            )
+        })?;
+
         Ok(())
     }
 
-    fn move_email(&self, folder: &str, folder_target: &str, seq: &str) -> backend::Result<()> {
-        let email = self.get_email(folder, seq)?;
-        self.add_flags(folder, seq, "seen deleted")?;
-        self.add_email(folder_target, email.as_raw()?, "seen")?;
+    fn move_email(&self, folder: &str, folder_target: &str, ids: &str) -> backend::Result<()> {
+        debug!("ids: {}", ids);
+        debug!("source folder: {}", folder);
+        debug!("target folder: {}", folder_target);
+
+        let encoded_folder = encode_utf7(folder.to_owned());
+        let encoded_folder_target = encode_utf7(folder_target.to_owned());
+        debug!("source folder (utf7 encoded): {}", encoded_folder);
+        debug!("target folder (utf7 encoded): {}", encoded_folder_target);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(encoded_folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+
+        session.mv(ids, encoded_folder_target).map_err(|err| {
+            Error::MoveEmailError(
+                err,
+                ids.to_owned(),
+                folder.to_owned(),
+                folder_target.to_owned(),
+            )
+        })?;
+
         Ok(())
     }
 

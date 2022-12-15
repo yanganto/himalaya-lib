@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+* Used native IMAP commands `copy` and `mv` [github#429].
+
 ### Changed
 
 * Improved `Backend` method names. Also replaced the `self mut` by a
@@ -118,3 +122,4 @@ repository.
 [github#370]: https://github.com/soywod/himalaya/issues/370
 [github#373]: https://github.com/soywod/himalaya/issues/373
 [github#380]: https://github.com/soywod/himalaya/issues/380
+[github#429]: https://github.com/soywod/himalaya/issues/429
