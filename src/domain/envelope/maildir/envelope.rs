@@ -1,5 +1,5 @@
-use chrono::DateTime;
-use log::trace;
+use chrono::{DateTime, NaiveDateTime, Utc};
+use log::{trace, warn};
 use mailparse::MailAddr;
 
 use crate::{
@@ -20,31 +20,33 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
 
     let parsed_mail = entry.parsed().map_err(Error::ParseMsgError)?;
 
-    for h in parsed_mail.get_headers() {
-        let k = h.get_key();
-        trace!("header key: {:?}", k);
+    for header in parsed_mail.get_headers() {
+        let key = header.get_key();
+        trace!("header key: {}", key);
 
-        // let v = rfc2047_decoder::Decoder::new()
-        //     .skip_encoded_word_length(true)
-        //     .decode(h.get_value_raw())
-        //     .map_err(|err| Error::DecodeHeaderError(err, k.to_owned()))?;
-        let v = h.get_value();
-        trace!("header value: {:?}", v);
+        let val = header.get_value();
+        trace!("header value: {}", val);
 
-        match k.to_lowercase().as_str() {
+        match key.to_lowercase().as_str() {
             "date" => {
-                envelope.date =
-                    DateTime::parse_from_rfc2822(v.split_at(v.find(" (").unwrap_or(v.len())).0)
-                        .map(|date| date.naive_local().to_string())
-                        .ok()
+                envelope.date = mailparse::dateparse(&val)
+                    .map_err(|err| {
+                        warn!("skipping invalid date {}", val);
+                        err
+                    })
+                    .ok()
+                    .and_then(|secs| NaiveDateTime::from_timestamp_opt(secs, 0))
+                    .map(|naive_date_time| {
+                        DateTime::<Utc>::from_utc(naive_date_time, Utc).to_rfc2822()
+                    })
             }
             "subject" => {
-                envelope.subject = v.into();
+                envelope.subject = val.into();
             }
             "from" => {
                 envelope.sender = {
-                    let addrs = mailparse::addrparse_header(h)
-                        .map_err(|err| Error::ParseHeaderError(err, k.to_owned()))?;
+                    let addrs = mailparse::addrparse_header(header)
+                        .map_err(|err| Error::ParseHeaderError(err, key.to_owned()))?;
                     match addrs.first() {
                         Some(MailAddr::Group(group)) => Ok(group.to_string()),
                         Some(MailAddr::Single(single)) => Ok(single.to_string()),

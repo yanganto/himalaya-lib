@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 * Used native IMAP commands `copy` and `mv` [github#429].
+* Fixed maildir date envelope parsing [github#369].
 
 ### Changed
 
@@ -119,6 +120,7 @@ repository.
 [github#254]: https://github.com/soywod/himalaya/issues/254
 [github#347]: https://github.com/soywod/himalaya/issues/347
 [github#351]: https://github.com/soywod/himalaya/issues/351
+[github#369]: https://github.com/soywod/himalaya/issues/369
 [github#370]: https://github.com/soywod/himalaya/issues/370
 [github#373]: https://github.com/soywod/himalaya/issues/373
 [github#380]: https://github.com/soywod/himalaya/issues/380
