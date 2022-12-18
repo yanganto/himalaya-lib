@@ -275,8 +275,12 @@ impl<'a> Email<'a> {
 
         // Subject
 
-        if let Some(ref subject) = parsed_headers.get_first_value("Subject") {
-            tpl = tpl.subject(String::from("Re: ") + subject);
+        if let Some(subject) = parsed_headers.get_first_value("Subject") {
+            tpl = tpl.subject(if subject.to_lowercase().starts_with("re:") {
+                subject
+            } else {
+                String::from("Re: ") + &subject
+            });
         }
 
         // Body
@@ -344,7 +348,11 @@ impl<'a> Email<'a> {
             .get_first_value("Subject")
             .unwrap_or_default();
 
-        tpl = tpl.subject(format!("Fwd: {}", subject));
+        tpl = tpl.subject(if subject.to_lowercase().starts_with("fwd:") {
+            subject
+        } else {
+            String::from("Fwd: ") + &subject
+        });
 
         // Body
 
