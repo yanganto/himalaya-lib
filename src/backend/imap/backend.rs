@@ -13,6 +13,7 @@ use std::{
     io::{self, Read, Write},
     net::TcpStream,
     result, thread,
+    time::Duration,
 };
 use thiserror::Error;
 use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
@@ -231,7 +232,7 @@ impl<'a> ImapBackend<'a> {
             session
                 .idle()
                 .and_then(|mut idle| {
-                    idle.set_keepalive(std::time::Duration::new(keepalive, 0));
+                    idle.set_keepalive(Duration::new(keepalive, 0));
                     idle.wait_keepalive_while(|res| {
                         // TODO: handle response
                         trace!("idle response: {:?}", res);
@@ -263,7 +264,7 @@ impl<'a> ImapBackend<'a> {
                     let uid = fetch.uid.ok_or_else(|| Error::GetUidError(fetch.message))?;
 
                     let from = msg.sender.to_owned().into();
-                    self.imap_config.run_notify_cmd(&msg.subject, &from)?;
+                    self.imap_config.run_notify_cmd(uid, &msg.subject, &from)?;
 
                     debug!("notify message: {}", uid);
                     trace!("message: {:?}", msg);
@@ -291,7 +292,7 @@ impl<'a> ImapBackend<'a> {
             session
                 .idle()
                 .and_then(|mut idle| {
-                    idle.set_keepalive(std::time::Duration::new(keepalive, 0));
+                    idle.set_keepalive(Duration::new(keepalive, 0));
                     idle.wait_keepalive_while(|res| {
                         // TODO: handle response
                         trace!("idle response: {:?}", res);
