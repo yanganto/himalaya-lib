@@ -38,14 +38,14 @@ pub fn run(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
 
     for cmd in cmd.split('|') {
         debug!("running command: {}", cmd);
-        output = pipe(cmd.trim(), &output)?;
+        (output, _) = pipe(cmd.trim(), &output)?;
     }
 
     Ok(output)
 }
 
 /// Runs the given command in a pipeline and returns the raw output.
-pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
+pub fn pipe(cmd: &str, input: &[u8]) -> Result<(Vec<u8>, usize)> {
     let mut output = Vec::new();
 
     let windows = cfg!(target_os = "windows")
@@ -77,11 +77,11 @@ pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
         .write_all(input)
         .map_err(Error::WriteStdinError)?;
 
-    pipeline
+    let exit_code = pipeline
         .stdout
         .ok_or_else(|| Error::GetStdoutError)?
         .read_to_end(&mut output)
         .map_err(Error::ReadStdoutError)?;
 
-    Ok(output)
+    Ok((output, exit_code))
 }

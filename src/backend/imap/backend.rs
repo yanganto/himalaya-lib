@@ -323,6 +323,7 @@ impl<'a> ImapBackend<'a> {
 impl Backend for ImapBackend<'_> {
     fn add_folder(&self, folder: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
+        let folder = encode_utf7(folder.to_owned());
 
         session
             .create(&folder)
@@ -359,7 +360,6 @@ impl Backend for ImapBackend<'_> {
         );
 
         trace!("imap folders: {:?}", mboxes);
-        trace!("<< get imap folders");
         Ok(mboxes)
     }
 

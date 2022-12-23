@@ -12,7 +12,7 @@ use std::{fmt::Debug, io, path::PathBuf, result};
 use thiserror::Error;
 use tree_magic;
 
-use crate::{account, AccountConfig, Attachment, DEFAULT_SIGNATURE_DELIM};
+use crate::{account, process, AccountConfig, Attachment, DEFAULT_SIGNATURE_DELIM};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -35,6 +35,10 @@ pub enum Error {
     ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     MimeMsgBuilderError(#[from] mime_msg_builder::Error),
+    #[error("cannot decrypt encrypted email part")]
+    DecryptEmailPartError(#[source] process::Error),
+    #[error("cannot verify signed email part")]
+    VerifyEmailPartError(#[source] process::Error),
 
     // TODO: sort me
     #[error("cannot get content type of multipart")]
@@ -133,15 +137,88 @@ impl<'a> Email<'a> {
         }
     }
 
-    fn tpl_builder_from_parsed(parsed: &ParsedMail<'_>) -> Result<TplBuilder> {
-        let mut tpl = TplBuilder::default();
+    fn tpl_builder_from_parsed(config: &AccountConfig, parsed: &ParsedMail) -> Result<TplBuilder> {
+        Self::tpl_builder_from_parsed_rec(config, TplBuilder::default(), parsed, true)
+    }
 
-        for header in &parsed.headers {
-            tpl = tpl.set_header(header.get_key(), header.get_value());
+    fn tpl_builder_from_parsed_rec(
+        config: &AccountConfig,
+        mut tpl: TplBuilder,
+        parsed: &ParsedMail<'_>,
+        take_headers: bool,
+    ) -> Result<TplBuilder> {
+        let mut in_pgp_signed_part = false;
+        let mut in_pgp_encrypted_part = false;
+
+        if take_headers {
+            for header in &parsed.headers {
+                tpl = tpl.set_header(header.get_key(), header.get_value());
+            }
         }
 
         for part in parsed.parts() {
             match part.ctype.mimetype.as_str() {
+                "multipart/signed" => {
+                    let protocol = part.ctype.params.get("protocol").map(String::as_str);
+                    if protocol == Some("application/pgp-signed") {
+                        in_pgp_signed_part = true
+                    }
+                }
+                "application/pgp-signed" => {
+                    if in_pgp_signed_part {
+                        let signed_body = part.get_body_raw().map_err(Error::ParseEmailError)?;
+                        let parsed =
+                            mailparse::parse_mail(&signed_body).map_err(Error::ParseEmailError)?;
+                        tpl = Self::tpl_builder_from_parsed_rec(config, tpl, &parsed, false)?;
+                    }
+                }
+                "application/pgp-signature" => {
+                    if in_pgp_signed_part {
+                        if let Some(ref verify_cmd) = config.email_reading_verify_cmd {
+                            let signature = part.get_body_raw().map_err(Error::ParseEmailError)?;
+                            let (_, exit_code) = process::pipe(verify_cmd, &signature)
+                                .map_err(Error::VerifyEmailPartError)?;
+                            if exit_code != 0 {
+                                warn!("the signature could not be verified");
+                            }
+                        } else {
+                            warn!("no verify command found, cannot verify signature");
+                        }
+                        in_pgp_signed_part = false
+                    }
+                }
+                "multipart/encrypted" => {
+                    let protocol = part.ctype.params.get("protocol").map(String::as_str);
+                    if protocol == Some("application/pgp-encrypted") {
+                        in_pgp_encrypted_part = true
+                    }
+                }
+                "application/octet-stream" => {
+                    if in_pgp_encrypted_part {
+                        match config.email_reading_decrypt_cmd {
+                            Some(ref decrypt_cmd) => {
+                                let encrypted_body =
+                                    part.get_body_raw().map_err(Error::ParseEmailError)?;
+                                let (decrypted_part, _) =
+                                    process::pipe(decrypt_cmd, &encrypted_body)
+                                        .map_err(Error::DecryptEmailPartError)?;
+                                let parsed = mailparse::parse_mail(&decrypted_part)
+                                    .map_err(Error::ParseEmailError)?;
+                                tpl =
+                                    Self::tpl_builder_from_parsed_rec(config, tpl, &parsed, false)?;
+                            }
+                            None => {
+                                warn!("no decrypt command found, skipping encrypted part");
+                            }
+                        }
+                        in_pgp_encrypted_part = false;
+                    } else {
+                        tpl = tpl.part(
+                            "application/octet-stream",
+                            part.get_body_raw().map_err(Error::ParseEmailError)?,
+                        );
+                    }
+                }
                 "text/plain" => {
                     tpl = tpl.text_plain_part(part.get_body().map_err(Error::ParseEmailError)?);
                 }
@@ -176,9 +253,9 @@ impl<'a> Email<'a> {
         Ok(tpl)
     }
 
-    pub fn to_read_tpl_builder(&'a mut self) -> Result<TplBuilder> {
+    pub fn to_read_tpl_builder(&'a mut self, config: &AccountConfig) -> Result<TplBuilder> {
         let parsed = self.parsed()?;
-        Ok(Self::tpl_builder_from_parsed(parsed)?)
+        Ok(Self::tpl_builder_from_parsed(config, parsed)?)
     }
 
     pub fn to_reply_tpl_builder(
@@ -295,7 +372,7 @@ impl<'a> Email<'a> {
 
                 lines.push_str("\n\n");
 
-                let body = Self::tpl_builder_from_parsed(parsed)?
+                let body = Self::tpl_builder_from_parsed(config, parsed)?
                     .show_headers([] as [&str; 0])
                     .show_text_parts_only(true)
                     .sanitize_text_parts(true)
@@ -367,7 +444,7 @@ impl<'a> Email<'a> {
             lines.push_str("\n-------- Forwarded Message --------\n");
 
             lines.push_str(
-                &Self::tpl_builder_from_parsed(parsed)?
+                &Self::tpl_builder_from_parsed(config, parsed)?
                     .show_headers(["Date", "From", "To", "Cc", "Subject"])
                     .show_text_parts_only(true)
                     .sanitize_text_parts(true)
@@ -476,6 +553,7 @@ mod email {
 
     #[test]
     fn to_read_tpl_builder() {
+        let config = AccountConfig::default();
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -488,7 +566,7 @@ mod email {
         ));
 
         let tpl = email
-            .to_read_tpl_builder()
+            .to_read_tpl_builder(&config)
             .unwrap()
             .show_headers([] as [String; 0])
             .build();
@@ -500,6 +578,7 @@ mod email {
 
     #[test]
     fn to_read_tpl_builder_with_email_reading_headers_config() {
+        let config = AccountConfig::default();
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -512,7 +591,7 @@ mod email {
         ));
 
         let tpl = email
-            .to_read_tpl_builder()
+            .to_read_tpl_builder(&config)
             .unwrap()
             .show_headers([
                 "From", "Subject", // existing headers
@@ -535,6 +614,7 @@ mod email {
 
     #[test]
     fn to_read_tpl_builder_with_show_all_headers_option() {
+        let config = AccountConfig::default();
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -546,7 +626,7 @@ mod email {
             "Regards,"
         ));
 
-        let tpl = email.to_read_tpl_builder().unwrap().build();
+        let tpl = email.to_read_tpl_builder(&config).unwrap().build();
 
         let expected_tpl = concat_line!(
             "From: from@localhost",
@@ -564,6 +644,7 @@ mod email {
 
     #[test]
     fn to_read_tpl_builder_with_show_only_headers_option() {
+        let config = AccountConfig::default();
         let mut email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
@@ -576,7 +657,7 @@ mod email {
         ));
 
         let tpl = email
-            .to_read_tpl_builder()
+            .to_read_tpl_builder(&config)
             .unwrap()
             .show_headers([
                 // existing headers

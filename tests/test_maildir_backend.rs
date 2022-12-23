@@ -1,10 +1,14 @@
+use concat_with::concat_line;
+
 #[cfg(feature = "maildir-backend")]
 use maildir::Maildir;
 #[cfg(feature = "maildir-backend")]
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
+use himalaya_lib::{AccountConfig, Backend, CompilerBuilder, Flag, TplBuilder};
+
 #[cfg(feature = "maildir-backend")]
-use himalaya_lib::{AccountConfig, Backend, Flag, MaildirBackend, MaildirConfig};
+use himalaya_lib::{MaildirBackend, MaildirConfig};
 
 #[cfg(feature = "maildir-backend")]
 #[test]
@@ -33,16 +37,27 @@ fn test_maildir_backend() {
     };
     let submdir = MaildirBackend::new(&account_config, &submdir_config);
 
-    // check that a message can be added
-    let email = include_bytes!("./emails/alice-to-patrick.eml");
-    let hash = mdir.add_email("inbox", email, "seen").unwrap();
+    // check that a message can be built and added
+    let email = TplBuilder::default()
+        .from("alice@localhost")
+        .to("bob@localhost")
+        .subject("Plain message!")
+        .text_plain_part("Plain message!")
+        .compile(CompilerBuilder::default())
+        .unwrap();
+    let hash = mdir.add_email("inbox", &email, "seen").unwrap();
 
     // check that the added message exists
     let mut email = mdir.get_email("inbox", &hash).unwrap();
     assert_eq!(
-        "From: alice@localhost\nTo: patrick@localhost\n\nCeci est un message.",
+        concat_line!(
+            "From: alice@localhost",
+            "To: bob@localhost",
+            "",
+            "Plain message!\r\n",
+        ),
         *email
-            .to_read_tpl_builder()
+            .to_read_tpl_builder(&account_config)
             .unwrap()
             .show_headers(["From", "To"])
             .build()
@@ -53,7 +68,7 @@ fn test_maildir_backend() {
     let envelope = envelopes.first().unwrap();
     assert_eq!(1, envelopes.len());
     assert_eq!("alice@localhost", envelope.sender);
-    assert_eq!("Plain message", envelope.subject);
+    assert_eq!("Plain message!", envelope.subject);
 
     // check that a flag can be added to the message
     mdir.add_flags("inbox", &envelope.id, "flagged").unwrap();

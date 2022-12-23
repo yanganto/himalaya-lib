@@ -1,16 +1,28 @@
+use concat_with::concat_line;
+
+use himalaya_lib::{AccountConfig, Backend, CompilerBuilder, TplBuilder};
+
 #[cfg(feature = "imap-backend")]
-use himalaya_lib::{Backend, ImapBackend, ImapConfig};
+use himalaya_lib::{ImapBackend, ImapConfig};
 
 #[cfg(feature = "imap-backend")]
 #[test]
 fn test_imap_backend() {
+    let config = AccountConfig {
+        email_reading_decrypt_cmd: Some(String::from(
+            "gpg --decrypt --quiet --recipient-file ./tests/keys/bob.key",
+        )),
+        email_reading_verify_cmd: Some(String::from("gpgg --verify --quiet")),
+        ..AccountConfig::default()
+    };
+
     let imap_config = ImapConfig {
         host: "localhost".into(),
         port: 3143,
         ssl: Some(false),
         starttls: Some(false),
         insecure: Some(true),
-        login: "patrick@localhost".into(),
+        login: "bob@localhost".into(),
         passwd_cmd: "echo 'password'".into(),
         ..ImapConfig::default()
     };
@@ -18,23 +30,44 @@ fn test_imap_backend() {
 
     // setting up folders
     if let Err(_) = imap.add_folder("Sent") {};
-    if let Err(_) = imap.add_folder("&BB4EQgQ,BEAEMAQyBDsENQQ9BD0ESwQ1-") {};
+    if let Err(_) = imap.add_folder("Отправленные") {};
     imap.delete_email("INBOX", "1:*").unwrap();
     imap.delete_email("Sent", "1:*").unwrap();
     imap.delete_email("Отправленные", "1:*").unwrap();
 
-    // checking that an email can be added
-    let email = include_bytes!("./emails/alice-to-patrick.eml");
-    let id = imap.add_email("Sent", email, "seen").unwrap().to_string();
+    // checking that an email can be built and added
+    let email =
+        TplBuilder::default()
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("Signed and encrypted message")
+            .text_plain_part(concat_line!(
+                "<#part type=text/plain sign=command encrypt=command>",
+                "Signed and encrypted message!",
+                "<#/part>",
+            ))
+            .build()
+            .compile(CompilerBuilder::default().pgp_encrypt_cmd(
+                "gpg -aeqr <recipient> -o - --recipient-file ./tests/keys/bob.pub",
+            ))
+            .unwrap();
+
+    let id = imap.add_email("Sent", &email, "seen").unwrap().to_string();
 
     // checking that the added email exists
     let mut email = imap.get_email("Sent", &id).unwrap();
     assert_eq!(
-        "From: alice@localhost\nTo: patrick@localhost\n\nCeci est un message.",
+        concat_line!(
+            "From: alice@localhost",
+            "To: bob@localhost",
+            "",
+            "Signed and encrypted message!\r\n\r\n",
+        ),
         *email
-            .to_read_tpl_builder()
+            .to_read_tpl_builder(&config)
             .unwrap()
             .show_headers(["From", "To"])
+            .show_text_parts_only(true)
             .build()
     );
 
@@ -43,7 +76,7 @@ fn test_imap_backend() {
     assert_eq!(1, envelopes.len());
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.sender);
-    assert_eq!("Plain message", envelope.subject);
+    assert_eq!("Signed and encrypted message", envelope.subject);
 
     // checking that the email can be copied
     imap.copy_email("Sent", "Отправленные", &envelope.id.to_string())

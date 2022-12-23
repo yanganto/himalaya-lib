@@ -1,14 +1,17 @@
 #[cfg(feature = "notmuch-backend")]
+use concat_with::concat_line;
+
+#[cfg(feature = "notmuch-backend")]
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "notmuch-backend")]
-use himalaya_lib::{Backend, NotmuchBackend};
+use himalaya_lib::{
+    AccountConfig, Backend, CompilerBuilder, Flag, NotmuchBackend, NotmuchConfig, TplBuilder,
+};
 
 #[cfg(feature = "notmuch-backend")]
 #[test]
 fn test_notmuch_backend() {
-    use himalaya_lib::{AccountConfig, Flag, NotmuchConfig};
-
     // set up maildir folders and notmuch database
     let mdir: maildir::Maildir = env::temp_dir().join("himalaya-test-notmuch").into();
     if let Err(_) = fs::remove_dir_all(mdir.path()) {}
@@ -27,15 +30,26 @@ fn test_notmuch_backend() {
     let notmuch = NotmuchBackend::new(&account_config, &notmuch_config).unwrap();
 
     // check that a message can be added
-    let email = include_bytes!("./emails/alice-to-patrick.eml");
-    let hash = notmuch.add_email("", email, "inbox seen").unwrap();
+    let email = TplBuilder::default()
+        .from("alice@localhost")
+        .to("bob@localhost")
+        .subject("Plain message!")
+        .text_plain_part("Plain message!")
+        .compile(CompilerBuilder::default())
+        .unwrap();
+    let hash = notmuch.add_email("", &email, "inbox seen").unwrap();
 
     // check that the added message exists
     let mut email = notmuch.get_email("", &hash).unwrap();
     assert_eq!(
-        "From: alice@localhost\nTo: patrick@localhost\n\nCeci est un message.",
+        concat_line!(
+            "From: alice@localhost",
+            "To: bob@localhost",
+            "",
+            "Plain message!\r\n",
+        ),
         *email
-            .to_read_tpl_builder()
+            .to_read_tpl_builder(&account_config)
             .unwrap()
             .show_headers(["From", "To"])
             .build()
@@ -46,7 +60,7 @@ fn test_notmuch_backend() {
     let envelope = envelopes.first().unwrap();
     assert_eq!(1, envelopes.len());
     assert_eq!("alice@localhost", envelope.sender);
-    assert_eq!("Plain message", envelope.subject);
+    assert_eq!("Plain message!", envelope.subject);
 
     // check that a flag can be added to the message
     notmuch
