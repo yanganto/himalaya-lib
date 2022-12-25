@@ -98,8 +98,10 @@ impl<'a> Email<'a> {
     pub fn attachments(&'a mut self) -> Result<Vec<Attachment>> {
         let attachments = self.parsed()?.parts().filter_map(|part| {
             let cdisp = part.get_content_disposition();
+            let mime = &part.ctype.mimetype;
+
             match cdisp.disposition {
-                DispositionType::Attachment | DispositionType::Inline => {
+                DispositionType::Attachment => {
                     let filename = cdisp.params.get("filename");
                     let body = part
                         .get_body_raw()
@@ -107,19 +109,50 @@ impl<'a> Email<'a> {
                             let filename = filename
                                 .map(|f| format!("attachment {}", f))
                                 .unwrap_or_else(|| "unknown attachment".into());
-                            warn!("skipping {}: {}", filename, err);
-                            trace!("skipping part: {:#?}", part);
+                            warn!("skipping {} {}: {}", mime, filename, err);
+                            trace!("skipped part: {:#?}", part);
                             err
                         })
                         .ok()?;
 
                     Some(Attachment {
                         filename: filename.map(String::from),
+                        // better to guess the real mime type from the
+                        // body instead of using the one given from
+                        // the content type
                         mime: tree_magic::from_u8(&body),
                         body,
                     })
                 }
+                DispositionType::Inline => match cdisp.params.get("filename") {
+                    None => {
+                        warn!("skipping {} inline attachment without a filename", mime);
+                        None
+                    }
+                    Some(filename) => {
+                        let body = part
+                            .get_body_raw()
+                            .map_err(|err| {
+                                let filename = format!("attachment {}", filename);
+                                warn!("skipping {} of type {}: {}", filename, mime, err);
+                                trace!("skipped part: {:#?}", part);
+                                err
+                            })
+                            .ok()?;
+
+                        Some(Attachment {
+                            filename: Some(filename.clone()),
+                            // better to guess the real mime type from the
+                            // body instead of using the one given from
+                            // the content type
+                            mime: tree_magic::from_u8(&body),
+                            body,
+                        })
+                    }
+                },
+                // TODO
                 DispositionType::FormData => None,
+                // TODO
                 DispositionType::Extension(_) => None,
             }
         });
