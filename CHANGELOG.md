@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Used native IMAP commands `copy` and `mv` [github#429].
 * Fixed maildir date envelope parsing [github#369].
+* Fixed inline attachments not collected.
 
 ### Changed
 

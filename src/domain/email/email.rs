@@ -98,27 +98,29 @@ impl<'a> Email<'a> {
     pub fn attachments(&'a mut self) -> Result<Vec<Attachment>> {
         let attachments = self.parsed()?.parts().filter_map(|part| {
             let cdisp = part.get_content_disposition();
-            if let DispositionType::Attachment = cdisp.disposition {
-                let filename = cdisp.params.get("filename");
-                let body = part
-                    .get_body_raw()
-                    .map_err(|err| {
-                        let filename = filename
-                            .map(|f| format!("attachment {}", f))
-                            .unwrap_or_else(|| "unknown attachment".into());
-                        warn!("skipping {}: {}", filename, err);
-                        trace!("skipping part: {:#?}", part);
-                        err
-                    })
-                    .ok()?;
+            match cdisp.disposition {
+                DispositionType::Attachment | DispositionType::Inline => {
+                    let filename = cdisp.params.get("filename");
+                    let body = part
+                        .get_body_raw()
+                        .map_err(|err| {
+                            let filename = filename
+                                .map(|f| format!("attachment {}", f))
+                                .unwrap_or_else(|| "unknown attachment".into());
+                            warn!("skipping {}: {}", filename, err);
+                            trace!("skipping part: {:#?}", part);
+                            err
+                        })
+                        .ok()?;
 
-                Some(Attachment {
-                    filename: filename.map(String::from),
-                    mime: tree_magic::from_u8(&body),
-                    body,
-                })
-            } else {
-                None
+                    Some(Attachment {
+                        filename: filename.map(String::from),
+                        mime: tree_magic::from_u8(&body),
+                        body,
+                    })
+                }
+                DispositionType::FormData => None,
+                DispositionType::Extension(_) => None,
             }
         });
 
