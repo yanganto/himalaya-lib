@@ -289,6 +289,17 @@ impl<'a> ImapBackend<'a> {
 
         loop {
             debug!("begin loop");
+
+            let cmds = self.imap_config.watch_cmds().clone();
+            thread::spawn(move || {
+                debug!("batch execution of {} cmd(s)", cmds.len());
+                cmds.iter().for_each(|cmd| match process::run(cmd, &[]) {
+                    // TODO: manage errors
+                    Err(_) => (),
+                    Ok(_) => (),
+                })
+            });
+
             session
                 .idle()
                 .and_then(|mut idle| {
@@ -300,15 +311,6 @@ impl<'a> ImapBackend<'a> {
                     })
                 })
                 .map_err(Error::StartIdleModeError)?;
-
-            let cmds = self.imap_config.watch_cmds().clone();
-            thread::spawn(move || {
-                debug!("batch execution of {} cmd(s)", cmds.len());
-                cmds.iter().for_each(|cmd| match process::run(cmd, &[]) {
-                    Err(_) => (),
-                    Ok(_) => (),
-                })
-            });
 
             debug!("end loop");
         }
