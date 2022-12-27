@@ -1,3 +1,4 @@
+#[cfg(feature = "maildir-backend")]
 use concat_with::concat_line;
 
 #[cfg(feature = "maildir-backend")]
@@ -5,10 +6,10 @@ use maildir::Maildir;
 #[cfg(feature = "maildir-backend")]
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
-use himalaya_lib::{AccountConfig, Backend, CompilerBuilder, Flag, TplBuilder};
-
 #[cfg(feature = "maildir-backend")]
-use himalaya_lib::{MaildirBackend, MaildirConfig};
+use himalaya_lib::{
+    AccountConfig, Backend, CompilerBuilder, Flag, MaildirBackend, MaildirConfig, TplBuilder,
+};
 
 #[cfg(feature = "maildir-backend")]
 #[test]
@@ -48,7 +49,7 @@ fn test_maildir_backend() {
     let hash = mdir.add_email("inbox", &email, "seen").unwrap();
 
     // check that the added message exists
-    let mut email = mdir.get_email("inbox", &hash).unwrap();
+    let mut email = mdir.get_emails("inbox", &hash).unwrap();
     assert_eq!(
         concat_line!(
             "From: alice@localhost",
@@ -95,19 +96,19 @@ fn test_maildir_backend() {
     assert!(!envelope.flags.contains(&Flag::Answered));
 
     // check that the message can be copied
-    mdir.copy_email("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.get_email("inbox", &hash).is_ok());
-    assert!(mdir.get_email("subdir", &hash).is_ok());
-    assert!(submdir.get_email("inbox", &hash).is_ok());
+    mdir.copy_emails("inbox", "subdir", &envelope.id).unwrap();
+    assert!(mdir.get_emails("inbox", &hash).is_ok());
+    assert!(mdir.get_emails("subdir", &hash).is_ok());
+    assert!(submdir.get_emails("inbox", &hash).is_ok());
 
     // check that the message can be moved
-    mdir.move_email("inbox", "subdir", &envelope.id).unwrap();
-    assert!(mdir.get_email("inbox", &hash).is_err());
-    assert!(mdir.get_email("subdir", &hash).is_ok());
-    assert!(submdir.get_email("inbox", &hash).is_ok());
+    mdir.move_emails("inbox", "subdir", &envelope.id).unwrap();
+    assert!(mdir.get_emails("inbox", &hash).is_err());
+    assert!(mdir.get_emails("subdir", &hash).is_ok());
+    assert!(submdir.get_emails("inbox", &hash).is_ok());
 
     // check that the message can be deleted
-    mdir.delete_email("subdir", &hash).unwrap();
-    assert!(mdir.get_email("subdir", &hash).is_err());
-    assert!(submdir.get_email("inbox", &hash).is_err());
+    mdir.delete_emails("subdir", &hash).unwrap();
+    assert!(mdir.get_emails("subdir", &hash).is_err());
+    assert!(submdir.get_emails("inbox", &hash).is_err());
 }

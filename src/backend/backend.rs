@@ -7,7 +7,8 @@ use std::{any::Any, result};
 use thiserror::Error;
 
 use crate::{
-    account, backend, email, id_mapper, AccountConfig, BackendConfig, Email, Envelopes, Folders,
+    account, backend, email, id_mapper, AccountConfig, BackendConfig, Emails, Envelopes, Flags,
+    Folders,
 };
 
 #[cfg(feature = "imap-backend")]
@@ -47,6 +48,7 @@ pub type Result<T> = result::Result<T, Error>;
 pub trait Backend {
     fn add_folder(&self, folder: &str) -> Result<()>;
     fn list_folder(&self) -> Result<Folders>;
+    fn purge_folder(&self, folder: &str) -> Result<()>;
     fn delete_folder(&self, folder: &str) -> Result<()>;
 
     fn list_envelope(&self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
@@ -59,15 +61,15 @@ pub trait Backend {
         page: usize,
     ) -> Result<Envelopes>;
 
-    fn add_email(&self, folder: &str, email: &[u8], flags: &str) -> Result<String>;
-    fn get_email(&self, folder: &str, id: &str) -> Result<Email<'_>>;
-    fn copy_email(&self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
-    fn move_email(&self, folder: &str, folder_target: &str, ids: &str) -> Result<()>;
-    fn delete_email(&self, folder: &str, ids: &str) -> Result<()>;
+    fn add_email(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String>;
+    fn get_emails(&self, folder: &str, ids: Vec<&str>) -> Result<Emails>;
+    fn copy_emails(&self, from_folder: &str, to_folder: &str, ids: Vec<&str>) -> Result<()>;
+    fn move_emails(&self, from_folder: &str, to_folder: &str, ids: Vec<&str>) -> Result<()>;
+    fn delete_emails(&self, folder: &str, ids: Vec<&str>) -> Result<()>;
 
-    fn add_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
-    fn set_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
-    fn remove_flags(&self, folder: &str, ids: &str, flags: &str) -> Result<()>;
+    fn add_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
+    fn set_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
+    fn remove_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
 
     // only for downcasting
     fn as_any(&'static self) -> &(dyn Any);

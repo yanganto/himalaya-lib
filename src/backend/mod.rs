@@ -10,7 +10,7 @@ pub mod notmuch;
 
 pub use self::backend::*;
 pub use self::config::BackendConfig;
-pub use self::id_mapper::*;
+pub use self::id_mapper::IdMapper;
 #[cfg(feature = "imap-backend")]
 pub use self::imap::{ImapBackend, ImapConfig};
 #[cfg(feature = "maildir-backend")]

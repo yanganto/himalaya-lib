@@ -5,6 +5,20 @@ use crate::Flag;
 
 pub type ImapFlag<'a> = imap::types::Flag<'a>;
 
+impl Flag {
+    pub fn to_imap_query(&self) -> String {
+        match self {
+            Flag::Seen => String::from("\\Seen"),
+            Flag::Answered => String::from("\\Answered"),
+            Flag::Flagged => String::from("\\Flagged"),
+            Flag::Deleted => String::from("\\Deleted"),
+            Flag::Draft => String::from("\\Draft"),
+            Flag::Recent => String::from("\\Recent"),
+            Flag::Custom(flag) => flag.clone(),
+        }
+    }
+}
+
 impl From<&ImapFlag<'_>> for Flag {
     fn from(imap_flag: &ImapFlag<'_>) -> Self {
         match imap_flag {
@@ -36,7 +50,7 @@ impl Into<ImapFlag<'static>> for Flag {
             Flag::Deleted => ImapFlag::Deleted,
             Flag::Draft => ImapFlag::Draft,
             Flag::Recent => ImapFlag::Recent,
-            Flag::Custom(flag) => ImapFlag::Custom(Cow::Owned(flag.to_owned())),
+            Flag::Custom(flag) => ImapFlag::Custom(Cow::Owned(flag.clone())),
         }
     }
 }

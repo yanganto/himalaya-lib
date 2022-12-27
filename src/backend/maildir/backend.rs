@@ -3,7 +3,7 @@
 //! This module contains the definition of the maildir backend and its
 //! traits implementation.
 
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use std::{
     any::Any,
     env,
@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper,
-    AccountConfig, Backend, Email, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
+    AccountConfig, Backend, Emails, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
     DEFAULT_INBOX_FOLDER,
 };
 
@@ -253,11 +253,8 @@ impl<'a> Backend for MaildirBackend<'a> {
         Err(Error::SearchEnvelopesUnimplementedError)?
     }
 
-    fn add_email(&self, dir: &str, email: &[u8], flags: &str) -> backend::Result<String> {
-        debug!("dir: {:?}", dir);
-        debug!("flags: {:?}", flags);
-
-        let flags = Flags::from(flags);
+    fn add_email(&self, dir: &str, email: &[u8], flags: &Flags) -> backend::Result<String> {
+        debug!("dir: {}", dir);
         debug!("flags: {:?}", flags);
 
         let mdir = self.get_mdir_from_dir(dir)?;
@@ -275,127 +272,186 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(hash)
     }
 
-    fn get_email(&self, dir: &str, short_hash: &str) -> backend::Result<Email<'a>> {
+    fn get_emails(&self, dir: &str, short_hashes: Vec<&str>) -> backend::Result<Emails> {
         debug!("dir: {:?}", dir);
-        debug!("short hash: {:?}", short_hash);
+        debug!("short hashes: {:?}", short_hashes);
 
         let mdir = self.get_mdir_from_dir(dir)?;
-        let id = IdMapper::new(mdir.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
+        let id_mapper = IdMapper::new(mdir.path())?;
+        let ids = short_hashes
+            .into_iter()
+            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
+            .collect::<id_mapper::Result<Vec<&str>>>()?;
+        debug!("ids: {:?}", ids);
 
-        let mut mail_entry = mdir
-            .find(&id)
-            .ok_or_else(|| Error::GetMsgError(id.to_owned()))?;
+        let matching_ids = |entry: io::Result<maildir::MailEntry>| match entry {
+            Ok(entry) if ids.contains(&entry.id()) => Some(entry),
+            Ok(entry) => None,
+            Err(err) => {
+                warn!("skipping invalid maildir entry: {}", err);
+                None
+            }
+        };
 
-        // FIXME: find why borrowing does not work here
-        let email = Email::from(
-            mail_entry
-                .parsed()
-                .map_err(Error::ParseMsgError)?
-                .raw_bytes
-                .to_vec(),
-        );
-        trace!("email: {:?}", email);
+        let emails: Emails = mdir
+            .list_cur()
+            .filter_map(&matching_ids)
+            .chain(mdir.list_new().filter_map(&matching_ids))
+            .collect::<Vec<maildir::MailEntry>>()
+            .try_into()?;
 
-        Ok(email)
+        Ok(emails)
     }
 
-    fn copy_email(&self, dir_src: &str, dir_dst: &str, short_hash: &str) -> backend::Result<()> {
-        debug!("source dir: {:?}", dir_src);
-        debug!("destination dir: {:?}", dir_dst);
+    fn copy_emails(
+        &self,
+        from_dir: &str,
+        to_dir: &str,
+        short_hashes: Vec<&str>,
+    ) -> backend::Result<()> {
+        debug!("from dir: {:?}", from_dir);
+        debug!("to dir: {:?}", to_dir);
+        debug!("short hashes: {:?}", short_hashes);
 
-        let mdir_src = self.get_mdir_from_dir(dir_src)?;
-        let mdir_dst = self.get_mdir_from_dir(dir_dst)?;
-        let id = IdMapper::new(mdir_src.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
+        let from_mdir = self.get_mdir_from_dir(from_dir)?;
+        let to_mdir = self.get_mdir_from_dir(to_dir)?;
+        let id_mapper = IdMapper::new(from_mdir.path())?;
+        let ids = short_hashes
+            .into_iter()
+            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
+            .collect::<id_mapper::Result<Vec<&str>>>()?;
+        debug!("ids: {:?}", ids);
 
-        mdir_src
-            .copy_to(&id, &mdir_dst)
-            .map_err(Error::CopyMsgError)?;
+        let mut id_mapper = IdMapper::new(to_mdir.path())?;
+        for id in ids {
+            from_mdir
+                .copy_to(&id, &to_mdir)
+                .map_err(Error::CopyMsgError)?;
 
-        // Appends hash entry to the id mapper cache file.
-        let mut mapper = IdMapper::new(mdir_dst.path())?;
-        let hash = format!("{:x}", md5::compute(&id));
-        mapper.append(vec![(hash.clone(), id.clone())])?;
+            // Appends hash entry to the id mapper cache file.
+            let hash = format!("{:x}", md5::compute(&id));
+            id_mapper.append(vec![(hash.clone(), id.to_owned())])?;
+        }
 
         Ok(())
     }
 
-    fn move_email(&self, dir_src: &str, dir_dst: &str, short_hash: &str) -> backend::Result<()> {
-        debug!("source dir: {:?}", dir_src);
-        debug!("destination dir: {:?}", dir_dst);
+    fn move_emails(
+        &self,
+        from_dir: &str,
+        to_dir: &str,
+        short_hashes: Vec<&str>,
+    ) -> backend::Result<()> {
+        debug!("from dir: {:?}", from_dir);
+        debug!("to dir: {:?}", to_dir);
+        debug!("short hashes: {:?}", short_hashes);
 
-        let mdir_src = self.get_mdir_from_dir(dir_src)?;
-        let mdir_dst = self.get_mdir_from_dir(dir_dst)?;
-        let id = IdMapper::new(mdir_src.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
+        let from_mdir = self.get_mdir_from_dir(from_dir)?;
+        let to_mdir = self.get_mdir_from_dir(to_dir)?;
+        let id_mapper = IdMapper::new(from_mdir.path())?;
+        let ids = short_hashes
+            .into_iter()
+            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
+            .collect::<id_mapper::Result<Vec<&str>>>()?;
+        debug!("ids: {:?}", ids);
 
-        mdir_src
-            .move_to(&id, &mdir_dst)
-            .map_err(Error::MoveMsgError)?;
+        let mut id_mapper = IdMapper::new(to_mdir.path())?;
+        for id in ids {
+            from_mdir
+                .move_to(&id, &to_mdir)
+                .map_err(Error::MoveMsgError)?;
 
-        // Appends hash entry to the id mapper cache file.
-        let mut mapper = IdMapper::new(mdir_dst.path())?;
-        let hash = format!("{:x}", md5::compute(&id));
-        mapper.append(vec![(hash.clone(), id.clone())])?;
+            // Appends hash entry to the id mapper cache file.
+            let hash = format!("{:x}", md5::compute(&id));
+            id_mapper.append(vec![(hash.clone(), id.to_owned())])?;
+        }
 
         Ok(())
     }
 
-    fn delete_email(&self, dir: &str, short_hash: &str) -> backend::Result<()> {
+    fn delete_emails(&self, dir: &str, short_hashes: Vec<&str>) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
-        debug!("short hash: {:?}", short_hash);
+        debug!("short hashes: {:?}", short_hashes);
 
         let mdir = self.get_mdir_from_dir(dir)?;
-        let id = IdMapper::new(mdir.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        mdir.delete(&id).map_err(Error::DelMsgError)?;
+        let id_mapper = IdMapper::new(mdir.path())?;
+        let ids = short_hashes
+            .into_iter()
+            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
+            .collect::<id_mapper::Result<Vec<&str>>>()?;
+        debug!("ids: {:?}", ids);
+
+        for id in ids {
+            mdir.delete(&id).map_err(Error::DelMsgError)?;
+        }
 
         Ok(())
     }
 
-    fn add_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
-        debug!("dir: {:?}", dir);
-        debug!("short hash: {:?}", short_hash);
-        let flags = Flags::from(flags);
+    fn add_flags(&self, dir: &str, short_hashes: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        debug!("dir: {}", dir);
+        debug!("short hashes: {:?}", short_hashes);
         debug!("flags: {:?}", flags);
 
         let mdir = self.get_mdir_from_dir(dir)?;
-        let id = IdMapper::new(mdir.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
+        let id_mapper = IdMapper::new(mdir.path())?;
+        let ids = short_hashes
+            .into_iter()
+            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
+            .collect::<id_mapper::Result<Vec<&str>>>()?;
+        debug!("ids: {:?}", ids);
 
-        mdir.add_flags(&id, &flags::to_normalized_string(&flags))
-            .map_err(Error::AddFlagsError)?;
-
-        Ok(())
-    }
-
-    fn set_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
-        debug!("dir: {:?}", dir);
-        debug!("short hash: {:?}", short_hash);
-        let flags = Flags::from(flags);
-        debug!("flags: {:?}", flags);
-
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id = IdMapper::new(mdir.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        mdir.set_flags(&id, &flags::to_normalized_string(&flags))
-            .map_err(Error::SetFlagsError)?;
+        for id in ids {
+            mdir.add_flags(&id, &flags::to_normalized_string(&flags))
+                .map_err(Error::AddFlagsError)?;
+        }
 
         Ok(())
     }
 
-    fn remove_flags(&self, dir: &str, short_hash: &str, flags: &str) -> backend::Result<()> {
-        debug!("dir: {:?}", dir);
-        debug!("short hash: {:?}", short_hash);
-        let flags = Flags::from(flags);
+    fn set_flags(&self, dir: &str, short_hashes: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        debug!("dir: {}", dir);
+        debug!("short hashes: {:?}", short_hashes);
         debug!("flags: {:?}", flags);
 
         let mdir = self.get_mdir_from_dir(dir)?;
-        let id = IdMapper::new(mdir.path())?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        mdir.remove_flags(&id, &flags::to_normalized_string(&flags))
-            .map_err(Error::DelFlagsError)?;
+        let id_mapper = IdMapper::new(mdir.path())?;
+        let ids = short_hashes
+            .into_iter()
+            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
+            .collect::<id_mapper::Result<Vec<&str>>>()?;
+        debug!("ids: {:?}", ids);
+
+        for id in ids {
+            mdir.set_flags(&id, &flags::to_normalized_string(&flags))
+                .map_err(Error::SetFlagsError)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_flags(
+        &self,
+        dir: &str,
+        short_hashes: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        debug!("dir: {}", dir);
+        debug!("short hashes: {:?}", short_hashes);
+        debug!("flags: {:?}", flags);
+
+        let mdir = self.get_mdir_from_dir(dir)?;
+        let id_mapper = IdMapper::new(mdir.path())?;
+        let ids = short_hashes
+            .into_iter()
+            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
+            .collect::<id_mapper::Result<Vec<&str>>>()?;
+        debug!("ids: {:?}", ids);
+
+        for id in ids {
+            mdir.remove_flags(&id, &flags::to_normalized_string(&flags))
+                .map_err(Error::DelFlagsError)?;
+        }
 
         Ok(())
     }

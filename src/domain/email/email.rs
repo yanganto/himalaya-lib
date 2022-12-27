@@ -8,14 +8,24 @@ use mailparse::{
     addrparse_header, DispositionType, MailAddr, MailHeaderMap, MailParseError, ParsedMail,
 };
 use mime_msg_builder::TplBuilder;
+use ouroboros::self_referencing;
 use std::{fmt::Debug, io, path::PathBuf, result};
 use thiserror::Error;
 use tree_magic;
 
+#[cfg(feature = "maildir-backend")]
+use maildir::{MailEntry, MailEntryError};
+
 use crate::{account, process, AccountConfig, Attachment, DEFAULT_SIGNATURE_DELIM};
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot parse email")]
+    #[cfg(feature = "maildir-backend")]
+    GetMailEntryError(#[source] MailEntryError),
+
+    #[error("cannot get parsed version of email: {0}")]
+    GetParsedEmailError(String),
     #[error("cannot parse email")]
     ParseEmailError(#[source] MailParseError),
     #[error("cannot parse email body")]
@@ -57,45 +67,40 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug)]
 enum RawEmail<'a> {
     Vec(Vec<u8>),
-    Bytes(&'a [u8]),
+    Slice(&'a [u8]),
     #[cfg(feature = "imap-backend")]
-    ImapFetches(ZeroCopy<Vec<Fetch>>),
+    ImapFetch(&'a Fetch),
+    #[cfg(feature = "maildir-backend")]
+    MailEntry(&'a MailEntry),
 }
 
-#[derive(Debug)]
+#[self_referencing]
 pub struct Email<'a> {
     raw: RawEmail<'a>,
-    parsed: Option<ParsedMail<'a>>,
+    #[borrows(raw)]
+    #[covariant]
+    pub parsed: result::Result<ParsedMail<'this>, MailParseError>,
 }
 
-impl<'a> Email<'a> {
-    pub fn parsed(&'a mut self) -> Result<&ParsedMail<'a>> {
-        if self.parsed.is_none() {
-            self.parsed = Some(match &self.raw {
-                RawEmail::Vec(vec) => mailparse::parse_mail(vec).map_err(Error::ParseEmailError),
-                RawEmail::Bytes(bytes) => {
-                    mailparse::parse_mail(*bytes).map_err(Error::ParseEmailError)
-                }
-                #[cfg(feature = "imap-backend")]
-                RawEmail::ImapFetches(fetches) => {
-                    let body = fetches
-                        .first()
-                        .and_then(|fetch| fetch.body())
-                        .ok_or(Error::ParseEmailFromImapFetchesEmptyError)?;
-                    mailparse::parse_mail(body).map_err(Error::ParseEmailError)
-                }
-            }?)
+impl Email<'_> {
+    fn parsed_builder<'a>(raw: &'a RawEmail) -> result::Result<ParsedMail<'a>, MailParseError> {
+        match raw {
+            RawEmail::Vec(bytes) => mailparse::parse_mail(&bytes),
+            RawEmail::Slice(bytes) => mailparse::parse_mail(bytes),
+            #[cfg(feature = "imap-backend")]
+            RawEmail::ImapFetch(fetch) => mailparse::parse_mail(fetch.body().unwrap_or_default()),
         }
-
-        self.parsed
-            .as_ref()
-            .ok_or_else(|| Error::ParseEmailEmptyRawError)
     }
 
-    pub fn attachments(&'a mut self) -> Result<Vec<Attachment>> {
+    pub fn parsed(&self) -> Result<&ParsedMail> {
+        self.borrow_parsed()
+            .as_ref()
+            .map_err(|err| Error::GetParsedEmailError(err.to_string()))
+    }
+
+    pub fn attachments(&self) -> Result<Vec<Attachment>> {
         let attachments = self.parsed()?.parts().filter_map(|part| {
             let cdisp = part.get_content_disposition();
             let mime = &part.ctype.mimetype;
@@ -161,14 +166,18 @@ impl<'a> Email<'a> {
     }
 
     pub fn as_raw(&self) -> Result<&[u8]> {
-        match self.raw {
+        match self.borrow_raw() {
             RawEmail::Vec(ref vec) => Ok(vec),
-            RawEmail::Bytes(bytes) => Ok(bytes),
+            RawEmail::Slice(bytes) => Ok(bytes),
             #[cfg(feature = "imap-backend")]
-            RawEmail::ImapFetches(ref fetches) => fetches
-                .first()
-                .and_then(|fetch| fetch.body())
+            RawEmail::ImapFetch(ref fetch) => fetch
+                .body()
                 .ok_or_else(|| Error::ParseEmailFromImapFetchesEmptyError),
+            #[cfg(feature = "maildir-backend")]
+            RawEmail::MailEntry(entry) => entry
+                .parsed()
+                .map_err(Error::GetMailEntryError)
+                .map(|parsed| parsed.raw_bytes),
         }
     }
 
@@ -288,16 +297,12 @@ impl<'a> Email<'a> {
         Ok(tpl)
     }
 
-    pub fn to_read_tpl_builder(&'a mut self, config: &AccountConfig) -> Result<TplBuilder> {
+    pub fn to_read_tpl_builder(&self, config: &AccountConfig) -> Result<TplBuilder> {
         let parsed = self.parsed()?;
-        Ok(Self::tpl_builder_from_parsed(config, parsed)?)
+        Ok(Self::tpl_builder_from_parsed(config, &parsed)?)
     }
 
-    pub fn to_reply_tpl_builder(
-        &'a mut self,
-        config: &AccountConfig,
-        all: bool,
-    ) -> Result<TplBuilder> {
+    pub fn to_reply_tpl_builder(&self, config: &AccountConfig, all: bool) -> Result<TplBuilder> {
         let mut tpl = TplBuilder::default();
 
         let parsed = self.parsed()?;
@@ -407,7 +412,7 @@ impl<'a> Email<'a> {
 
                 lines.push_str("\n\n");
 
-                let body = Self::tpl_builder_from_parsed(config, parsed)?
+                let body = Self::tpl_builder_from_parsed(config, &parsed)?
                     .show_headers([] as [&str; 0])
                     .show_text_parts_only(true)
                     .sanitize_text_parts(true)
@@ -439,7 +444,7 @@ impl<'a> Email<'a> {
         Ok(tpl)
     }
 
-    pub fn to_forward_tpl_builder(&'a mut self, config: &AccountConfig) -> Result<TplBuilder> {
+    pub fn to_forward_tpl_builder(&self, config: &AccountConfig) -> Result<TplBuilder> {
         let mut tpl = TplBuilder::default();
 
         let parsed = self.parsed()?;
@@ -479,7 +484,7 @@ impl<'a> Email<'a> {
             lines.push_str("\n-------- Forwarded Message --------\n");
 
             lines.push_str(
-                &Self::tpl_builder_from_parsed(config, parsed)?
+                &Self::tpl_builder_from_parsed(config, &parsed)?
                     .show_headers(["Date", "From", "To", "Cc", "Subject"])
                     .show_text_parts_only(true)
                     .sanitize_text_parts(true)
@@ -494,20 +499,43 @@ impl<'a> Email<'a> {
 }
 
 impl<'a> From<Vec<u8>> for Email<'a> {
-    fn from(vec: Vec<u8>) -> Self {
-        Self {
-            raw: RawEmail::Vec(vec),
-            parsed: None,
+    fn from(bytes: Vec<u8>) -> Self {
+        EmailBuilder {
+            raw: RawEmail::Vec(bytes),
+            parsed_builder: Email::parsed_builder,
         }
+        .build()
     }
 }
 
 impl<'a> From<&'a [u8]> for Email<'a> {
     fn from(bytes: &'a [u8]) -> Self {
-        Self {
-            raw: RawEmail::Bytes(bytes),
-            parsed: None,
+        EmailBuilder {
+            raw: RawEmail::Slice(bytes),
+            parsed_builder: Email::parsed_builder,
         }
+        .build()
+    }
+}
+
+impl<'a> From<ParsedMail<'a>> for Email<'a> {
+    fn from(parsed: ParsedMail<'a>) -> Self {
+        EmailBuilder {
+            raw: RawEmail::Slice(parsed.raw_bytes),
+            parsed_builder: Email::parsed_builder,
+        }
+        .build()
+    }
+}
+
+#[cfg(feature = "imap-backend")]
+impl<'a> From<&'a Fetch> for Email<'a> {
+    fn from(fetch: &'a Fetch) -> Self {
+        EmailBuilder {
+            raw: RawEmail::ImapFetch(fetch),
+            parsed_builder: Email::parsed_builder,
+        }
+        .build()
     }
 }
 
@@ -517,26 +545,59 @@ impl<'a> From<&'a str> for Email<'a> {
     }
 }
 
-impl<'a> From<ParsedMail<'a>> for Email<'a> {
-    fn from(parsed: ParsedMail<'a>) -> Self {
-        Self {
-            raw: RawEmail::Bytes(parsed.raw_bytes),
-            parsed: Some(parsed),
+enum RawEmails {
+    #[cfg(feature = "imap-backend")]
+    ImapFetches(ZeroCopy<Vec<Fetch>>),
+}
+
+#[self_referencing]
+pub struct Emails {
+    raw: RawEmails,
+    #[borrows(raw)]
+    #[covariant]
+    parsed: Vec<Email<'this>>,
+}
+
+impl Emails {
+    fn parsed_builder<'a>(raw: &'a RawEmails) -> Vec<Email> {
+        match raw {
+            #[cfg(feature = "imap-backend")]
+            RawEmails::ImapFetches(fetches) => fetches.iter().map(Email::from).collect(),
         }
+    }
+
+    pub fn parsed(&self) -> Vec<&Email> {
+        self.borrow_parsed().iter().collect::<Vec<_>>()
     }
 }
 
 #[cfg(feature = "imap-backend")]
-impl TryFrom<ZeroCopy<Vec<Fetch>>> for Email<'_> {
+impl TryFrom<ZeroCopy<Vec<Fetch>>> for Emails {
     type Error = Error;
 
     fn try_from(fetches: ZeroCopy<Vec<Fetch>>) -> Result<Self> {
         if fetches.is_empty() {
             Err(Error::ParseEmailFromImapFetchesEmptyError)
         } else {
+            Ok(EmailsBuilder {
+                raw: RawEmails::ImapFetches(fetches),
+                parsed_builder: Emails::parsed_builder,
+            }
+            .build())
+        }
+    }
+}
+
+#[cfg(feature = "maildir-backend")]
+impl TryFrom<Vec<MailEntry>> for Emails {
+    type Error = Error;
+
+    fn try_from(entries: Vec<MailEntry>) -> Result<Self> {
+        if entries.is_empty() {
+            Err(Error::ParseEmailFromImapFetchesEmptyError)
+        } else {
             Ok(Self {
-                raw: RawEmail::ImapFetches(fetches),
-                parsed: None,
+                raw: RawEmails::MailEntries(entries),
             })
         }
     }
@@ -589,7 +650,7 @@ mod email {
     #[test]
     fn to_read_tpl_builder() {
         let config = AccountConfig::default();
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
             "Subject: subject",
@@ -614,7 +675,7 @@ mod email {
     #[test]
     fn to_read_tpl_builder_with_email_reading_headers_config() {
         let config = AccountConfig::default();
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
             "Subject: subject",
@@ -650,7 +711,7 @@ mod email {
     #[test]
     fn to_read_tpl_builder_with_show_all_headers_option() {
         let config = AccountConfig::default();
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
             "Subject: subject",
@@ -680,7 +741,7 @@ mod email {
     #[test]
     fn to_read_tpl_builder_with_show_only_headers_option() {
         let config = AccountConfig::default();
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
             "Subject: subject",
@@ -723,7 +784,7 @@ mod email {
             ..AccountConfig::default()
         };
 
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost, to2@localhost",
             "Cc: cc@localhost, cc2@localhost",
@@ -760,7 +821,7 @@ mod email {
             ..AccountConfig::default()
         };
 
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost, to2@localhost",
             "Cc: to@localhost, cc@localhost, cc2@localhost",
@@ -799,7 +860,7 @@ mod email {
             ..AccountConfig::default()
         };
 
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost",
             "Subject: subject",
@@ -836,7 +897,7 @@ mod email {
             ..AccountConfig::default()
         };
 
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "From: from@localhost",
             "To: to@localhost, to2@localhost",
             "Cc: cc@localhost, cc2@localhost",
@@ -881,7 +942,7 @@ mod email {
             ..AccountConfig::default()
         };
 
-        let mut email = Email::from(concat_line!(
+        let email = Email::from(concat_line!(
             "Date: Thu, 10 Nov 2022 14:26:33 +0000",
             "From: from@localhost",
             "To: to@localhost, to2@localhost",

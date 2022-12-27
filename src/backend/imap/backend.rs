@@ -19,12 +19,9 @@ use thiserror::Error;
 use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
 
 use crate::{
-    account, backend, email, envelope, process, Backend, Email, Envelopes, Flags, Folder, Folders,
-    ImapConfig,
+    account, backend, email, envelope, process, Backend, Emails, Envelopes, Flag, Flags, Folder,
+    Folders, ImapConfig,
 };
-
-#[cfg(feature = "imap-backend")]
-use crate::flag::imap::ImapFlag;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -90,7 +87,7 @@ pub enum Error {
     #[error("cannot fetch messages within range {1}")]
     FetchMsgsByRangeError(#[source] imap::Error, String),
     #[error("cannot fetch messages by sequence {1}")]
-    FetchMsgsBySeqError(#[source] imap::Error, String),
+    GetEmailsBySeqError(#[source] imap::Error, String),
     #[error("cannot append message to mailbox {1}")]
     AppendMsgError(#[source] imap::Error, String),
     #[error("cannot sort messages in mailbox {1} with query: {2}")]
@@ -365,6 +362,26 @@ impl Backend for ImapBackend<'_> {
         Ok(mboxes)
     }
 
+    fn purge_folder(&self, folder: &str) -> backend::Result<()> {
+        let folder = encode_utf7(folder.to_owned());
+        let flags = Flags::from_iter([Flag::Deleted]);
+        let seq = String::from("1:*");
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
+        session
+            .store(&seq, format!("+FLAGS ({})", flags.to_imap_query()))
+            .map_err(|err| Error::AddFlagsError(err, flags.clone(), seq))?;
+        session
+            .expunge()
+            .map_err(|err| Error::ExpungeError(err, folder.clone()))?;
+
+        Ok(())
+    }
+
     fn delete_folder(&self, folder: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
@@ -461,25 +478,9 @@ impl Backend for ImapBackend<'_> {
         Ok(envelopes)
     }
 
-    fn add_email(&self, folder: &str, email: &[u8], flags: &str) -> backend::Result<String> {
-        let mut session = self.session.borrow_mut();
-        let folder = encode_utf7(folder.to_owned());
-        let flags = Flags::from(flags);
-        session
-            .append(&folder, email)
-            .flags(<Flags as Into<Vec<ImapFlag>>>::into(flags))
-            .finish()
-            .map_err(|err| Error::AppendMsgError(err, folder.to_owned()))?;
-        let last_seq = session
-            .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
-            .exists;
-        Ok(last_seq.to_string())
-    }
-
-    fn get_email(&self, folder: &str, seq: &str) -> backend::Result<Email> {
-        debug!("folder: {:?}", folder);
-        debug!("seq: {:?}", seq);
+    fn add_email(&self, folder: &str, email: &[u8], flags: &Flags) -> backend::Result<String> {
+        debug!("folder: {}", folder);
+        debug!("flags: {:?}", flags);
 
         let folder = encode_utf7(folder.to_owned());
         debug!("utf7 encoded folder: {:?}", folder);
@@ -487,117 +488,164 @@ impl Backend for ImapBackend<'_> {
         let mut session = self.session.borrow_mut();
 
         session
+            .append(&folder, email)
+            .flags(flags.into_imap_flags_vec())
+            .finish()
+            .map_err(|err| Error::AppendMsgError(err, folder.to_owned()))?;
+        let last_seq = session
             .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
+            .exists;
+
+        Ok(last_seq.to_string())
+    }
+
+    fn get_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
+        debug!("folder: {}", folder);
+        debug!("ids: {:?}", ids);
+
+        let folder = encode_utf7(folder.to_owned());
+        debug!("utf7 encoded folder: {:?}", folder);
+
+        let seq = ids.join(",");
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
 
         let fetches = session
-            .fetch(seq, "BODY[]")
-            .map_err(|err| Error::FetchMsgsBySeqError(err, seq.to_owned()))?;
-        let email = Email::try_from(fetches)?;
-        trace!("email: {:?}", email);
+            .fetch(&seq, "BODY[]")
+            .map_err(|err| Error::GetEmailsBySeqError(err, seq))?;
 
-        Ok(email)
+        Ok(Emails::try_from(fetches)?)
     }
 
-    fn copy_email(&self, folder: &str, folder_target: &str, ids: &str) -> backend::Result<()> {
-        debug!("ids: {}", ids);
-        debug!("source folder: {}", folder);
-        debug!("target folder: {}", folder_target);
+    fn copy_emails(
+        &self,
+        from_folder: &str,
+        to_folder: &str,
+        ids: Vec<&str>,
+    ) -> backend::Result<()> {
+        debug!("ids: {:?}", ids);
+        debug!("from folder: {}", from_folder);
+        debug!("to folder: {}", to_folder);
 
-        let encoded_folder = encode_utf7(folder.to_owned());
-        let encoded_folder_target = encode_utf7(folder_target.to_owned());
-        debug!("source folder (utf7 encoded): {}", encoded_folder);
-        debug!("target folder (utf7 encoded): {}", encoded_folder_target);
+        let seq = ids.join(",");
+        let from_folder_encoded = encode_utf7(from_folder.to_owned());
+        let to_folder_encoded = encode_utf7(to_folder.to_owned());
+        debug!("from folder (utf7 encoded): {}", from_folder_encoded);
+        debug!("to folder (utf7 encoded): {}", to_folder_encoded);
 
         let mut session = self.session.borrow_mut();
 
         session
-            .select(encoded_folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+            .select(from_folder_encoded)
+            .map_err(|err| Error::SelectFolderError(err, from_folder.to_owned()))?;
 
-        session.copy(ids, encoded_folder_target).map_err(|err| {
-            Error::CopyEmailError(
-                err,
-                ids.to_owned(),
-                folder.to_owned(),
-                folder_target.to_owned(),
-            )
+        session.copy(&seq, to_folder_encoded).map_err(|err| {
+            Error::CopyEmailError(err, seq, from_folder.to_owned(), to_folder.to_owned())
         })?;
 
         Ok(())
     }
 
-    fn move_email(&self, folder: &str, folder_target: &str, ids: &str) -> backend::Result<()> {
-        debug!("ids: {}", ids);
-        debug!("source folder: {}", folder);
-        debug!("target folder: {}", folder_target);
+    fn move_emails(
+        &self,
+        from_folder: &str,
+        to_folder: &str,
+        ids: Vec<&str>,
+    ) -> backend::Result<()> {
+        debug!("from folder: {}", from_folder);
+        debug!("to folder: {}", to_folder);
+        debug!("ids: {:?}", ids);
 
-        let encoded_folder = encode_utf7(folder.to_owned());
-        let encoded_folder_target = encode_utf7(folder_target.to_owned());
-        debug!("source folder (utf7 encoded): {}", encoded_folder);
-        debug!("target folder (utf7 encoded): {}", encoded_folder_target);
+        let from_folder_encoded = encode_utf7(from_folder.to_owned());
+        let to_folder_encoded = encode_utf7(to_folder.to_owned());
+        debug!("from folder (utf7 encoded): {}", from_folder_encoded);
+        debug!("to folder (utf7 encoded): {}", to_folder_encoded);
 
+        let seq = ids.join(",");
         let mut session = self.session.borrow_mut();
 
         session
-            .select(encoded_folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+            .select(from_folder_encoded)
+            .map_err(|err| Error::SelectFolderError(err, from_folder.to_owned()))?;
 
-        session.mv(ids, encoded_folder_target).map_err(|err| {
-            Error::MoveEmailError(
-                err,
-                ids.to_owned(),
-                folder.to_owned(),
-                folder_target.to_owned(),
-            )
+        session.mv(&seq, to_folder_encoded).map_err(|err| {
+            Error::MoveEmailError(err, seq, from_folder.to_owned(), to_folder.to_owned())
         })?;
 
         Ok(())
     }
 
-    fn delete_email(&self, folder: &str, seq: &str) -> backend::Result<()> {
-        self.add_flags(folder, seq, "deleted")
+    fn delete_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<()> {
+        self.add_flags(folder, ids, &Flags::from_iter([Flag::Deleted]))
     }
 
-    fn add_flags(&self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
-        let mut session = self.session.borrow_mut();
+    fn add_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        debug!("folder: {}", folder);
+        debug!("ids: {:?}", ids);
+        debug!("flags: {:?}", flags);
+
         let folder = encode_utf7(folder.to_owned());
-        let flags: Flags = flags.into();
+        debug!("folder (utf7 encoded): {}", folder);
+
+        let seq = ids.join(",");
+        let mut session = self.session.borrow_mut();
+
         session
             .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
         session
-            .store(seq_range, format!("+FLAGS ({})", flags))
-            .map_err(|err| Error::AddFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
+            .store(&seq, format!("+FLAGS ({})", flags.to_imap_query()))
+            .map_err(|err| Error::AddFlagsError(err, flags.clone(), seq))?;
         session
             .expunge()
-            .map_err(|err| Error::ExpungeError(err, folder.to_owned()))?;
+            .map_err(|err| Error::ExpungeError(err, folder.clone()))?;
+
         Ok(())
     }
 
-    fn set_flags(&self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
-        let mut session = self.session.borrow_mut();
+    fn set_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        debug!("folder: {}", folder);
+        debug!("ids: {:?}", ids);
+        debug!("flags: {:?}", flags);
+
         let folder = encode_utf7(folder.to_owned());
-        let flags: Flags = flags.into();
+        debug!("folder (utf7 encoded): {}", folder);
+
+        let seq = ids.join(",");
+        let mut session = self.session.borrow_mut();
+
         session
             .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
         session
-            .store(seq_range, format!("FLAGS ({})", flags))
-            .map_err(|err| Error::SetFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
+            .store(&seq, format!("FLAGS ({})", flags))
+            .map_err(|err| Error::SetFlagsError(err, flags.clone(), seq))?;
+
         Ok(())
     }
 
-    fn remove_flags(&self, folder: &str, seq_range: &str, flags: &str) -> backend::Result<()> {
-        let mut session = self.session.borrow_mut();
+    fn remove_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        debug!("folder: {}", folder);
+        debug!("ids: {:?}", ids);
+        debug!("flags: {:?}", flags);
+
         let folder = encode_utf7(folder.to_owned());
-        let flags: Flags = flags.into();
+        debug!("folder (utf7 encoded): {}", folder);
+
+        let seq = ids.join(",");
+        let mut session = self.session.borrow_mut();
+
         session
             .select(&folder)
-            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
         session
-            .store(seq_range, format!("-FLAGS ({})", flags))
-            .map_err(|err| Error::DelFlagsError(err, flags.to_owned(), seq_range.to_owned()))?;
+            .store(&seq, format!("-FLAGS ({})", flags))
+            .map_err(|err| Error::DelFlagsError(err, flags.clone(), seq))?;
+
         Ok(())
     }
 

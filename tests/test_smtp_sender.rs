@@ -37,7 +37,7 @@ fn test_smtp_sender() {
     let imap = ImapBackend::new(&imap_config).unwrap();
 
     // setting up folders
-    imap.delete_email("INBOX", "1:*").unwrap();
+    imap.purge_folder("INBOX").unwrap();
 
     // checking that an email can be built and sent
     let email = TplBuilder::default()

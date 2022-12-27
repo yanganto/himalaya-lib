@@ -31,9 +31,9 @@ fn test_imap_backend() {
     // setting up folders
     if let Err(_) = imap.add_folder("Sent") {};
     if let Err(_) = imap.add_folder("Отправленные") {};
-    imap.delete_email("INBOX", "1:*").unwrap();
-    imap.delete_email("Sent", "1:*").unwrap();
-    imap.delete_email("Отправленные", "1:*").unwrap();
+    imap.purge_folder("INBOX").unwrap();
+    imap.purge_folder("Sent").unwrap();
+    imap.purge_folder("Отправленные").unwrap();
 
     // checking that an email can be built and added
     let email =
@@ -52,10 +52,13 @@ fn test_imap_backend() {
             ))
             .unwrap();
 
-    let id = imap.add_email("Sent", &email, "seen").unwrap().to_string();
+    let id = imap
+        .add_email("Sent", &email, &("seen".into()))
+        .unwrap()
+        .to_string();
 
     // checking that the added email exists
-    let mut email = imap.get_email("Sent", &id).unwrap();
+    let emails = imap.get_emails("Sent", vec![&id]).unwrap();
     assert_eq!(
         concat_line!(
             "From: alice@localhost",
@@ -63,7 +66,10 @@ fn test_imap_backend() {
             "",
             "Signed and encrypted message!\r\n\r\n",
         ),
-        *email
+        *emails
+            .parsed()
+            .first()
+            .unwrap()
             .to_read_tpl_builder(&config)
             .unwrap()
             .show_headers(["From", "To"])
@@ -79,7 +85,7 @@ fn test_imap_backend() {
     assert_eq!("Signed and encrypted message", envelope.subject);
 
     // checking that the email can be copied
-    imap.copy_email("Sent", "Отправленные", &envelope.id.to_string())
+    imap.copy_emails("Sent", "Отправленные", vec![&envelope.id.to_string()])
         .unwrap();
     let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
@@ -87,7 +93,7 @@ fn test_imap_backend() {
     assert_eq!(1, envelopes.len());
 
     // checking that the email can be moved
-    imap.move_email("Sent", "Отправленные", &envelope.id.to_string())
+    imap.move_emails("Sent", "Отправленные", vec![&envelope.id.to_string()])
         .unwrap();
     let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
     assert_eq!(0, envelopes.len());
@@ -96,8 +102,8 @@ fn test_imap_backend() {
     let id = envelopes.first().unwrap().id.to_string();
 
     // checking that the email can be deleted
-    imap.delete_email("Отправленные", &id).unwrap();
-    assert!(imap.get_email("Отправленные", &id).is_err());
+    imap.delete_emails("Отправленные", vec![&id]).unwrap();
+    assert!(imap.get_emails("Отправленные", vec![&id]).is_err());
 
     // checking that the backend can disconnect
     imap.disconnect().unwrap();
