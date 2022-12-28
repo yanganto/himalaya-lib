@@ -195,9 +195,7 @@ impl<'a> ImapBackend<'a> {
         })
     }
 
-    fn search_new_msgs(&'a self, query: &str) -> Result<Vec<u32>> {
-        let mut session = self.session.borrow_mut();
-
+    fn search_new_msgs(&'a self, session: &mut ImapSession, query: &str) -> Result<Vec<u32>> {
         let uids: Vec<u32> = session
             .uid_search(query)
             .map_err(Error::SearchNewMsgsError)?
@@ -218,7 +216,7 @@ impl<'a> ImapBackend<'a> {
 
         debug!("init messages hashset");
         let mut msgs_set: HashSet<u32> = self
-            .search_new_msgs(&self.imap_config.notify_query())?
+            .search_new_msgs(&mut session, &self.imap_config.notify_query())?
             .iter()
             .cloned()
             .collect::<HashSet<_>>();
@@ -239,7 +237,7 @@ impl<'a> ImapBackend<'a> {
                 .map_err(Error::StartIdleModeError)?;
 
             let uids: Vec<u32> = self
-                .search_new_msgs(&self.imap_config.notify_query())?
+                .search_new_msgs(&mut session, &self.imap_config.notify_query())?
                 .into_iter()
                 .filter(|uid| -> bool { msgs_set.get(uid).is_none() })
                 .collect();
