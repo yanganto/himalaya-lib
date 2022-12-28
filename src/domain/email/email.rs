@@ -591,6 +591,10 @@ impl Emails {
         }
     }
 
+    pub fn first(&self) -> Option<&Email> {
+        self.borrow_emails().iter().next()
+    }
+
     pub fn to_vec(&self) -> Vec<&Email> {
         self.borrow_emails().iter().collect()
     }
