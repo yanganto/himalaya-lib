@@ -27,8 +27,7 @@ mailparse = "0.14"
 native-tls = "0.2"
 regex = "1.5"
 rfc2047-decoder = "=0.2.0"
-# mime-msg-builder = { git = "https://git.sr.ht/~soywod/mime-msg-builder", branch = "master" }
-mime-msg-builder = { path = "/home/soywod/sourcehut/mime-msg-builder" }
+mime-msg-builder = { git = "https://git.sr.ht/~soywod/mime-msg-builder", branch = "master" }
 ouroboros = "0.15"
 serde = { version = "1.0", features = ["derive"] }
 shellexpand = "2.1"
