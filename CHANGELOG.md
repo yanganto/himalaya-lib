@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* Made backend functions accept a vector of id instead of a single id
+  [#20].
+* Added function `Backend::purge_folder` that removes all emails
+  inside a folder.
+
 ### Fixed
 
-* Used native IMAP commands `copy` and `mv` [github#429].
-* Fixed maildir date envelope parsing [github#369].
+* Used native IMAP commands `copy` and `mv`.
+* Fixed maildir date envelope parsing.
 * Fixed inline attachments not collected.
 
 ### Changed
@@ -21,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with custom fields. Now, the `Email` struct is just a wrapper around
   `mailparse::ParsedMail`.
 * Improved `Flag` structures.
+* Changed `Backend` trait functions due to [#20]:
+  * `list_envelope` => `list_envelopes`
+  * `search_envelope` => `search_envelopes`
+  * `get_email` => `get_emails`, takes now `ids: Vec<&str>` and
+    returns an `Emails` structure instead of an `Email`)
+  * `copy_email` => `copy_emails`, takes now `ids: Vec<&str>`.
+  * `move_email` => `move_emails`, takes now `ids: Vec<&str>`.
+  * `delete_email` => `delete_emails`, takes now `ids: Vec<&str>`.
+  * `add_flags` takes now `ids: Vec<&str>` and `flags: &Flags`.
+  * `set_flags` takes now `ids: Vec<&str>` and `flags: &Flags`.
+  * `remove_flags` takes now `ids: Vec<&str>` and `flags: &Flags`.
 
 ### Removed
 
@@ -33,11 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* Added pipe support for `(imap|smtp)-passwd-cmd` [github#373].
+* Added pipe support for `(imap|smtp)-passwd-cmd`.
 * Added `imap-ssl` and `smtp-ssl` options to be able to disable
-  encryption [github#347].
-* Implemented sendmail sender [github#351].
-* Fixed `process` module for `MINGW*` [github#254].
+  encryption.
+* Implemented sendmail sender.
+* Fixed `process` module for `MINGW*`.
 
 ### Changed
 
@@ -50,8 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-* Fixed long subject decoding issue [github#380].
-* Fixed bad mailbox name encoding from UTF7-IMAP [github#370].
+* Fixed long subject decoding issue.
+* Fixed bad mailbox name encoding from UTF7-IMAP.
 
 ## [0.3.1] - 2022-10-10
 
@@ -118,11 +136,4 @@ repository.
 
 [patch#1]: https://lists.sr.ht/~soywod/himalaya-lib/%3C20220929084520.98165-1-me%40paulrouget.com%3E
 
-[github#254]: https://github.com/soywod/himalaya/issues/254
-[github#347]: https://github.com/soywod/himalaya/issues/347
-[github#351]: https://github.com/soywod/himalaya/issues/351
-[github#369]: https://github.com/soywod/himalaya/issues/369
-[github#370]: https://github.com/soywod/himalaya/issues/370
-[github#373]: https://github.com/soywod/himalaya/issues/373
-[github#380]: https://github.com/soywod/himalaya/issues/380
-[github#429]: https://github.com/soywod/himalaya/issues/429
+[#20]: https://todo.sr.ht/~soywod/himalaya/20

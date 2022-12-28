@@ -393,7 +393,7 @@ impl Backend for ImapBackend<'_> {
         Ok(())
     }
 
-    fn list_envelope(
+    fn list_envelopes(
         &self,
         folder: &str,
         page_size: usize,
@@ -428,7 +428,7 @@ impl Backend for ImapBackend<'_> {
         Ok(envelopes)
     }
 
-    fn search_envelope(
+    fn search_envelopes(
         &self,
         folder: &str,
         query: &str,

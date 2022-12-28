@@ -78,7 +78,7 @@ fn test_imap_backend() {
     );
 
     // checking that the envelope of the added email exists
-    let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
+    let envelopes = imap.list_envelopes("Sent", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.sender);
@@ -87,17 +87,17 @@ fn test_imap_backend() {
     // checking that the email can be copied
     imap.copy_emails("Sent", "Отправленные", vec![&envelope.id.to_string()])
         .unwrap();
-    let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
+    let envelopes = imap.list_envelopes("Sent", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
-    let envelopes = imap.list_envelope("Отправленные", 10, 0).unwrap();
+    let envelopes = imap.list_envelopes("Отправленные", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
 
     // checking that the email can be moved
     imap.move_emails("Sent", "Отправленные", vec![&envelope.id.to_string()])
         .unwrap();
-    let envelopes = imap.list_envelope("Sent", 10, 0).unwrap();
+    let envelopes = imap.list_envelopes("Sent", 10, 0).unwrap();
     assert_eq!(0, envelopes.len());
-    let envelopes = imap.list_envelope("Отправленные", 10, 0).unwrap();
+    let envelopes = imap.list_envelopes("Отправленные", 10, 0).unwrap();
     assert_eq!(2, envelopes.len());
     let id = envelopes.first().unwrap().id.to_string();
 

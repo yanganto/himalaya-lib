@@ -59,7 +59,7 @@ fn test_notmuch_backend() {
     );
 
     // check that the envelope of the added message exists
-    let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
+    let envelopes = notmuch.list_envelopes("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert_eq!(1, envelopes.len());
     assert_eq!("alice@localhost", envelope.sender);
@@ -68,7 +68,7 @@ fn test_notmuch_backend() {
     // check that a flag can be added to the message
     let flags = Flags::from_iter([Flag::Flagged, Flag::Answered]);
     notmuch.add_flags("", vec![&envelope.id], &flags).unwrap();
-    let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
+    let envelopes = notmuch.list_envelopes("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
     assert!(envelope.flags.contains(&Flag::Seen));
@@ -78,7 +78,7 @@ fn test_notmuch_backend() {
     // check that the message flags can be changed
     let flags = Flags::from_iter([Flag::custom("inbox"), Flag::Answered]);
     notmuch.set_flags("", vec![&envelope.id], &flags).unwrap();
-    let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
+    let envelopes = notmuch.list_envelopes("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     println!("envelope.flags: {:?}", envelope.flags);
     assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
@@ -91,7 +91,7 @@ fn test_notmuch_backend() {
     notmuch
         .remove_flags("", vec![&envelope.id], &flags)
         .unwrap();
-    let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
+    let envelopes = notmuch.list_envelopes("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
     assert!(!envelope.flags.contains(&Flag::Seen));

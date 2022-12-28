@@ -199,7 +199,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn list_envelope(
+    fn list_envelopes(
         &self,
         dir: &str,
         page_size: usize,
@@ -254,7 +254,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(envelopes)
     }
 
-    fn search_envelope(
+    fn search_envelopes(
         &self,
         _dir: &str,
         _query: &str,

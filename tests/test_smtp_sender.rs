@@ -52,7 +52,7 @@ fn test_smtp_sender() {
     thread::sleep(Duration::from_secs(1));
 
     // checking that the envelope of the sent email exists
-    let envelopes = imap.list_envelope("INBOX", 10, 0).unwrap();
+    let envelopes = imap.list_envelopes("INBOX", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.sender);

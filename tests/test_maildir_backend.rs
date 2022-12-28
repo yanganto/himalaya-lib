@@ -68,7 +68,7 @@ fn test_maildir_backend() {
     );
 
     // check that the envelope of the added message exists
-    let envelopes = mdir.list_envelope("inbox", 10, 0).unwrap();
+    let envelopes = mdir.list_envelopes("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert_eq!(1, envelopes.len());
     assert_eq!("alice@localhost", envelope.sender);
@@ -77,7 +77,7 @@ fn test_maildir_backend() {
     // check that a flag can be added to the message
     let flags = Flags::from_iter([Flag::Flagged]);
     mdir.add_flags("inbox", vec![&envelope.id], &flags).unwrap();
-    let envelopes = mdir.list_envelope("inbox", 1, 0).unwrap();
+    let envelopes = mdir.list_envelopes("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(envelope.flags.contains(&Flag::Seen));
     assert!(envelope.flags.contains(&Flag::Flagged));
@@ -85,7 +85,7 @@ fn test_maildir_backend() {
     // check that the message flags can be changed
     let flags = Flags::from_iter([Flag::Answered]);
     mdir.set_flags("inbox", vec![&envelope.id], &flags).unwrap();
-    let envelopes = mdir.list_envelope("inbox", 1, 0).unwrap();
+    let envelopes = mdir.list_envelopes("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(!envelope.flags.contains(&Flag::Seen));
     assert!(!envelope.flags.contains(&Flag::Flagged));
@@ -95,7 +95,7 @@ fn test_maildir_backend() {
     let flags = Flags::from_iter([Flag::Answered]);
     mdir.remove_flags("inbox", vec![&envelope.id], &flags)
         .unwrap();
-    let envelopes = mdir.list_envelope("inbox", 1, 0).unwrap();
+    let envelopes = mdir.list_envelopes("inbox", 1, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(!envelope.flags.contains(&Flag::Seen));
     assert!(!envelope.flags.contains(&Flag::Flagged));

@@ -179,7 +179,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Err(Error::DelMboxUnimplementedError)?
     }
 
-    fn list_envelope(
+    fn list_envelopes(
         &self,
         virtual_folder: &str,
         page_size: usize,
@@ -194,7 +194,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(envelopes)
     }
 
-    fn search_envelope(
+    fn search_envelopes(
         &self,
         virtual_folder: &str,
         query: &str,
