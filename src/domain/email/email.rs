@@ -65,32 +65,52 @@ pub enum Error {
     DecryptPartError(#[source] account::config::Error),
 }
 
+#[derive(Debug, Error)]
+enum ParsedBuilderError {
+    #[error("cannot parse email")]
+    MailParseError(#[source] MailParseError),
+    #[cfg(feature = "maildir-backend")]
+    #[error("cannot parse email")]
+    MailEntryError(#[source] MailEntryError),
+}
+
 pub type Result<T> = result::Result<T, Error>;
 
 enum RawEmail<'a> {
     Vec(Vec<u8>),
     Slice(&'a [u8]),
     #[cfg(feature = "imap-backend")]
-    ImapFetch(&'a Fetch),
+    Fetch(&'a Fetch),
     #[cfg(feature = "maildir-backend")]
-    MailEntry(&'a MailEntry),
+    MailEntry(&'a mut MailEntry),
 }
 
 #[self_referencing]
 pub struct Email<'a> {
     raw: RawEmail<'a>,
-    #[borrows(raw)]
+    #[borrows(mut raw)]
     #[covariant]
-    pub parsed: result::Result<ParsedMail<'this>, MailParseError>,
+    parsed: result::Result<ParsedMail<'this>, ParsedBuilderError>,
 }
 
 impl Email<'_> {
-    fn parsed_builder<'a>(raw: &'a RawEmail) -> result::Result<ParsedMail<'a>, MailParseError> {
+    fn parsed_builder<'a>(
+        raw: &'a mut RawEmail,
+    ) -> result::Result<ParsedMail<'a>, ParsedBuilderError> {
         match raw {
-            RawEmail::Vec(bytes) => mailparse::parse_mail(&bytes),
-            RawEmail::Slice(bytes) => mailparse::parse_mail(bytes),
+            RawEmail::Vec(bytes) => {
+                mailparse::parse_mail(bytes).map_err(ParsedBuilderError::MailParseError)
+            }
+            RawEmail::Slice(bytes) => {
+                mailparse::parse_mail(bytes).map_err(ParsedBuilderError::MailParseError)
+            }
             #[cfg(feature = "imap-backend")]
-            RawEmail::ImapFetch(fetch) => mailparse::parse_mail(fetch.body().unwrap_or_default()),
+            RawEmail::Fetch(fetch) => mailparse::parse_mail(fetch.body().unwrap_or_default())
+                .map_err(ParsedBuilderError::MailParseError),
+            #[cfg(feature = "maildir-backend")]
+            RawEmail::MailEntry(entry) => {
+                entry.parsed().map_err(ParsedBuilderError::MailEntryError)
+            }
         }
     }
 
@@ -98,6 +118,10 @@ impl Email<'_> {
         self.borrow_parsed()
             .as_ref()
             .map_err(|err| Error::GetParsedEmailError(err.to_string()))
+    }
+
+    pub fn raw(&self) -> Result<&[u8]> {
+        self.parsed().map(|parsed| parsed.raw_bytes)
     }
 
     pub fn attachments(&self) -> Result<Vec<Attachment>> {
@@ -163,22 +187,6 @@ impl Email<'_> {
         });
 
         Ok(attachments.collect())
-    }
-
-    pub fn as_raw(&self) -> Result<&[u8]> {
-        match self.borrow_raw() {
-            RawEmail::Vec(ref vec) => Ok(vec),
-            RawEmail::Slice(bytes) => Ok(bytes),
-            #[cfg(feature = "imap-backend")]
-            RawEmail::ImapFetch(ref fetch) => fetch
-                .body()
-                .ok_or_else(|| Error::ParseEmailFromImapFetchesEmptyError),
-            #[cfg(feature = "maildir-backend")]
-            RawEmail::MailEntry(entry) => entry
-                .parsed()
-                .map_err(Error::GetMailEntryError)
-                .map(|parsed| parsed.raw_bytes),
-        }
     }
 
     fn tpl_builder_from_parsed(config: &AccountConfig, parsed: &ParsedMail) -> Result<TplBuilder> {
@@ -532,7 +540,18 @@ impl<'a> From<ParsedMail<'a>> for Email<'a> {
 impl<'a> From<&'a Fetch> for Email<'a> {
     fn from(fetch: &'a Fetch) -> Self {
         EmailBuilder {
-            raw: RawEmail::ImapFetch(fetch),
+            raw: RawEmail::Fetch(fetch),
+            parsed_builder: Email::parsed_builder,
+        }
+        .build()
+    }
+}
+
+#[cfg(feature = "maildir-backend")]
+impl<'a> From<&'a mut MailEntry> for Email<'a> {
+    fn from(entry: &'a mut MailEntry) -> Self {
+        EmailBuilder {
+            raw: RawEmail::MailEntry(entry),
             parsed_builder: Email::parsed_builder,
         }
         .build()
@@ -547,27 +566,31 @@ impl<'a> From<&'a str> for Email<'a> {
 
 enum RawEmails {
     #[cfg(feature = "imap-backend")]
-    ImapFetches(ZeroCopy<Vec<Fetch>>),
+    Fetches(ZeroCopy<Vec<Fetch>>),
+    #[cfg(feature = "maildir-backend")]
+    MailEntries(Vec<MailEntry>),
 }
 
 #[self_referencing]
 pub struct Emails {
     raw: RawEmails,
-    #[borrows(raw)]
+    #[borrows(mut raw)]
     #[covariant]
-    parsed: Vec<Email<'this>>,
+    emails: Vec<Email<'this>>,
 }
 
 impl Emails {
-    fn parsed_builder<'a>(raw: &'a RawEmails) -> Vec<Email> {
+    fn emails_builder<'a>(raw: &'a mut RawEmails) -> Vec<Email> {
         match raw {
             #[cfg(feature = "imap-backend")]
-            RawEmails::ImapFetches(fetches) => fetches.iter().map(Email::from).collect(),
+            RawEmails::Fetches(fetches) => fetches.iter().map(Email::from).collect(),
+            #[cfg(feature = "maildir-backend")]
+            RawEmails::MailEntries(entries) => entries.iter_mut().map(Email::from).collect(),
         }
     }
 
-    pub fn parsed(&self) -> Vec<&Email> {
-        self.borrow_parsed().iter().collect::<Vec<_>>()
+    pub fn to_vec(&self) -> Vec<&Email> {
+        self.borrow_emails().iter().collect()
     }
 }
 
@@ -580,8 +603,8 @@ impl TryFrom<ZeroCopy<Vec<Fetch>>> for Emails {
             Err(Error::ParseEmailFromImapFetchesEmptyError)
         } else {
             Ok(EmailsBuilder {
-                raw: RawEmails::ImapFetches(fetches),
-                parsed_builder: Emails::parsed_builder,
+                raw: RawEmails::Fetches(fetches),
+                emails_builder: Emails::emails_builder,
             }
             .build())
         }
@@ -596,9 +619,11 @@ impl TryFrom<Vec<MailEntry>> for Emails {
         if entries.is_empty() {
             Err(Error::ParseEmailFromImapFetchesEmptyError)
         } else {
-            Ok(Self {
+            Ok(EmailsBuilder {
                 raw: RawEmails::MailEntries(entries),
-            })
+                emails_builder: Emails::emails_builder,
+            }
+            .build())
         }
     }
 }

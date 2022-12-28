@@ -177,6 +177,18 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(folders)
     }
 
+    fn purge_folder(&self, dir: &str) -> backend::Result<()> {
+        debug!("dir: {}", dir);
+
+        let mdir = self.get_mdir_from_dir(dir)?;
+        let ids: Vec<maildir::MailEntry> = mdir.list_cur().filter_map(io::Result::ok).collect();
+        let ids: Vec<&str> = ids.iter().map(|entry| entry.id()).collect();
+
+        self.delete_emails(dir, ids)?;
+
+        Ok(())
+    }
+
     fn delete_folder(&self, dir: &str) -> backend::Result<()> {
         debug!("dir: {:?}", dir);
 
@@ -193,9 +205,9 @@ impl<'a> Backend for MaildirBackend<'a> {
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        debug!("dir: {:?}", dir);
-        debug!("page size: {:?}", page_size);
-        debug!("page: {:?}", page);
+        debug!("dir: {}", dir);
+        debug!("page size: {}", page_size);
+        debug!("page: {}", page);
 
         let mdir = self.get_mdir_from_dir(dir)?;
 
@@ -279,14 +291,15 @@ impl<'a> Backend for MaildirBackend<'a> {
         let mdir = self.get_mdir_from_dir(dir)?;
         let id_mapper = IdMapper::new(mdir.path())?;
         let ids = short_hashes
-            .into_iter()
-            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
-            .collect::<id_mapper::Result<Vec<&str>>>()?;
+            .iter()
+            .map(|short_hash| id_mapper.find(short_hash))
+            .collect::<id_mapper::Result<Vec<_>>>()?;
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         debug!("ids: {:?}", ids);
 
         let matching_ids = |entry: io::Result<maildir::MailEntry>| match entry {
             Ok(entry) if ids.contains(&entry.id()) => Some(entry),
-            Ok(entry) => None,
+            Ok(_) => None,
             Err(err) => {
                 warn!("skipping invalid maildir entry: {}", err);
                 None
@@ -317,9 +330,10 @@ impl<'a> Backend for MaildirBackend<'a> {
         let to_mdir = self.get_mdir_from_dir(to_dir)?;
         let id_mapper = IdMapper::new(from_mdir.path())?;
         let ids = short_hashes
-            .into_iter()
-            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
-            .collect::<id_mapper::Result<Vec<&str>>>()?;
+            .iter()
+            .map(|short_hash| id_mapper.find(short_hash))
+            .collect::<id_mapper::Result<Vec<_>>>()?;
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         debug!("ids: {:?}", ids);
 
         let mut id_mapper = IdMapper::new(to_mdir.path())?;
@@ -350,9 +364,10 @@ impl<'a> Backend for MaildirBackend<'a> {
         let to_mdir = self.get_mdir_from_dir(to_dir)?;
         let id_mapper = IdMapper::new(from_mdir.path())?;
         let ids = short_hashes
-            .into_iter()
-            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
-            .collect::<id_mapper::Result<Vec<&str>>>()?;
+            .iter()
+            .map(|short_hash| id_mapper.find(short_hash))
+            .collect::<id_mapper::Result<Vec<_>>>()?;
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         debug!("ids: {:?}", ids);
 
         let mut id_mapper = IdMapper::new(to_mdir.path())?;
@@ -376,9 +391,10 @@ impl<'a> Backend for MaildirBackend<'a> {
         let mdir = self.get_mdir_from_dir(dir)?;
         let id_mapper = IdMapper::new(mdir.path())?;
         let ids = short_hashes
-            .into_iter()
-            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
-            .collect::<id_mapper::Result<Vec<&str>>>()?;
+            .iter()
+            .map(|short_hash| id_mapper.find(short_hash))
+            .collect::<id_mapper::Result<Vec<_>>>()?;
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         debug!("ids: {:?}", ids);
 
         for id in ids {
@@ -396,9 +412,10 @@ impl<'a> Backend for MaildirBackend<'a> {
         let mdir = self.get_mdir_from_dir(dir)?;
         let id_mapper = IdMapper::new(mdir.path())?;
         let ids = short_hashes
-            .into_iter()
-            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
-            .collect::<id_mapper::Result<Vec<&str>>>()?;
+            .iter()
+            .map(|short_hash| id_mapper.find(short_hash))
+            .collect::<id_mapper::Result<Vec<_>>>()?;
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         debug!("ids: {:?}", ids);
 
         for id in ids {
@@ -417,9 +434,10 @@ impl<'a> Backend for MaildirBackend<'a> {
         let mdir = self.get_mdir_from_dir(dir)?;
         let id_mapper = IdMapper::new(mdir.path())?;
         let ids = short_hashes
-            .into_iter()
-            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
-            .collect::<id_mapper::Result<Vec<&str>>>()?;
+            .iter()
+            .map(|short_hash| id_mapper.find(short_hash))
+            .collect::<id_mapper::Result<Vec<_>>>()?;
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         debug!("ids: {:?}", ids);
 
         for id in ids {
@@ -443,9 +461,10 @@ impl<'a> Backend for MaildirBackend<'a> {
         let mdir = self.get_mdir_from_dir(dir)?;
         let id_mapper = IdMapper::new(mdir.path())?;
         let ids = short_hashes
-            .into_iter()
-            .map(|short_hash| id_mapper.find(short_hash).map(|id| id.as_str()))
-            .collect::<id_mapper::Result<Vec<&str>>>()?;
+            .iter()
+            .map(|short_hash| id_mapper.find(short_hash))
+            .collect::<id_mapper::Result<Vec<_>>>()?;
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         debug!("ids: {:?}", ids);
 
         for id in ids {

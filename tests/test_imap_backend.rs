@@ -67,7 +67,7 @@ fn test_imap_backend() {
             "Signed and encrypted message!\r\n\r\n",
         ),
         *emails
-            .parsed()
+            .to_vec()
             .first()
             .unwrap()
             .to_read_tpl_builder(&config)

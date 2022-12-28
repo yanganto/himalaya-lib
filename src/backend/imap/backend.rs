@@ -121,7 +121,7 @@ enum ImapSessionStream {
 }
 
 impl SetReadTimeout for ImapSessionStream {
-    fn set_read_timeout(&mut self, timeout: Option<std::time::Duration>) -> imap::Result<()> {
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> imap::Result<()> {
         match self {
             Self::Tls(stream) => stream.set_read_timeout(timeout),
             Self::Tcp(stream) => stream.set_read_timeout(timeout),
@@ -130,7 +130,7 @@ impl SetReadTimeout for ImapSessionStream {
 }
 
 impl Read for ImapSessionStream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             Self::Tls(stream) => stream.read(buf),
             Self::Tcp(stream) => stream.read(buf),
