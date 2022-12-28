@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 /// Represents the flag variants.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize)]
 pub enum Flag {
     Seen,
     Answered,
@@ -12,9 +12,15 @@ pub enum Flag {
     Custom(String),
 }
 
+impl Flag {
+    pub fn custom<F: ToString>(flag: F) -> Self {
+        Self::Custom(flag.to_string())
+    }
+}
+
 impl From<&str> for Flag {
-    fn from(flag_str: &str) -> Self {
-        match flag_str {
+    fn from(s: &str) -> Self {
+        match s {
             "seen" => Flag::Seen,
             "answered" | "replied" => Flag::Answered,
             "flagged" => Flag::Flagged,
@@ -22,6 +28,26 @@ impl From<&str> for Flag {
             "draft" => Flag::Draft,
             "recent" => Flag::Recent,
             flag => Flag::Custom(flag.into()),
+        }
+    }
+}
+
+impl From<String> for Flag {
+    fn from(s: String) -> Self {
+        s.as_str().into()
+    }
+}
+
+impl ToString for Flag {
+    fn to_string(&self) -> String {
+        match self {
+            Flag::Seen => "seen".into(),
+            Flag::Answered => "answered".into(),
+            Flag::Flagged => "flagged".into(),
+            Flag::Deleted => "deleted".into(),
+            Flag::Draft => "draft".into(),
+            Flag::Recent => "recent".into(),
+            Flag::Custom(flag) => flag.clone(),
         }
     }
 }

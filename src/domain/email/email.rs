@@ -565,6 +565,7 @@ impl<'a> From<&'a str> for Email<'a> {
 }
 
 enum RawEmails {
+    Vec(Vec<Vec<u8>>),
     #[cfg(feature = "imap-backend")]
     Fetches(ZeroCopy<Vec<Fetch>>),
     #[cfg(feature = "maildir-backend")]
@@ -582,6 +583,7 @@ pub struct Emails {
 impl Emails {
     fn emails_builder<'a>(raw: &'a mut RawEmails) -> Vec<Email> {
         match raw {
+            RawEmails::Vec(vec) => vec.iter().map(Vec::as_slice).map(Email::from).collect(),
             #[cfg(feature = "imap-backend")]
             RawEmails::Fetches(fetches) => fetches.iter().map(Email::from).collect(),
             #[cfg(feature = "maildir-backend")]
@@ -591,6 +593,16 @@ impl Emails {
 
     pub fn to_vec(&self) -> Vec<&Email> {
         self.borrow_emails().iter().collect()
+    }
+}
+
+impl From<Vec<Vec<u8>>> for Emails {
+    fn from(bytes: Vec<Vec<u8>>) -> Self {
+        EmailsBuilder {
+            raw: RawEmails::Vec(bytes),
+            emails_builder: Emails::emails_builder,
+        }
+        .build()
     }
 }
 

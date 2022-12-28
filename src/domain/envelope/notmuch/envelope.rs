@@ -51,10 +51,7 @@ pub fn from_raw(raw: RawEnvelope) -> Result<Envelope> {
     let envelope = Envelope {
         id,
         internal_id,
-        flags: raw
-            .tags()
-            .map(|tag| Flag::Custom(tag.to_string()))
-            .collect(),
+        flags: raw.tags().map(Flag::from).collect(),
         subject,
         sender,
         date,

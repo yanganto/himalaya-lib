@@ -1,12 +1,11 @@
 #[cfg(feature = "notmuch-backend")]
 use concat_with::concat_line;
-
 #[cfg(feature = "notmuch-backend")]
 use std::{collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "notmuch-backend")]
 use himalaya_lib::{
-    AccountConfig, Backend, CompilerBuilder, Flag, NotmuchBackend, NotmuchConfig, TplBuilder,
+    AccountConfig, Backend, CompilerBuilder, Flag, Flags, NotmuchBackend, NotmuchConfig, TplBuilder,
 };
 
 #[cfg(feature = "notmuch-backend")]
@@ -37,10 +36,11 @@ fn test_notmuch_backend() {
         .text_plain_part("Plain message!")
         .compile(CompilerBuilder::default())
         .unwrap();
-    let hash = notmuch.add_email("", &email, "inbox seen").unwrap();
+    let flags = Flags::from_iter([Flag::custom("inbox"), Flag::Seen]);
+    let hash = notmuch.add_email("", &email, &flags).unwrap();
 
     // check that the added message exists
-    let mut email = notmuch.get_email("", &hash).unwrap();
+    let emails = notmuch.get_emails("", vec![&hash]).unwrap();
     assert_eq!(
         concat_line!(
             "From: alice@localhost",
@@ -48,7 +48,10 @@ fn test_notmuch_backend() {
             "",
             "Plain message!\r\n",
         ),
-        *email
+        *emails
+            .to_vec()
+            .first()
+            .unwrap()
             .to_read_tpl_builder(&account_config)
             .unwrap()
             .show_headers(["From", "To"])
@@ -63,37 +66,39 @@ fn test_notmuch_backend() {
     assert_eq!("Plain message!", envelope.subject);
 
     // check that a flag can be added to the message
-    notmuch
-        .add_flags("", &envelope.id, "flagged answered")
-        .unwrap();
+    let flags = Flags::from_iter([Flag::Flagged, Flag::Answered]);
+    notmuch.add_flags("", vec![&envelope.id], &flags).unwrap();
     let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
-    assert!(envelope.flags.contains(&Flag::Custom("seen".into())));
-    assert!(envelope.flags.contains(&Flag::Custom("flagged".into())));
-    assert!(envelope.flags.contains(&Flag::Custom("answered".into())));
+    assert!(envelope.flags.contains(&Flag::Seen));
+    assert!(envelope.flags.contains(&Flag::Flagged));
+    assert!(envelope.flags.contains(&Flag::Answered));
 
     // check that the message flags can be changed
+    let flags = Flags::from_iter([Flag::custom("inbox"), Flag::Answered]);
+    notmuch.set_flags("", vec![&envelope.id], &flags).unwrap();
+    let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
+    let envelope = envelopes.first().unwrap();
+    println!("envelope.flags: {:?}", envelope.flags);
+    assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
+    assert!(!envelope.flags.contains(&Flag::Seen));
+    assert!(!envelope.flags.contains(&Flag::Flagged));
+    assert!(envelope.flags.contains(&Flag::Answered));
+
+    // check that a flag can be removed from the message
+    let flags = Flags::from_iter([Flag::Answered]);
     notmuch
-        .set_flags("", &envelope.id, "inbox answered")
+        .remove_flags("", vec![&envelope.id], &flags)
         .unwrap();
     let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
-    assert!(!envelope.flags.contains(&Flag::Custom("seen".into())));
-    assert!(!envelope.flags.contains(&Flag::Custom("flagged".into())));
-    assert!(envelope.flags.contains(&Flag::Custom("answered".into())));
-
-    // check that a flag can be removed from the message
-    notmuch.remove_flags("", &envelope.id, "answered").unwrap();
-    let envelopes = notmuch.list_envelope("inbox", 10, 0).unwrap();
-    let envelope = envelopes.first().unwrap();
-    assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
-    assert!(!envelope.flags.contains(&Flag::Custom("seen".into())));
-    assert!(!envelope.flags.contains(&Flag::Custom("flagged".into())));
-    assert!(!envelope.flags.contains(&Flag::Custom("answered".into())));
+    assert!(!envelope.flags.contains(&Flag::Seen));
+    assert!(!envelope.flags.contains(&Flag::Flagged));
+    assert!(!envelope.flags.contains(&Flag::Answered));
 
     // check that the message can be deleted
-    notmuch.delete_email("", &hash).unwrap();
-    assert!(notmuch.get_email("inbox", &hash).is_err());
+    notmuch.delete_emails("", vec![&hash]).unwrap();
+    assert!(notmuch.get_emails("inbox", vec![&hash]).is_err());
 }

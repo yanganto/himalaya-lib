@@ -1,11 +1,11 @@
 use serde::Serialize;
-use std::{fmt, ops};
+use std::{collections::HashSet, fmt, ops};
 
 use crate::Flag;
 
 /// Represents the list of flags.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-pub struct Flags(pub Vec<Flag>);
+pub struct Flags(HashSet<Flag>);
 
 impl Flags {
     /// Builds a symbols string.
@@ -31,7 +31,7 @@ impl Flags {
 }
 
 impl ops::Deref for Flags {
-    type Target = Vec<Flag>;
+    type Target = HashSet<Flag>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -80,9 +80,7 @@ impl From<&str> for Flags {
 impl FromIterator<Flag> for Flags {
     fn from_iter<T: IntoIterator<Item = Flag>>(iter: T) -> Self {
         let mut flags = Flags::default();
-        for flag in iter {
-            flags.push(flag);
-        }
+        flags.extend(iter);
         flags
     }
 }

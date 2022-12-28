@@ -7,7 +7,7 @@ impl Flags {
         let mut flags = String::default();
         let mut glue = "";
 
-        for flag in &self.0 {
+        for flag in self.iter() {
             flags.push_str(glue);
             flags.push_str(&flag.to_imap_query());
             glue = " ";
