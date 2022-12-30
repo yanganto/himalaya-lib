@@ -16,8 +16,8 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, envelope::maildir::envelopes, flag::maildir::flags, id_mapper,
-    AccountConfig, Backend, Emails, Envelopes, Flags, Folder, Folders, IdMapper, MaildirConfig,
-    DEFAULT_INBOX_FOLDER,
+    AccountConfig, Backend, Emails, Envelopes, Flag, Flags, Folder, Folders, IdMapper,
+    MaildirConfig, DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
@@ -268,6 +268,9 @@ impl<'a> Backend for MaildirBackend<'a> {
     fn add_email(&self, dir: &str, email: &[u8], flags: &Flags) -> backend::Result<String> {
         debug!("dir: {}", dir);
         debug!("flags: {:?}", flags);
+
+        let mut flags = flags.clone();
+        flags.insert(Flag::Seen);
 
         let mdir = self.get_mdir_from_dir(dir)?;
         let id = mdir

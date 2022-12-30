@@ -483,6 +483,9 @@ impl Backend for ImapBackend<'_> {
         let folder = encode_utf7(folder.to_owned());
         debug!("utf7 encoded folder: {:?}", folder);
 
+        let mut flags = flags.clone();
+        flags.insert(Flag::Seen);
+
         let mut session = self.session.borrow_mut();
 
         session
