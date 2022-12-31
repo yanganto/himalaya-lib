@@ -469,7 +469,7 @@ impl Backend for ImapBackend<'_> {
 
         let range = seqs[begin..end.min(seqs.len())].join(",");
         let fetches = session
-            .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
+            .fetch(&range, "(UID ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
         let envelopes = envelope::imap::from_raws(fetches)?;
