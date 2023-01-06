@@ -30,12 +30,12 @@ fn test_maildir_backend() {
     let mdir_config = MaildirConfig {
         root_dir: mdir.path().to_owned(),
     };
-    let mdir = MaildirBackend::new(&account_config, &mdir_config);
+    let mdir = MaildirBackend::new(&account_config, &mdir_config).unwrap();
 
     let submdir_config = MaildirConfig {
         root_dir: mdir_sub.path().to_owned(),
     };
-    let submdir = MaildirBackend::new(&account_config, &submdir_config);
+    let submdir = MaildirBackend::new(&account_config, &submdir_config).unwrap();
 
     // check that a message can be built and added
     let email = TplBuilder::default()

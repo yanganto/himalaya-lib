@@ -32,7 +32,7 @@ fn test_sendmail_sender() {
     };
 
     let mut sendmail = Sendmail::new(&account_config, &sendmail_config);
-    let imap = ImapBackend::new(&imap_config).unwrap();
+    let imap = ImapBackend::new(&account_config, &imap_config).unwrap();
 
     // setting up folders
     imap.purge_folder("INBOX").unwrap();

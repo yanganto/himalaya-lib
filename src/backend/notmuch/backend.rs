@@ -4,9 +4,10 @@ use std::{any::Any, fs, io, result};
 use thiserror::Error;
 
 use crate::{
-    account, backend, email, envelope::notmuch::envelopes, id_mapper, AccountConfig, Backend,
-    Emails, Envelopes, Flag, Flags, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig,
-    NotmuchConfig,
+    account, backend, email,
+    envelope::notmuch::{envelope, envelopes},
+    id_mapper, AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders,
+    IdMapper, MaildirBackend, MaildirConfig, NotmuchConfig,
 };
 
 #[derive(Debug, Error)]
@@ -150,6 +151,10 @@ impl<'a> NotmuchBackend<'a> {
 }
 
 impl<'a> Backend for NotmuchBackend<'a> {
+    fn name(&self) -> String {
+        self.account_config.name.clone()
+    }
+
     fn add_folder(&self, _folder: &str) -> backend::Result<()> {
         Err(Error::AddMboxUnimplementedError)?
     }
@@ -177,6 +182,24 @@ impl<'a> Backend for NotmuchBackend<'a> {
 
     fn delete_folder(&self, _folder: &str) -> backend::Result<()> {
         Err(Error::DelMboxUnimplementedError)?
+    }
+
+    fn get_envelope(&self, virtual_folder: &str, short_hash: &str) -> backend::Result<Envelope> {
+        debug!("virtual folder: {:?}", virtual_folder);
+        debug!("short hash: {:?}", short_hash);
+
+        let id_mapper = IdMapper::new(&self.notmuch_config.db_path)?;
+        let id = id_mapper.find(short_hash)?;
+        debug!("id: {}", id);
+
+        let envelope = envelope::from_raw(
+            self.db
+                .find_message(&id)
+                .map_err(Error::FindMsgError)?
+                .ok_or_else(|| Error::FindMsgEmptyError)?,
+        )?;
+
+        Ok(envelope)
     }
 
     fn list_envelopes(
@@ -224,7 +247,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
             root_dir: self.notmuch_config.db_path.clone(),
         };
         // TODO: find a way to move this to the Backend::connect method.
-        let mdir = MaildirBackend::new(self.account_config, &mdir_config);
+        let mdir = MaildirBackend::new(self.account_config, &mdir_config)?;
         let hash = mdir.add_email("", email, &flags)?;
         debug!("hash: {:?}", hash);
 
@@ -257,6 +280,15 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(hash)
     }
 
+    fn add_email_internal(
+        &self,
+        _: &str,
+        _email: &[u8],
+        _flags: &Flags,
+    ) -> backend::Result<String> {
+        unimplemented!();
+    }
+
     fn get_emails(&self, _: &str, short_hashes: Vec<&str>) -> backend::Result<Emails> {
         debug!("short hashes: {:?}", short_hashes);
 
@@ -286,6 +318,10 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(emails)
     }
 
+    fn get_emails_internal(&self, _: &str, _internal_ids: Vec<&str>) -> backend::Result<Emails> {
+        unimplemented!();
+    }
+
     fn copy_emails(
         &self,
         _from_dir: &str,
@@ -295,11 +331,29 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Err(Error::CopyMsgUnimplementedError)?
     }
 
+    fn copy_emails_internal(
+        &self,
+        _from_dir: &str,
+        _to_dir: &str,
+        _internal_ids: Vec<&str>,
+    ) -> backend::Result<()> {
+        Err(Error::CopyMsgUnimplementedError)?
+    }
+
     fn move_emails(
         &self,
         _from_dir: &str,
         _to_dir: &str,
         _short_hashes: Vec<&str>,
+    ) -> backend::Result<()> {
+        Err(Error::MoveMsgUnimplementedError)?
+    }
+
+    fn move_emails_internal(
+        &self,
+        _from_dir: &str,
+        _to_dir: &str,
+        _internal_ids: Vec<&str>,
     ) -> backend::Result<()> {
         Err(Error::MoveMsgUnimplementedError)?
     }
@@ -329,6 +383,14 @@ impl<'a> Backend for NotmuchBackend<'a> {
         })?;
 
         Ok(())
+    }
+
+    fn delete_emails_internal(
+        &self,
+        _virtual_folder: &str,
+        _internal_ids: Vec<&str>,
+    ) -> backend::Result<()> {
+        unimplemented!();
     }
 
     fn add_flags(
@@ -365,6 +427,15 @@ impl<'a> Backend for NotmuchBackend<'a> {
         }
 
         Ok(())
+    }
+
+    fn add_flags_internal(
+        &self,
+        _virtual_folder: &str,
+        _internal_ids: Vec<&str>,
+        _flags: &Flags,
+    ) -> backend::Result<()> {
+        unimplemented!();
     }
 
     fn set_flags(
@@ -404,6 +475,15 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Ok(())
     }
 
+    fn set_flags_internal(
+        &self,
+        _virtual_folder: &str,
+        _internal_ids: Vec<&str>,
+        _flags: &Flags,
+    ) -> backend::Result<()> {
+        unimplemented!();
+    }
+
     fn remove_flags(
         &self,
         _virtual_folder: &str,
@@ -439,6 +519,15 @@ impl<'a> Backend for NotmuchBackend<'a> {
         }
 
         Ok(())
+    }
+
+    fn remove_flags_internal(
+        &self,
+        _virtual_folder: &str,
+        _internal_ids: Vec<&str>,
+        _flags: &Flags,
+    ) -> backend::Result<()> {
+        unimplemented!();
     }
 
     fn as_any(&self) -> &(dyn Any + 'a) {

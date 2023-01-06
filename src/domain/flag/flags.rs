@@ -1,11 +1,11 @@
 use serde::Serialize;
-use std::{collections::HashSet, fmt, ops};
+use std::{collections::HashSet, ops};
 
 use crate::Flag;
 
 /// Represents the list of flags.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-pub struct Flags(HashSet<Flag>);
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct Flags(pub HashSet<Flag>);
 
 impl Flags {
     /// Builds a symbols string.
@@ -30,6 +30,21 @@ impl Flags {
     }
 }
 
+impl ToString for Flags {
+    fn to_string(&self) -> String {
+        let mut flags = String::default();
+        let mut glue = "";
+
+        for flag in &self.0 {
+            flags.push_str(glue);
+            flags.push_str(&flag.to_string());
+            glue = " ";
+        }
+
+        flags
+    }
+}
+
 impl ops::Deref for Flags {
     type Target = HashSet<Flag>;
 
@@ -41,28 +56,6 @@ impl ops::Deref for Flags {
 impl ops::DerefMut for Flags {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
-    }
-}
-
-impl fmt::Display for Flags {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut glue = "";
-
-        for flag in &self.0 {
-            write!(f, "{}", glue)?;
-            match flag {
-                Flag::Seen => write!(f, "\\Seen")?,
-                Flag::Answered => write!(f, "\\Answered")?,
-                Flag::Flagged => write!(f, "\\Flagged")?,
-                Flag::Deleted => write!(f, "\\Deleted")?,
-                Flag::Draft => write!(f, "\\Draft")?,
-                Flag::Recent => write!(f, "\\Recent")?,
-                Flag::Custom(flag) => write!(f, "{}", flag)?,
-            }
-            glue = " ";
-        }
-
-        Ok(())
     }
 }
 

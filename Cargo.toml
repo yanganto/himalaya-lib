@@ -20,6 +20,7 @@ concat-with = "0.2"
 ammonia = "3.2"
 chrono = "0.4"
 convert_case = "0.5"
+dirs = "4.0"
 html-escape = "0.2"
 lettre = { version = "=0.10.1", features = ["serde"] }
 log = "0.4"

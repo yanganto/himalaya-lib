@@ -19,21 +19,23 @@ use thiserror::Error;
 use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7};
 
 use crate::{
-    account, backend, email, envelope, process, Backend, Emails, Envelopes, Flag, Flags, Folder,
-    Folders, ImapConfig,
+    account, backend, email, envelope, process, AccountConfig, Backend, Emails, Envelope,
+    Envelopes, Flag, Flags, Folder, Folders, ImapConfig,
 };
 
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("cannot get imap session: session not initialized")]
     GetSessionNotInitializedError,
+    #[error("cannot get last imap message uid")]
+    GetLastUidError,
     #[error("cannot get imap fetches: fetches not initialized")]
     GetFetchesNotInitializedError,
 
     #[error("cannot get imap backend from config")]
     GetBackendFromConfigError,
     #[error("cannot get envelope of message {0}")]
-    GetEnvelopeError(u32),
+    GetEnvelopeError(String),
     #[error("cannot get sender of message {0}")]
     GetSenderError(u32),
     #[error("cannot get imap session")]
@@ -97,11 +99,11 @@ pub enum Error {
     #[error("cannot expunge mailbox {1}")]
     ExpungeError(#[source] imap::Error, String),
     #[error("cannot add flags {1} to message(s) {2}")]
-    AddFlagsError(#[source] imap::Error, Flags, String),
+    AddFlagsError(#[source] imap::Error, String, String),
     #[error("cannot set flags {1} to message(s) {2}")]
-    SetFlagsError(#[source] imap::Error, Flags, String),
+    SetFlagsError(#[source] imap::Error, String, String),
     #[error("cannot delete flags {1} to message(s) {2}")]
-    DelFlagsError(#[source] imap::Error, Flags, String),
+    DelFlagsError(#[source] imap::Error, String, String),
     #[error("cannot logout from imap server")]
     LogoutError(#[source] imap::Error),
 
@@ -157,12 +159,13 @@ impl Write for ImapSessionStream {
 type ImapSession = imap::Session<ImapSessionStream>;
 
 pub struct ImapBackend<'a> {
+    account_config: &'a AccountConfig,
     imap_config: &'a ImapConfig,
     session: RefCell<ImapSession>,
 }
 
 impl<'a> ImapBackend<'a> {
-    pub fn new(imap_config: &'a ImapConfig) -> Result<Self> {
+    pub fn new(account_config: &'a AccountConfig, imap_config: &'a ImapConfig) -> Result<Self> {
         let builder = TlsConnector::builder()
             .danger_accept_invalid_certs(imap_config.insecure())
             .danger_accept_invalid_hostnames(imap_config.insecure())
@@ -190,6 +193,7 @@ impl<'a> ImapBackend<'a> {
         session.debug = log_enabled!(Level::Trace);
 
         Ok(Self {
+            account_config,
             imap_config,
             session: RefCell::new(session),
         })
@@ -318,6 +322,10 @@ impl<'a> ImapBackend<'a> {
 }
 
 impl Backend for ImapBackend<'_> {
+    fn name(&self) -> String {
+        self.account_config.name.clone()
+    }
+
     fn add_folder(&self, folder: &str) -> backend::Result<()> {
         let mut session = self.session.borrow_mut();
         let folder = encode_utf7(folder.to_owned());
@@ -372,7 +380,7 @@ impl Backend for ImapBackend<'_> {
             .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
         session
             .store(&seq, format!("+FLAGS ({})", flags.to_imap_query()))
-            .map_err(|err| Error::AddFlagsError(err, flags.clone(), seq))?;
+            .map_err(|err| Error::AddFlagsError(err, flags.to_imap_query(), seq))?;
         session
             .expunge()
             .map_err(|err| Error::ExpungeError(err, folder.clone()))?;
@@ -389,6 +397,29 @@ impl Backend for ImapBackend<'_> {
             .map_err(|err| Error::DeleteMboxError(err, folder.to_owned()))?;
 
         Ok(())
+    }
+
+    fn get_envelope(&self, folder: &str, id: &str) -> backend::Result<Envelope> {
+        debug!("folder: {}", folder);
+        debug!("id: {}", id);
+
+        let folder = encode_utf7(folder.to_owned());
+        debug!("utf7 encoded folder: {:?}", folder);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+        let fetches = session
+            .fetch(id, "(UID ENVELOPE FLAGS INTERNALDATE)")
+            .map_err(|err| Error::FetchMsgsByRangeError(err, id.to_owned()))?;
+        let fetch = fetches
+            .first()
+            .ok_or_else(|| Error::GetEnvelopeError(id.to_owned()))?;
+        let envelope = envelope::imap::from_raw(&fetch)?;
+
+        Ok(envelope)
     }
 
     fn list_envelopes(
@@ -419,7 +450,7 @@ impl Backend for ImapBackend<'_> {
         debug!("range: {:?}", range);
 
         let fetches = session
-            .fetch(&range, "(ENVELOPE FLAGS INTERNALDATE)")
+            .fetch(&range, "(UID ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
         let envelopes = envelope::imap::from_raws(fetches)?;
@@ -501,6 +532,37 @@ impl Backend for ImapBackend<'_> {
         Ok(last_seq.to_string())
     }
 
+    fn add_email_internal(
+        &self,
+        folder: &str,
+        email: &[u8],
+        flags: &Flags,
+    ) -> backend::Result<String> {
+        debug!("folder: {}", folder);
+        debug!("flags: {:?}", flags);
+
+        let folder = encode_utf7(folder.to_owned());
+        debug!("utf7 encoded folder: {:?}", folder);
+
+        let mut flags = flags.clone();
+        flags.insert(Flag::Seen);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .append(&folder, email)
+            .flags(flags.into_imap_flags_vec())
+            .finish()
+            .map_err(|err| Error::AppendMsgError(err, folder.to_owned()))?;
+        let last_uid = session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?
+            .uid_next
+            .ok_or(Error::GetLastUidError)?;
+
+        Ok(last_uid.to_string())
+    }
+
     fn get_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
         debug!("folder: {}", folder);
         debug!("ids: {:?}", ids);
@@ -514,9 +576,33 @@ impl Backend for ImapBackend<'_> {
         session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
-
         let fetches = session
             .fetch(&seq, "BODY[]")
+            .map_err(|err| Error::GetEmailsBySeqError(err, seq))?;
+
+        Ok(Emails::try_from(fetches)?)
+    }
+
+    fn get_emails_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<Emails> {
+        debug!("folder: {}", folder);
+        debug!("internal ids: {:?}", internal_ids);
+
+        let folder = encode_utf7(folder.to_owned());
+        debug!("utf7 encoded folder: {:?}", folder);
+
+        let seq = internal_ids.join(",");
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
+
+        let fetches = session
+            .uid_fetch(&seq, "BODY[]")
             .map_err(|err| Error::GetEmailsBySeqError(err, seq))?;
 
         Ok(Emails::try_from(fetches)?)
@@ -543,9 +629,36 @@ impl Backend for ImapBackend<'_> {
         session
             .select(from_folder_encoded)
             .map_err(|err| Error::SelectFolderError(err, from_folder.to_owned()))?;
-
         session.copy(&seq, to_folder_encoded).map_err(|err| {
             Error::CopyEmailError(err, seq, from_folder.to_owned(), to_folder.to_owned())
+        })?;
+
+        Ok(())
+    }
+
+    fn copy_emails_internal(
+        &self,
+        from_folder: &str,
+        to_folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<()> {
+        debug!("internal ids: {:?}", internal_ids);
+        debug!("from folder: {}", from_folder);
+        debug!("to folder: {}", to_folder);
+
+        let uids = internal_ids.join(",");
+        let from_folder_encoded = encode_utf7(from_folder.to_owned());
+        let to_folder_encoded = encode_utf7(to_folder.to_owned());
+        debug!("from folder (utf7 encoded): {}", from_folder_encoded);
+        debug!("to folder (utf7 encoded): {}", to_folder_encoded);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(from_folder_encoded)
+            .map_err(|err| Error::SelectFolderError(err, from_folder.to_owned()))?;
+        session.uid_copy(&uids, to_folder_encoded).map_err(|err| {
+            Error::CopyEmailError(err, uids, from_folder.to_owned(), to_folder.to_owned())
         })?;
 
         Ok(())
@@ -561,18 +674,17 @@ impl Backend for ImapBackend<'_> {
         debug!("to folder: {}", to_folder);
         debug!("ids: {:?}", ids);
 
+        let seq = ids.join(",");
         let from_folder_encoded = encode_utf7(from_folder.to_owned());
         let to_folder_encoded = encode_utf7(to_folder.to_owned());
         debug!("from folder (utf7 encoded): {}", from_folder_encoded);
         debug!("to folder (utf7 encoded): {}", to_folder_encoded);
 
-        let seq = ids.join(",");
         let mut session = self.session.borrow_mut();
 
         session
             .select(from_folder_encoded)
             .map_err(|err| Error::SelectFolderError(err, from_folder.to_owned()))?;
-
         session.mv(&seq, to_folder_encoded).map_err(|err| {
             Error::MoveEmailError(err, seq, from_folder.to_owned(), to_folder.to_owned())
         })?;
@@ -580,8 +692,40 @@ impl Backend for ImapBackend<'_> {
         Ok(())
     }
 
+    fn move_emails_internal(
+        &self,
+        from_folder: &str,
+        to_folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<()> {
+        debug!("from folder: {}", from_folder);
+        debug!("to folder: {}", to_folder);
+        debug!("internal ids: {:?}", internal_ids);
+
+        let uids = internal_ids.join(",");
+        let from_folder_encoded = encode_utf7(from_folder.to_owned());
+        let to_folder_encoded = encode_utf7(to_folder.to_owned());
+        debug!("from folder (utf7 encoded): {}", from_folder_encoded);
+        debug!("to folder (utf7 encoded): {}", to_folder_encoded);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(from_folder_encoded)
+            .map_err(|err| Error::SelectFolderError(err, from_folder.to_owned()))?;
+        session.uid_mv(&uids, to_folder_encoded).map_err(|err| {
+            Error::MoveEmailError(err, uids, from_folder.to_owned(), to_folder.to_owned())
+        })?;
+
+        Ok(())
+    }
+
     fn delete_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<()> {
         self.add_flags(folder, ids, &Flags::from_iter([Flag::Deleted]))
+    }
+
+    fn delete_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> backend::Result<()> {
+        self.add_flags_internal(folder, internal_ids, &Flags::from_iter([Flag::Deleted]))
     }
 
     fn add_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
@@ -600,7 +744,36 @@ impl Backend for ImapBackend<'_> {
             .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
         session
             .store(&seq, format!("+FLAGS ({})", flags.to_imap_query()))
-            .map_err(|err| Error::AddFlagsError(err, flags.clone(), seq))?;
+            .map_err(|err| Error::AddFlagsError(err, flags.to_imap_query(), seq))?;
+        session
+            .expunge()
+            .map_err(|err| Error::ExpungeError(err, folder.clone()))?;
+
+        Ok(())
+    }
+
+    fn add_flags_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        debug!("folder: {}", folder);
+        debug!("internal ids: {:?}", internal_ids);
+        debug!("flags: {:?}", flags);
+
+        let uids = internal_ids.join(",");
+        let folder = encode_utf7(folder.to_owned());
+        debug!("folder (utf7 encoded): {}", folder);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
+        session
+            .uid_store(&uids, format!("+FLAGS ({})", flags.to_imap_query()))
+            .map_err(|err| Error::AddFlagsError(err, flags.to_imap_query(), uids))?;
         session
             .expunge()
             .map_err(|err| Error::ExpungeError(err, folder.clone()))?;
@@ -613,18 +786,44 @@ impl Backend for ImapBackend<'_> {
         debug!("ids: {:?}", ids);
         debug!("flags: {:?}", flags);
 
+        let seq = ids.join(",");
         let folder = encode_utf7(folder.to_owned());
         debug!("folder (utf7 encoded): {}", folder);
 
-        let seq = ids.join(",");
         let mut session = self.session.borrow_mut();
 
         session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
         session
-            .store(&seq, format!("FLAGS ({})", flags))
-            .map_err(|err| Error::SetFlagsError(err, flags.clone(), seq))?;
+            .store(&seq, format!("FLAGS ({})", flags.to_imap_query()))
+            .map_err(|err| Error::SetFlagsError(err, flags.to_imap_query(), seq))?;
+
+        Ok(())
+    }
+
+    fn set_flags_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        debug!("folder: {}", folder);
+        debug!("internal ids: {:?}", internal_ids);
+        debug!("flags: {:?}", flags);
+
+        let uids = internal_ids.join(",");
+        let folder = encode_utf7(folder.to_owned());
+        debug!("folder (utf7 encoded): {}", folder);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
+        session
+            .uid_store(&uids, format!("FLAGS ({})", flags.to_imap_query()))
+            .map_err(|err| Error::SetFlagsError(err, flags.to_imap_query(), uids))?;
 
         Ok(())
     }
@@ -634,18 +833,44 @@ impl Backend for ImapBackend<'_> {
         debug!("ids: {:?}", ids);
         debug!("flags: {:?}", flags);
 
+        let seq = ids.join(",");
         let folder = encode_utf7(folder.to_owned());
         debug!("folder (utf7 encoded): {}", folder);
 
-        let seq = ids.join(",");
         let mut session = self.session.borrow_mut();
 
         session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
         session
-            .store(&seq, format!("-FLAGS ({})", flags))
-            .map_err(|err| Error::DelFlagsError(err, flags.clone(), seq))?;
+            .store(&seq, format!("-FLAGS ({})", flags.to_imap_query()))
+            .map_err(|err| Error::DelFlagsError(err, flags.to_imap_query(), seq))?;
+
+        Ok(())
+    }
+
+    fn remove_flags_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        debug!("folder: {}", folder);
+        debug!("internal ids: {:?}", internal_ids);
+        debug!("flags: {:?}", flags);
+
+        let uids = internal_ids.join(",");
+        let folder = encode_utf7(folder.to_owned());
+        debug!("folder (utf7 encoded): {}", folder);
+
+        let mut session = self.session.borrow_mut();
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
+        session
+            .uid_store(&uids, format!("-FLAGS ({})", flags.to_imap_query()))
+            .map_err(|err| Error::DelFlagsError(err, flags.to_imap_query(), uids))?;
 
         Ok(())
     }

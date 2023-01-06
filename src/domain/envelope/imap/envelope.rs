@@ -17,9 +17,14 @@ pub type RawEnvelope = imap::types::Fetch;
 pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
     let envelope = raw
         .envelope()
-        .ok_or_else(|| Error::GetEnvelopeError(raw.message))?;
+        .ok_or_else(|| Error::GetEnvelopeError(raw.message.to_string()))?;
 
     let id = raw.message.to_string();
+
+    let internal_id = raw
+        .uid
+        .ok_or_else(|| Error::GetUidError(raw.message))?
+        .to_string();
 
     let flags = Flags::from(raw.flags());
 
@@ -74,8 +79,8 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
         .map(|date| date.naive_local().to_string());
 
     Ok(Envelope {
-        id: id.clone(),
-        internal_id: id,
+        id,
+        internal_id,
         flags,
         subject,
         sender,

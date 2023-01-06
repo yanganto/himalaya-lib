@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 /// Represents the flag variants.
-#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 pub enum Flag {
     Seen,
     Answered,

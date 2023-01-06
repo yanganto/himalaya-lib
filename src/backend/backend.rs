@@ -7,8 +7,8 @@ use std::{any::Any, result};
 use thiserror::Error;
 
 use crate::{
-    account, backend, email, id_mapper, AccountConfig, BackendConfig, Emails, Envelopes, Flags,
-    Folders,
+    account, backend, email, id_mapper, AccountConfig, BackendConfig, Emails, Envelope, Envelopes,
+    Flags, Folders,
 };
 
 #[cfg(feature = "imap-backend")]
@@ -46,11 +46,14 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub trait Backend {
+    fn name(&self) -> String;
+
     fn add_folder(&self, folder: &str) -> Result<()>;
     fn list_folder(&self) -> Result<Folders>;
     fn purge_folder(&self, folder: &str) -> Result<()>;
     fn delete_folder(&self, folder: &str) -> Result<()>;
 
+    fn get_envelope(&self, folder: &str, id: &str) -> Result<Envelope>;
     fn list_envelopes(&self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn search_envelopes(
         &self,
@@ -62,14 +65,53 @@ pub trait Backend {
     ) -> Result<Envelopes>;
 
     fn add_email(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String>;
+    fn add_email_internal(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String>;
+
     fn get_emails(&self, folder: &str, ids: Vec<&str>) -> Result<Emails>;
+    fn get_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> Result<Emails>;
+
     fn copy_emails(&self, from_folder: &str, to_folder: &str, ids: Vec<&str>) -> Result<()>;
+    fn copy_emails_internal(
+        &self,
+        from_folder: &str,
+        to_folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> Result<()>;
+
     fn move_emails(&self, from_folder: &str, to_folder: &str, ids: Vec<&str>) -> Result<()>;
+    fn move_emails_internal(
+        &self,
+        from_folder: &str,
+        to_folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> Result<()>;
+
     fn delete_emails(&self, folder: &str, ids: Vec<&str>) -> Result<()>;
+    fn delete_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> Result<()>;
 
     fn add_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
+    fn add_flags_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> Result<()>;
+
     fn set_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
+    fn set_flags_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> Result<()>;
+
     fn remove_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
+    fn remove_flags_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> Result<()>;
 
     // only for downcasting
     fn as_any(&'static self) -> &(dyn Any);
@@ -85,12 +127,14 @@ impl<'a> BackendBuilder {
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(imap_config) => Ok(Box::new(ImapBackend::new(imap_config)?)),
+            BackendConfig::Imap(imap_config) => {
+                Ok(Box::new(ImapBackend::new(account_config, imap_config)?))
+            }
             #[cfg(feature = "maildir-backend")]
             BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
                 account_config,
                 maildir_config,
-            ))),
+            )?)),
             #[cfg(feature = "notmuch-backend")]
             BackendConfig::Notmuch(config) => {
                 Ok(Box::new(NotmuchBackend::new(account_config, config)?))

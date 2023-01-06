@@ -6,9 +6,12 @@
 //! to uuids (which are easier to manipulate).
 
 use std::{
-    collections, fs,
+    collections::{self, HashMap},
+    fs,
     io::{self, prelude::*},
-    ops, path, result,
+    ops,
+    path::{self, PathBuf},
+    result,
 };
 use thiserror::Error;
 
@@ -34,9 +37,9 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug, Default)]
 pub struct IdMapper {
     /// Represents the path of the id mapper file.
-    path: path::PathBuf,
-    /// Represents the actual hash map of internal ids ⋄ uuids.
-    map: collections::HashMap<String, String>,
+    path: PathBuf,
+    /// Represents the actual hash map of internal ids <=> uuids.
+    map: HashMap<String, String>,
     /// Represents the minimum size the uuids can be shown without
     /// conflicts. This way only short hashes (uuid subset) can be
     /// used.

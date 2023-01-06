@@ -34,7 +34,7 @@ fn test_smtp_sender() {
         passwd_cmd: "echo password".into(),
         ..ImapConfig::default()
     };
-    let imap = ImapBackend::new(&imap_config).unwrap();
+    let imap = ImapBackend::new(&account_config, &imap_config).unwrap();
 
     // setting up folders
     imap.purge_folder("INBOX").unwrap();

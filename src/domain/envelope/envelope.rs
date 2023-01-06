@@ -4,7 +4,7 @@ use crate::Flags;
 
 /// Represents the message envelope. The envelope is just a message
 /// subset, and is mostly used for listings.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct Envelope {
     /// Represents the message identifier.
     pub id: String,

@@ -88,9 +88,7 @@ impl ImapConfig {
                     .replace("<subject>", subject.as_ref())
                     .replace("<sender>", sender.as_ref())
             })
-            .unwrap_or_else(|| {
-                String::from("notify-send \"New message from <sender>\" \"<subject>\"")
-            });
+            .unwrap_or_else(|| String::from("notify-send \"📫 <sender>\" \"<subject>\""));
 
         process::run(&cmd, &[]).map_err(Error::StartNotifyModeError)?;
 

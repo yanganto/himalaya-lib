@@ -80,7 +80,6 @@ fn test_notmuch_backend() {
     notmuch.set_flags("", vec![&envelope.id], &flags).unwrap();
     let envelopes = notmuch.list_envelopes("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
-    println!("envelope.flags: {:?}", envelope.flags);
     assert!(envelope.flags.contains(&Flag::Custom("inbox".into())));
     assert!(!envelope.flags.contains(&Flag::Seen));
     assert!(!envelope.flags.contains(&Flag::Flagged));

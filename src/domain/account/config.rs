@@ -43,6 +43,8 @@ pub type Result<T> = result::Result<T, Error>;
 /// Represents the configuration of the user account.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct AccountConfig {
+    /// Represents the name of the current user account.
+    pub name: String,
     /// Represents the email address of the user.
     pub email: String,
     /// Represents the display name of the user.
@@ -82,6 +84,13 @@ pub struct AccountConfig {
     pub email_sender: EmailSender,
     /// Represents the email hooks.
     pub email_hooks: EmailHooks,
+
+    /// Enables the automatic synchronization of this account with a
+    /// local Maildir backend.
+    pub sync: bool,
+    /// Customizes the root directory where the Maildir cache is
+    /// saved. Defaults to `$XDG_DATA_HOME/<account-name>`.
+    pub sync_dir: Option<PathBuf>,
 }
 
 impl AccountConfig {

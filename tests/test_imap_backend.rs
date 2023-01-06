@@ -1,9 +1,8 @@
+#[cfg(feature = "imap-backend")]
 use concat_with::concat_line;
 
-use himalaya_lib::{AccountConfig, Backend, CompilerBuilder, TplBuilder};
-
 #[cfg(feature = "imap-backend")]
-use himalaya_lib::{ImapBackend, ImapConfig};
+use himalaya_lib::{AccountConfig, Backend, CompilerBuilder, ImapBackend, ImapConfig, TplBuilder};
 
 #[cfg(feature = "imap-backend")]
 #[test]
@@ -26,7 +25,7 @@ fn test_imap_backend() {
         passwd_cmd: "echo 'password'".into(),
         ..ImapConfig::default()
     };
-    let imap = ImapBackend::new(&imap_config).unwrap();
+    let imap = ImapBackend::new(&config, &imap_config).unwrap();
 
     // setting up folders
     if let Err(_) = imap.add_folder("Sent") {};
