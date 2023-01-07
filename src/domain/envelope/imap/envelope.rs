@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// Represents the raw envelope returned by the `imap` crate.
-pub type RawEnvelope = imap::types::Fetch;
+pub type RawEnvelope<'a> = imap::types::Fetch<'a>;
 
 pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
     let envelope = raw

@@ -2,7 +2,7 @@
 //!
 //! This module contains the definition of the IMAP backend.
 
-use imap::{extensions::idle::SetReadTimeout, types::NameAttribute};
+use imap::extensions::idle::{stop_on_any, SetReadTimeout};
 use log::{debug, log_enabled, trace, Level};
 use native_tls::{TlsConnector, TlsStream};
 use std::{
@@ -230,14 +230,8 @@ impl<'a> ImapBackend<'a> {
             debug!("begin loop");
             session
                 .idle()
-                .and_then(|mut idle| {
-                    idle.set_keepalive(Duration::new(keepalive, 0));
-                    idle.wait_keepalive_while(|res| {
-                        // TODO: handle response
-                        trace!("idle response: {:?}", res);
-                        false
-                    })
-                })
+                .timeout(Duration::new(keepalive, 0))
+                .wait_while(stop_on_any)
                 .map_err(Error::StartIdleModeError)?;
 
             let uids: Vec<u32> = self
@@ -301,14 +295,8 @@ impl<'a> ImapBackend<'a> {
 
             session
                 .idle()
-                .and_then(|mut idle| {
-                    idle.set_keepalive(Duration::new(keepalive, 0));
-                    idle.wait_keepalive_while(|res| {
-                        // TODO: handle response
-                        trace!("idle response: {:?}", res);
-                        false
-                    })
-                })
+                .timeout(Duration::new(keepalive, 0))
+                .wait_while(stop_on_any)
                 .map_err(Error::StartIdleModeError)?;
 
             debug!("end loop");
@@ -351,13 +339,7 @@ impl Backend for ImapBackend<'_> {
                     desc: imap_mbox
                         .attributes()
                         .iter()
-                        .map(|attr| match attr {
-                            NameAttribute::Marked => "Marked",
-                            NameAttribute::Unmarked => "Unmarked",
-                            NameAttribute::NoSelect => "NoSelect",
-                            NameAttribute::NoInferiors => "NoInferiors",
-                            NameAttribute::Custom(custom) => custom.trim_start_matches('\\'),
-                        })
+                        .map(|attr| format!("{:?}", attr))
                         .collect::<Vec<_>>()
                         .join(", "),
                 })
@@ -415,7 +397,7 @@ impl Backend for ImapBackend<'_> {
             .fetch(id, "(UID ENVELOPE FLAGS INTERNALDATE)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, id.to_owned()))?;
         let fetch = fetches
-            .first()
+            .get(0)
             .ok_or_else(|| Error::GetEnvelopeError(id.to_owned()))?;
         let envelope = envelope::imap::from_raw(&fetch)?;
 

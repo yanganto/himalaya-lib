@@ -1,4 +1,4 @@
-use imap::types::{Fetch, ZeroCopy};
+use imap::types::{Fetch, Fetches};
 use lettre::{
     address::AddressError,
     message::{Mailbox, Mailboxes},
@@ -80,7 +80,7 @@ enum RawEmail<'a> {
     Vec(Vec<u8>),
     Slice(&'a [u8]),
     #[cfg(feature = "imap-backend")]
-    Fetch(&'a Fetch),
+    Fetch(&'a Fetch<'a>),
     #[cfg(feature = "maildir-backend")]
     MailEntry(&'a mut MailEntry),
 }
@@ -537,7 +537,7 @@ impl<'a> From<ParsedMail<'a>> for Email<'a> {
 }
 
 #[cfg(feature = "imap-backend")]
-impl<'a> From<&'a Fetch> for Email<'a> {
+impl<'a> From<&'a Fetch<'a>> for Email<'a> {
     fn from(fetch: &'a Fetch) -> Self {
         EmailBuilder {
             raw: RawEmail::Fetch(fetch),
@@ -567,7 +567,7 @@ impl<'a> From<&'a str> for Email<'a> {
 enum RawEmails {
     Vec(Vec<Vec<u8>>),
     #[cfg(feature = "imap-backend")]
-    Fetches(ZeroCopy<Vec<Fetch>>),
+    Fetches(Fetches),
     #[cfg(feature = "maildir-backend")]
     MailEntries(Vec<MailEntry>),
 }
@@ -611,10 +611,10 @@ impl From<Vec<Vec<u8>>> for Emails {
 }
 
 #[cfg(feature = "imap-backend")]
-impl TryFrom<ZeroCopy<Vec<Fetch>>> for Emails {
+impl TryFrom<Fetches> for Emails {
     type Error = Error;
 
-    fn try_from(fetches: ZeroCopy<Vec<Fetch>>) -> Result<Self> {
+    fn try_from(fetches: Fetches) -> Result<Self> {
         if fetches.is_empty() {
             Err(Error::ParseEmailFromImapFetchesEmptyError)
         } else {
