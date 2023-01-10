@@ -16,7 +16,7 @@ use tree_magic;
 #[cfg(feature = "maildir-backend")]
 use maildir::{MailEntry, MailEntryError};
 
-use crate::{account, process, AccountConfig, Attachment, DEFAULT_SIGNATURE_DELIM};
+use crate::{account, process, AccountConfig, Attachment};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -413,36 +413,26 @@ impl Email<'_> {
         tpl = tpl.text_plain_part({
             let mut lines = String::default();
 
-            for part in parsed.parts() {
-                if part.ctype.mimetype != "text/plain" {
-                    continue;
+            let body = Self::tpl_builder_from_parsed(config, &parsed)?
+                .show_headers([] as [&str; 0])
+                .show_text_parts_only(true)
+                .sanitize_text_parts(true)
+                .remove_text_plain_parts_signature(true)
+                .build();
+
+            lines.push_str("\n\n");
+
+            for line in body.lines() {
+                lines.push('>');
+                if !line.starts_with('>') {
+                    lines.push(' ')
                 }
-
-                lines.push_str("\n\n");
-
-                let body = Self::tpl_builder_from_parsed(config, &parsed)?
-                    .show_headers([] as [&str; 0])
-                    .show_text_parts_only(true)
-                    .sanitize_text_parts(true)
-                    .build();
-
-                for line in body.lines() {
-                    // removes existing signature from the original body
-                    if line[..] == DEFAULT_SIGNATURE_DELIM[0..3] {
-                        break;
-                    }
-
-                    lines.push('>');
-                    if !line.starts_with('>') {
-                        lines.push_str(" ")
-                    }
-                    lines.push_str(line);
-                    lines.push_str("\n");
-                }
+                lines.push_str(line);
+                lines.push('\n');
             }
 
             if let Some(ref signature) = config.signature()? {
-                lines.push_str("\n");
+                lines.push('\n');
                 lines.push_str(signature);
             }
 
@@ -485,7 +475,7 @@ impl Email<'_> {
             let mut lines = String::from("\n");
 
             if let Some(ref signature) = config.signature()? {
-                lines.push_str("\n");
+                lines.push('\n');
                 lines.push_str(signature);
             }
 

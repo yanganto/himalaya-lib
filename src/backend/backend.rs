@@ -45,7 +45,7 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub trait Backend {
+pub trait Backend: Send + Sync {
     fn name(&self) -> String;
 
     fn add_folder(&self, folder: &str) -> Result<()>;
@@ -122,17 +122,18 @@ pub struct BackendBuilder;
 
 impl<'a> BackendBuilder {
     pub fn build(
-        account_config: &'a AccountConfig,
-        backend_config: &'a BackendConfig<'a>,
+        account_config: AccountConfig,
+        backend_config: BackendConfig,
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(imap_config) => {
-                Ok(Box::new(ImapBackend::new(account_config, imap_config)?))
-            }
+            BackendConfig::Imap(imap_config) => Ok(Box::new(ImapBackend::new(
+                account_config.clone(),
+                imap_config,
+            )?)),
             #[cfg(feature = "maildir-backend")]
             BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
-                account_config,
+                account_config.clone(),
                 maildir_config,
             )?)),
             #[cfg(feature = "notmuch-backend")]

@@ -15,17 +15,20 @@ fn test_imap_backend() {
         ..AccountConfig::default()
     };
 
-    let imap_config = ImapConfig {
-        host: "localhost".into(),
-        port: 3143,
-        ssl: Some(false),
-        starttls: Some(false),
-        insecure: Some(true),
-        login: "bob@localhost".into(),
-        passwd_cmd: "echo 'password'".into(),
-        ..ImapConfig::default()
-    };
-    let imap = ImapBackend::new(&config, &imap_config).unwrap();
+    let imap = ImapBackend::new(
+        config.clone(),
+        ImapConfig {
+            host: "localhost".into(),
+            port: 3143,
+            ssl: Some(false),
+            starttls: Some(false),
+            insecure: Some(true),
+            login: "bob@localhost".into(),
+            passwd_cmd: "echo 'password'".into(),
+            ..ImapConfig::default()
+        },
+    )
+    .unwrap();
 
     // setting up folders
     if let Err(_) = imap.add_folder("Sent") {};
@@ -103,7 +106,4 @@ fn test_imap_backend() {
     // checking that the email can be deleted
     imap.delete_emails("Отправленные", vec![&id]).unwrap();
     assert!(imap.get_emails("Отправленные", vec![&id]).is_err());
-
-    // checking that the backend can disconnect
-    imap.disconnect().unwrap();
 }

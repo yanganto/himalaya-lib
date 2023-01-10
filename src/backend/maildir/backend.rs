@@ -85,17 +85,14 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the maildir backend.
-pub struct MaildirBackend<'a> {
-    account_config: &'a AccountConfig,
+pub struct MaildirBackend {
+    account_config: AccountConfig,
     mdir: maildir::Maildir,
 }
 
-impl<'a> MaildirBackend<'a> {
-    pub fn new(
-        account_config: &'a AccountConfig,
-        backend_config: &'a MaildirConfig,
-    ) -> Result<Self> {
-        let mdir = Maildir::from(backend_config.root_dir.clone());
+impl MaildirBackend {
+    pub fn new(account_config: AccountConfig, backend_config: MaildirConfig) -> Result<Self> {
+        let mdir = Maildir::from(backend_config.root_dir);
         mdir.create_dirs().map_err(Error::InitDirsError)?;
 
         Ok(Self {
@@ -150,7 +147,7 @@ impl<'a> MaildirBackend<'a> {
     }
 }
 
-impl<'a> Backend for MaildirBackend<'a> {
+impl Backend for MaildirBackend {
     fn name(&self) -> String {
         self.account_config.name.clone()
     }
@@ -706,7 +703,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn as_any(&self) -> &(dyn Any + 'a) {
+    fn as_any(&self) -> &(dyn Any) {
         self
     }
 }

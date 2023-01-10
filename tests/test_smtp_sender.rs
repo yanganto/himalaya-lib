@@ -24,17 +24,20 @@ fn test_smtp_sender() {
     };
     let mut smtp = Smtp::new(&account_config, &smtp_config);
 
-    let imap_config = ImapConfig {
-        host: "localhost".into(),
-        port: 3143,
-        ssl: Some(false),
-        starttls: Some(false),
-        insecure: Some(true),
-        login: "bob@localhost".into(),
-        passwd_cmd: "echo password".into(),
-        ..ImapConfig::default()
-    };
-    let imap = ImapBackend::new(&account_config, &imap_config).unwrap();
+    let imap = ImapBackend::new(
+        account_config.clone(),
+        ImapConfig {
+            host: "localhost".into(),
+            port: 3143,
+            ssl: Some(false),
+            starttls: Some(false),
+            insecure: Some(true),
+            login: "bob@localhost".into(),
+            passwd_cmd: "echo password".into(),
+            ..ImapConfig::default()
+        },
+    )
+    .unwrap();
 
     // setting up folders
     imap.purge_folder("INBOX").unwrap();
@@ -57,6 +60,4 @@ fn test_smtp_sender() {
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.sender);
     assert_eq!("Plain message!", envelope.subject);
-
-    imap.disconnect().unwrap();
 }

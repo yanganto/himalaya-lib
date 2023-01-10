@@ -22,17 +22,19 @@ fn test_sendmail_sender() {
         ]
         .join(" "),
     };
-    let imap_config = ImapConfig {
-        host: "localhost".into(),
-        port: 3143,
-        ssl: Some(false),
-        login: "bob@localhost".into(),
-        passwd_cmd: "echo 'password'".into(),
-        ..ImapConfig::default()
-    };
-
     let mut sendmail = Sendmail::new(&account_config, &sendmail_config);
-    let imap = ImapBackend::new(&account_config, &imap_config).unwrap();
+    let imap = ImapBackend::new(
+        account_config.clone(),
+        ImapConfig {
+            host: "localhost".into(),
+            port: 3143,
+            ssl: Some(false),
+            login: "bob@localhost".into(),
+            passwd_cmd: "echo 'password'".into(),
+            ..ImapConfig::default()
+        },
+    )
+    .unwrap();
 
     // setting up folders
     imap.purge_folder("INBOX").unwrap();
@@ -55,6 +57,4 @@ fn test_sendmail_sender() {
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.sender);
     assert_eq!("Plain message!", envelope.subject);
-
-    imap.disconnect().unwrap();
 }

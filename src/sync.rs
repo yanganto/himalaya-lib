@@ -1,11 +1,13 @@
 use dirs::data_dir;
-use log::warn;
+use log::{debug, error, warn};
+use rayon::prelude::*;
 use std::{
     collections::{HashMap, HashSet},
     fs::OpenOptions,
     io::{self, prelude::*, BufReader},
     path::{Path, PathBuf},
     result,
+    sync::Mutex,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -16,6 +18,11 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot get backend lock")]
+    GetBackendLockError(String),
+    #[error("cannot get id mapper lock")]
+    GetIdMapperLockError(String),
+
     #[error("cannot get XDG_DATA_HOME directory")]
     GetXdgDataDirError,
     #[error("cannot create maildir directories: {1}")]
@@ -88,11 +95,13 @@ pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
     );
 
     let prev_left_dir = sync_dir.join(".PrevCache");
-    let prev_left_cfg = MaildirConfig {
-        root_dir: prev_left_dir.clone(),
-    };
-    let prev_left = MaildirBackend::new(config, &prev_left_cfg)?;
-    let mut prev_left_id_mapper = SyncIdMapper::new(prev_left_dir)?;
+    let prev_left = MaildirBackend::new(
+        config.clone(),
+        MaildirConfig {
+            root_dir: prev_left_dir.clone(),
+        },
+    )?;
+    let prev_left_id_mapper = SyncIdMapper::new(prev_left_dir)?;
     let prev_left_envelopes = HashMap::from_iter(
         prev_left
             .list_envelopes("inbox", 0, 0)?
@@ -102,11 +111,13 @@ pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
     let prev_left_envelopes = prev_left_id_mapper.map_ids(prev_left_envelopes);
 
     let next_left_dir = sync_dir.join(".Cache");
-    let next_left_cfg = MaildirConfig {
-        root_dir: next_left_dir.clone(),
-    };
-    let next_left = MaildirBackend::new(config, &next_left_cfg)?;
-    let mut next_left_id_mapper = SyncIdMapper::new(next_left_dir)?;
+    let next_left = MaildirBackend::new(
+        config.clone(),
+        MaildirConfig {
+            root_dir: next_left_dir.clone(),
+        },
+    )?;
+    let next_left_id_mapper = SyncIdMapper::new(next_left_dir)?;
     let next_left_envelopes = HashMap::from_iter(
         next_left
             .list_envelopes("inbox", 0, 0)?
@@ -116,11 +127,13 @@ pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
     let next_left_envelopes = next_left_id_mapper.map_ids(next_left_envelopes);
 
     let prev_right_dir = sync_dir.clone();
-    let prev_right_cfg = MaildirConfig {
-        root_dir: prev_right_dir.clone(),
-    };
-    let prev_right = MaildirBackend::new(config, &prev_right_cfg)?;
-    let mut prev_right_id_mapper = SyncIdMapper::new(prev_right_dir)?;
+    let prev_right = MaildirBackend::new(
+        config.clone(),
+        MaildirConfig {
+            root_dir: prev_right_dir.clone(),
+        },
+    )?;
+    let prev_right_id_mapper = SyncIdMapper::new(prev_right_dir)?;
     let prev_right_envelopes = HashMap::from_iter(
         prev_right
             .list_envelopes("inbox", 0, 0)?
@@ -136,102 +149,165 @@ pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
         next_right_envelopes,
     );
 
-    for hunk in patch {
-        match hunk {
-            Hunk::CopyEmail(internal_id, flags, source, target) => {
-                let internal_ids = vec![internal_id.as_str()];
-                let emails = match source {
-                    HunkKind::PrevLeft => prev_left.get_emails_internal("inbox", internal_ids),
-                    HunkKind::NextLeft => next_left.get_emails_internal("inbox", internal_ids),
-                    HunkKind::PrevRight => prev_right.get_emails_internal("inbox", internal_ids),
-                    HunkKind::NextRight => next_right.get_emails_internal("inbox", internal_ids),
-                }?;
-                let emails = emails.to_vec();
-                let email = emails
-                    .first()
-                    .ok_or_else(|| Error::FindEmailError(internal_id.clone()))?;
+    let prev_left = Mutex::new(prev_left);
+    let next_left = Mutex::new(next_left);
+    let prev_right = Mutex::new(prev_right);
+    let next_right = Mutex::new(next_right);
 
-                match target {
-                    HunkKind::PrevLeft => prev_left_id_mapper.insert([(
-                        prev_left.add_email_internal("inbox", email.raw()?, &flags)?,
-                        internal_id,
-                    )]),
-                    HunkKind::NextLeft => next_left_id_mapper.insert([(
-                        next_left.add_email_internal("inbox", email.raw()?, &flags)?,
-                        internal_id,
-                    )]),
-                    HunkKind::PrevRight => prev_right_id_mapper.insert([(
-                        prev_right.add_email_internal("inbox", email.raw()?, &flags)?,
-                        internal_id,
-                    )]),
-                    HunkKind::NextRight => {
-                        next_right.add_email_internal("inbox", email.raw()?, &flags)?;
+    let prev_left_id_mapper = Mutex::new(prev_left_id_mapper);
+    let next_left_id_mapper = Mutex::new(next_left_id_mapper);
+    let prev_right_id_mapper = Mutex::new(prev_right_id_mapper);
+
+    for chunks in patch.chunks(10) {
+        chunks.par_iter().try_for_each(|hunk| {
+            debug!("processing hunk {:?}…", hunk);
+
+            let op = || {
+                let prev_left = prev_left
+                    .lock()
+                    .map_err(|err| Error::GetBackendLockError(err.to_string()))?;
+                let next_left = next_left
+                    .lock()
+                    .map_err(|err| Error::GetBackendLockError(err.to_string()))?;
+                let prev_right = prev_right
+                    .lock()
+                    .map_err(|err| Error::GetBackendLockError(err.to_string()))?;
+                let next_right = next_right
+                    .lock()
+                    .map_err(|err| Error::GetBackendLockError(err.to_string()))?;
+
+                let mut prev_left_id_mapper = prev_left_id_mapper
+                    .lock()
+                    .map_err(|err| Error::GetIdMapperLockError(err.to_string()))?;
+                let mut next_left_id_mapper = next_left_id_mapper
+                    .lock()
+                    .map_err(|err| Error::GetIdMapperLockError(err.to_string()))?;
+                let mut prev_right_id_mapper = prev_right_id_mapper
+                    .lock()
+                    .map_err(|err| Error::GetIdMapperLockError(err.to_string()))?;
+
+                match hunk {
+                    Hunk::CopyEmail(internal_id, flags, source, target) => {
+                        let internal_ids = vec![internal_id.as_str()];
+                        let emails = match source {
+                            HunkKind::PrevLeft => {
+                                prev_left.get_emails_internal("inbox", internal_ids)
+                            }
+                            HunkKind::NextLeft => {
+                                next_left.get_emails_internal("inbox", internal_ids)
+                            }
+                            HunkKind::PrevRight => {
+                                prev_right.get_emails_internal("inbox", internal_ids)
+                            }
+                            HunkKind::NextRight => {
+                                next_right.get_emails_internal("inbox", internal_ids)
+                            }
+                        }?;
+                        let emails = emails.to_vec();
+                        let email = emails
+                            .first()
+                            .ok_or_else(|| Error::FindEmailError(internal_id.clone()))?;
+
+                        match target {
+                            HunkKind::PrevLeft => prev_left_id_mapper.insert([(
+                                prev_left.add_email_internal("inbox", email.raw()?, &flags)?,
+                                internal_id,
+                            )]),
+                            HunkKind::NextLeft => next_left_id_mapper.insert([(
+                                next_left.add_email_internal("inbox", email.raw()?, &flags)?,
+                                internal_id,
+                            )]),
+                            HunkKind::PrevRight => prev_right_id_mapper.insert([(
+                                prev_right.add_email_internal("inbox", email.raw()?, &flags)?,
+                                internal_id,
+                            )]),
+                            HunkKind::NextRight => {
+                                next_right.add_email_internal("inbox", email.raw()?, &flags)?;
+                            }
+                        };
+                    }
+                    Hunk::RemoveEmail(internal_id, target) => {
+                        let internal_ids = vec![internal_id.as_str()];
+
+                        match target {
+                            HunkKind::PrevLeft => {
+                                prev_left_id_mapper.remove(&internal_id);
+                                prev_left.delete_emails_internal("inbox", internal_ids.clone())
+                            }
+                            HunkKind::NextLeft => {
+                                next_left_id_mapper.remove(&internal_id);
+                                next_left.delete_emails_internal("inbox", internal_ids.clone())
+                            }
+                            HunkKind::PrevRight => {
+                                prev_right_id_mapper.remove(&internal_id);
+                                prev_right.delete_emails_internal("inbox", internal_ids.clone())
+                            }
+                            HunkKind::NextRight => {
+                                next_right.delete_emails_internal("inbox", internal_ids.clone())
+                            }
+                        }?;
+                    }
+                    Hunk::AddFlag(internal_id, flag, target) => {
+                        let internal_ids = vec![internal_id.as_str()];
+                        let flags = Flags::from_iter([flag.clone()]);
+                        match target {
+                            HunkKind::PrevLeft => {
+                                prev_left.add_flags_internal("inbox", internal_ids.clone(), &flags)
+                            }
+                            HunkKind::NextLeft => {
+                                next_left.add_flags_internal("inbox", internal_ids.clone(), &flags)
+                            }
+                            HunkKind::PrevRight => {
+                                prev_right.add_flags_internal("inbox", internal_ids.clone(), &flags)
+                            }
+                            HunkKind::NextRight => {
+                                next_right.add_flags_internal("inbox", internal_ids.clone(), &flags)
+                            }
+                        }?;
+                    }
+                    Hunk::RemoveFlag(internal_id, flag, target) => {
+                        let internal_ids = vec![internal_id.as_str()];
+                        let flags = Flags::from_iter([flag.clone()]);
+                        match target {
+                            HunkKind::PrevLeft => prev_left.remove_flags_internal(
+                                "inbox",
+                                internal_ids.clone(),
+                                &flags,
+                            ),
+                            HunkKind::NextLeft => next_left.remove_flags_internal(
+                                "inbox",
+                                internal_ids.clone(),
+                                &flags,
+                            ),
+                            HunkKind::PrevRight => prev_right.remove_flags_internal(
+                                "inbox",
+                                internal_ids.clone(),
+                                &flags,
+                            ),
+                            HunkKind::NextRight => next_right.remove_flags_internal(
+                                "inbox",
+                                internal_ids.clone(),
+                                &flags,
+                            ),
+                        }?;
                     }
                 };
-            }
-            Hunk::RemoveEmail(internal_id, target) => {
-                let internal_ids = vec![internal_id.as_str()];
 
-                match target {
-                    HunkKind::PrevLeft => {
-                        prev_left_id_mapper.remove(&internal_id);
-                        prev_left.delete_emails_internal("inbox", internal_ids.clone())
-                    }
-                    HunkKind::NextLeft => {
-                        next_left_id_mapper.remove(&internal_id);
-                        next_left.delete_emails_internal("inbox", internal_ids.clone())
-                    }
-                    HunkKind::PrevRight => {
-                        prev_right_id_mapper.remove(&internal_id);
-                        prev_right.delete_emails_internal("inbox", internal_ids.clone())
-                    }
-                    HunkKind::NextRight => {
-                        next_right.delete_emails_internal("inbox", internal_ids.clone())
-                    }
-                }?;
+                Result::Ok(())
+            };
+
+            if let Err(err) = op() {
+                warn!("error while processing hunk {:?}, skipping it", hunk);
+                error!("{}", err.to_string());
             }
-            Hunk::AddFlag(internal_id, flag, target) => {
-                let internal_ids = vec![internal_id.as_str()];
-                let flags = Flags::from_iter([flag]);
-                match target {
-                    HunkKind::PrevLeft => {
-                        prev_left.add_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                    HunkKind::NextLeft => {
-                        next_left.add_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                    HunkKind::PrevRight => {
-                        prev_right.add_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                    HunkKind::NextRight => {
-                        next_right.add_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                }?;
-            }
-            Hunk::RemoveFlag(internal_id, flag, target) => {
-                let internal_ids = vec![internal_id.as_str()];
-                let flags = Flags::from_iter([flag]);
-                match target {
-                    HunkKind::PrevLeft => {
-                        prev_left.remove_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                    HunkKind::NextLeft => {
-                        next_left.remove_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                    HunkKind::PrevRight => {
-                        prev_right.remove_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                    HunkKind::NextRight => {
-                        next_right.remove_flags_internal("inbox", internal_ids.clone(), &flags)
-                    }
-                }?;
-            }
-        }
+
+            Result::Ok(())
+        })?;
     }
 
-    prev_left_id_mapper.save()?;
-    next_left_id_mapper.save()?;
-    prev_right_id_mapper.save()?;
+    prev_left_id_mapper.lock().unwrap().save()?;
+    next_left_id_mapper.lock().unwrap().save()?;
+    prev_right_id_mapper.lock().unwrap().save()?;
 
     Ok(())
 }

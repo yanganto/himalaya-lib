@@ -27,17 +27,20 @@ fn test_sync() {
 
     // set up imap backend
 
-    let imap_config = ImapConfig {
-        host: "localhost".into(),
-        port: 3143,
-        ssl: Some(false),
-        starttls: Some(false),
-        insecure: Some(true),
-        login: "bob@localhost".into(),
-        passwd_cmd: "echo 'password'".into(),
-        ..ImapConfig::default()
-    };
-    let imap = ImapBackend::new(&config, &imap_config).unwrap();
+    let imap = ImapBackend::new(
+        config.clone(),
+        ImapConfig {
+            host: "localhost".into(),
+            port: 3143,
+            ssl: Some(false),
+            starttls: Some(false),
+            insecure: Some(true),
+            login: "bob@localhost".into(),
+            passwd_cmd: "echo 'password'".into(),
+            ..ImapConfig::default()
+        },
+    )
+    .unwrap();
 
     // purge folders
 
@@ -97,7 +100,7 @@ fn test_sync() {
     let mdir_config = MaildirConfig {
         root_dir: sync_dir.clone(),
     };
-    let mdir = MaildirBackend::new(&config, &mdir_config).unwrap();
+    let mdir = MaildirBackend::new(config.clone(), mdir_config).unwrap();
 
     // sync imap account
 
