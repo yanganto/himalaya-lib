@@ -2,6 +2,7 @@ use dirs::data_dir;
 use log::{debug, error, warn};
 use rayon::prelude::*;
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fs::OpenOptions,
     io::{self, prelude::*, BufReader},
@@ -96,10 +97,10 @@ pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
 
     let prev_left_dir = sync_dir.join(".PrevCache");
     let prev_left = MaildirBackend::new(
-        config.clone(),
-        MaildirConfig {
+        Cow::Borrowed(config),
+        Cow::Owned(MaildirConfig {
             root_dir: prev_left_dir.clone(),
-        },
+        }),
     )?;
     let prev_left_id_mapper = SyncIdMapper::new(prev_left_dir)?;
     let prev_left_envelopes = HashMap::from_iter(
@@ -112,10 +113,10 @@ pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
 
     let next_left_dir = sync_dir.join(".Cache");
     let next_left = MaildirBackend::new(
-        config.clone(),
-        MaildirConfig {
+        Cow::Borrowed(config),
+        Cow::Owned(MaildirConfig {
             root_dir: next_left_dir.clone(),
-        },
+        }),
     )?;
     let next_left_id_mapper = SyncIdMapper::new(next_left_dir)?;
     let next_left_envelopes = HashMap::from_iter(
@@ -128,10 +129,10 @@ pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
 
     let prev_right_dir = sync_dir.clone();
     let prev_right = MaildirBackend::new(
-        config.clone(),
-        MaildirConfig {
+        Cow::Borrowed(config),
+        Cow::Owned(MaildirConfig {
             root_dir: prev_right_dir.clone(),
-        },
+        }),
     )?;
     let prev_right_id_mapper = SyncIdMapper::new(prev_right_dir)?;
     let prev_right_envelopes = HashMap::from_iter(

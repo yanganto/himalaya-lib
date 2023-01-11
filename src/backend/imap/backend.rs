@@ -7,6 +7,7 @@ use log::{debug, log_enabled, trace, Level};
 use native_tls::{TlsConnector, TlsStream};
 use std::{
     any::Any,
+    borrow::Cow,
     collections::HashSet,
     convert::TryInto,
     io::{self, Read, Write},
@@ -161,14 +162,17 @@ impl Write for ImapSessionStream {
 
 type ImapSession = imap::Session<ImapSessionStream>;
 
-pub struct ImapBackend {
-    account_config: AccountConfig,
-    imap_config: ImapConfig,
+pub struct ImapBackend<'a> {
+    account_config: Cow<'a, AccountConfig>,
+    imap_config: Cow<'a, ImapConfig>,
     session: Mutex<ImapSession>,
 }
 
-impl ImapBackend {
-    pub fn new(account_config: AccountConfig, imap_config: ImapConfig) -> Result<Self> {
+impl<'a> ImapBackend<'a> {
+    pub fn new(
+        account_config: Cow<'a, AccountConfig>,
+        imap_config: Cow<'a, ImapConfig>,
+    ) -> Result<Self> {
         let builder = TlsConnector::builder()
             .danger_accept_invalid_certs(imap_config.insecure())
             .danger_accept_invalid_hostnames(imap_config.insecure())
@@ -313,7 +317,7 @@ impl ImapBackend {
     }
 }
 
-impl Backend for ImapBackend {
+impl<'a> Backend for ImapBackend<'a> {
     fn name(&self) -> String {
         self.account_config.name.clone()
     }
@@ -924,7 +928,7 @@ impl Backend for ImapBackend {
         Ok(())
     }
 
-    fn as_any(&'static self) -> &(dyn Any) {
+    fn as_any(&self) -> &(dyn Any + 'a) {
         self
     }
 }

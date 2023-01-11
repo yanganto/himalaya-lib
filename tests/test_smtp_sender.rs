@@ -1,4 +1,4 @@
-use std::{thread, time::Duration};
+use std::{borrow::Cow, thread, time::Duration};
 
 use himalaya_lib::{AccountConfig, CompilerBuilder, Sender, TplBuilder};
 
@@ -25,8 +25,8 @@ fn test_smtp_sender() {
     let mut smtp = Smtp::new(&account_config, &smtp_config);
 
     let imap = ImapBackend::new(
-        account_config.clone(),
-        ImapConfig {
+        Cow::Borrowed(&account_config),
+        Cow::Owned(ImapConfig {
             host: "localhost".into(),
             port: 3143,
             ssl: Some(false),
@@ -35,7 +35,7 @@ fn test_smtp_sender() {
             login: "bob@localhost".into(),
             passwd_cmd: "echo password".into(),
             ..ImapConfig::default()
-        },
+        }),
     )
     .unwrap();
 

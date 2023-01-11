@@ -3,7 +3,7 @@
 //! This module exposes the backend trait, which can be used to create
 //! custom backend implementations.
 
-use std::{any::Any, result};
+use std::{any::Any, borrow::Cow, result};
 use thiserror::Error;
 
 use crate::{
@@ -122,19 +122,19 @@ pub struct BackendBuilder;
 
 impl<'a> BackendBuilder {
     pub fn build(
-        account_config: AccountConfig,
-        backend_config: BackendConfig,
+        account_config: &'a AccountConfig,
+        backend_config: &'a BackendConfig,
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
             BackendConfig::Imap(imap_config) => Ok(Box::new(ImapBackend::new(
-                account_config.clone(),
-                imap_config,
+                Cow::Borrowed(account_config),
+                Cow::Borrowed(imap_config),
             )?)),
             #[cfg(feature = "maildir-backend")]
             BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
-                account_config.clone(),
-                maildir_config,
+                Cow::Borrowed(account_config),
+                Cow::Borrowed(maildir_config),
             )?)),
             #[cfg(feature = "notmuch-backend")]
             BackendConfig::Notmuch(config) => {

@@ -1,5 +1,5 @@
 #[cfg(feature = "imap-backend")]
-use std::{thread, time::Duration};
+use std::{borrow::Cow, thread, time::Duration};
 
 use himalaya_lib::{AccountConfig, CompilerBuilder, Sender, Sendmail, SendmailConfig, TplBuilder};
 
@@ -24,15 +24,15 @@ fn test_sendmail_sender() {
     };
     let mut sendmail = Sendmail::new(&account_config, &sendmail_config);
     let imap = ImapBackend::new(
-        account_config.clone(),
-        ImapConfig {
+        Cow::Borrowed(&account_config),
+        Cow::Owned(ImapConfig {
             host: "localhost".into(),
             port: 3143,
             ssl: Some(false),
             login: "bob@localhost".into(),
             passwd_cmd: "echo 'password'".into(),
             ..ImapConfig::default()
-        },
+        }),
     )
     .unwrap();
 

@@ -1,5 +1,7 @@
 #[cfg(feature = "imap-backend")]
 use concat_with::concat_line;
+#[cfg(feature = "imap-backend")]
+use std::borrow::Cow;
 
 #[cfg(feature = "imap-backend")]
 use himalaya_lib::{AccountConfig, Backend, CompilerBuilder, ImapBackend, ImapConfig, TplBuilder};
@@ -16,8 +18,8 @@ fn test_imap_backend() {
     };
 
     let imap = ImapBackend::new(
-        config.clone(),
-        ImapConfig {
+        Cow::Borrowed(&config),
+        Cow::Owned(ImapConfig {
             host: "localhost".into(),
             port: 3143,
             ssl: Some(false),
@@ -26,7 +28,7 @@ fn test_imap_backend() {
             login: "bob@localhost".into(),
             passwd_cmd: "echo 'password'".into(),
             ..ImapConfig::default()
-        },
+        }),
     )
     .unwrap();
 

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     env::temp_dir,
     fs::{create_dir_all, remove_dir_all},
@@ -28,8 +29,8 @@ fn test_sync() {
     // set up imap backend
 
     let imap = ImapBackend::new(
-        config.clone(),
-        ImapConfig {
+        Cow::Borrowed(&config),
+        Cow::Owned(ImapConfig {
             host: "localhost".into(),
             port: 3143,
             ssl: Some(false),
@@ -38,7 +39,7 @@ fn test_sync() {
             login: "bob@localhost".into(),
             passwd_cmd: "echo 'password'".into(),
             ..ImapConfig::default()
-        },
+        }),
     )
     .unwrap();
 
@@ -97,10 +98,13 @@ fn test_sync() {
 
     // init maildir backend reader
 
-    let mdir_config = MaildirConfig {
-        root_dir: sync_dir.clone(),
-    };
-    let mdir = MaildirBackend::new(config.clone(), mdir_config).unwrap();
+    let mdir = MaildirBackend::new(
+        Cow::Borrowed(&config),
+        Cow::Owned(MaildirConfig {
+            root_dir: sync_dir.clone(),
+        }),
+    )
+    .unwrap();
 
     // sync imap account
 
