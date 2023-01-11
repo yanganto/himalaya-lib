@@ -22,7 +22,7 @@ use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7
 
 use crate::{
     account, backend, email, envelope, process, AccountConfig, Backend, Emails, Envelope,
-    Envelopes, Flag, Flags, Folder, Folders, ImapConfig,
+    Envelopes, Flag, Flags, Folder, Folders, ImapConfig, ThreadSafeBackend,
 };
 
 #[derive(Error, Debug)]
@@ -932,3 +932,5 @@ impl<'a> Backend for ImapBackend<'a> {
         self
     }
 }
+
+impl ThreadSafeBackend for ImapBackend<'_> {}

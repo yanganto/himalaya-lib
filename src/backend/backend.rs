@@ -45,7 +45,7 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub trait Backend: Send + Sync {
+pub trait Backend {
     fn name(&self) -> String;
 
     fn add_folder(&self, folder: &str) -> Result<()>;
@@ -117,6 +117,9 @@ pub trait Backend: Send + Sync {
     fn as_any(&'static self) -> &(dyn Any);
 }
 
+// TODO: auto trait?
+pub trait ThreadSafeBackend: Backend + Send + Sync {}
+
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct BackendBuilder;
 
@@ -137,9 +140,10 @@ impl<'a> BackendBuilder {
                 Cow::Borrowed(maildir_config),
             )?)),
             #[cfg(feature = "notmuch-backend")]
-            BackendConfig::Notmuch(config) => {
-                Ok(Box::new(NotmuchBackend::new(account_config, config)?))
-            }
+            BackendConfig::Notmuch(notmuch_config) => Ok(Box::new(NotmuchBackend::new(
+                Cow::Borrowed(account_config),
+                Cow::Borrowed(notmuch_config),
+            )?)),
             BackendConfig::None => Err(Error::BuildBackendError),
         }
     }

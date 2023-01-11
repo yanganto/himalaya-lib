@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     backend, email, AccountConfig, Backend, Envelope, Flag, Flags, MaildirBackend, MaildirConfig,
+    ThreadSafeBackend,
 };
 
 #[derive(Debug, Error)]
@@ -73,7 +74,7 @@ pub enum Hunk {
 
 type Patch = Vec<Hunk>;
 
-pub fn sync<B: Backend>(config: &AccountConfig, next_right: &B) -> Result<()> {
+pub fn sync<B: ThreadSafeBackend>(config: &AccountConfig, next_right: &B) -> Result<()> {
     if !config.sync {
         return Ok(());
     }

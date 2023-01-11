@@ -21,7 +21,7 @@ use crate::{
     envelope::maildir::{envelope, envelopes},
     flag::maildir::flags,
     id_mapper, AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders,
-    IdMapper, MaildirConfig, DEFAULT_INBOX_FOLDER,
+    IdMapper, MaildirConfig, ThreadSafeBackend, DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
@@ -711,3 +711,5 @@ impl<'a> Backend for MaildirBackend<'a> {
         self
     }
 }
+
+impl ThreadSafeBackend for MaildirBackend<'_> {}

@@ -1,6 +1,7 @@
 use lettre::address::AddressError;
 use log::{debug, trace};
-use std::{any::Any, fs, io, result};
+use notmuch::Database;
+use std::{any::Any, borrow::Cow, fs, io, result};
 use thiserror::Error;
 
 use crate::{
@@ -75,15 +76,17 @@ pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the Notmuch backend.
 pub struct NotmuchBackend<'a> {
-    account_config: &'a AccountConfig,
-    notmuch_config: &'a NotmuchConfig,
-    db: notmuch::Database,
+    account_config: Cow<'a, AccountConfig>,
+    notmuch_config: Cow<'a, NotmuchConfig>,
+    db: Database,
 }
+
+unsafe impl Sync for NotmuchBackend<'_> {}
 
 impl<'a> NotmuchBackend<'a> {
     pub fn new(
-        account_config: &'a AccountConfig,
-        notmuch_config: &'a NotmuchConfig,
+        account_config: Cow<'a, AccountConfig>,
+        notmuch_config: Cow<'a, NotmuchConfig>,
     ) -> Result<Self> {
         let db = notmuch::Database::open(
             notmuch_config.db_path.clone(),
@@ -242,12 +245,13 @@ impl<'a> Backend for NotmuchBackend<'a> {
         let mut flags = flags.clone();
         flags.insert(Flag::Seen);
 
-        // Adds the message to the maildir folder and gets its hash.
-        let mdir_config = MaildirConfig {
-            root_dir: self.notmuch_config.db_path.clone(),
-        };
         // TODO: find a way to move this to the Backend::connect method.
-        let mdir = MaildirBackend::new(self.account_config, &mdir_config)?;
+        let mdir = MaildirBackend::new(
+            Cow::Borrowed(&self.account_config),
+            Cow::Owned(MaildirConfig {
+                root_dir: self.notmuch_config.db_path.clone(),
+            }),
+        )?;
         let hash = mdir.add_email("", email, &flags)?;
         debug!("hash: {:?}", hash);
 
