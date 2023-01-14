@@ -26,6 +26,8 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot parse header date as timestamp")]
+    ParseDateHeaderError,
     #[error("cannot get envelope by short hash {0}")]
     GetEnvelopeError(String),
     #[error("cannot get maildir backend from config")]
@@ -89,6 +91,15 @@ pub type Result<T> = result::Result<T, Error>;
 pub struct MaildirBackend<'a> {
     account_config: Cow<'a, AccountConfig>,
     mdir: maildir::Maildir,
+}
+
+impl Clone for MaildirBackend<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            account_config: self.account_config.clone(),
+            mdir: self.mdir.path().to_owned().into(),
+        }
+    }
 }
 
 impl<'a> MaildirBackend<'a> {

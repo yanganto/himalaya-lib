@@ -1,3 +1,5 @@
+use env_logger;
+use log::LevelFilter;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -6,12 +8,17 @@ use std::{
 };
 
 use himalaya_lib::{
-    sync, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackend, ImapConfig,
-    MaildirBackend, MaildirConfig, SyncIdMapper, TplBuilder,
+    imap::ImapBackendBuilder, sync, AccountConfig, Backend, CompilerBuilder, Flag, Flags,
+    ImapConfig, MaildirBackend, MaildirConfig, SyncIdMapper, TplBuilder,
 };
 
 #[test]
 fn test_sync() {
+    env_logger::builder()
+        .is_test(true)
+        .filter_level(LevelFilter::Debug)
+        .init();
+
     // set up account
 
     let sync_dir = temp_dir().join("himalaya-sync");
@@ -28,20 +35,22 @@ fn test_sync() {
 
     // set up imap backend
 
-    let imap = ImapBackend::new(
-        Cow::Borrowed(&config),
-        Cow::Owned(ImapConfig {
-            host: "localhost".into(),
-            port: 3143,
-            ssl: Some(false),
-            starttls: Some(false),
-            insecure: Some(true),
-            login: "bob@localhost".into(),
-            passwd_cmd: "echo 'password'".into(),
-            ..ImapConfig::default()
-        }),
-    )
-    .unwrap();
+    let imap = ImapBackendBuilder::default()
+        .pool_size(10)
+        .build(
+            Cow::Borrowed(&config),
+            Cow::Owned(ImapConfig {
+                host: "localhost".into(),
+                port: 3143,
+                ssl: Some(false),
+                starttls: Some(false),
+                insecure: Some(true),
+                login: "bob@localhost".into(),
+                passwd_cmd: "echo 'password'".into(),
+                ..ImapConfig::default()
+            }),
+        )
+        .unwrap();
 
     // purge folders
 
@@ -146,14 +155,5 @@ fn test_sync() {
     let email = emails.first().unwrap().parsed().unwrap();
     assert_eq!("C\r\n", email.get_body().unwrap());
 
-    // check sync id mapper file validity
-
-    assert_eq!(
-        HashMap::from_iter([
-            (mdir_internal_id_a, imap_internal_id_a),
-            (mdir_internal_id_b, imap_internal_id_b),
-            (mdir_internal_id_c, imap_internal_id_c),
-        ]),
-        SyncIdMapper::new(sync_dir).unwrap().map,
-    );
+    // TODO: check cache validity
 }

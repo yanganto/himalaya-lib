@@ -13,7 +13,8 @@ use std::{
     io::{self, Read, Write},
     net::TcpStream,
     result,
-    sync::Mutex,
+    string::FromUtf8Error,
+    sync::{Mutex, MutexGuard},
     thread,
     time::Duration,
 };
@@ -27,8 +28,12 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("cannot parse Message-ID of email {0}")]
+    ParseMessageIdError(#[source] FromUtf8Error, u32),
     #[error("cannot lock imap session: {0}")]
     LockSessionError(String),
+    #[error("cannot lock imap sessions pool cursor: {0}")]
+    LockSessionsPoolCursorError(String),
     #[error("cannot get imap session: session not initialized")]
     GetSessionNotInitializedError,
     #[error("cannot get last imap message uid")]
@@ -42,6 +47,8 @@ pub enum Error {
     GetEnvelopeError(String),
     #[error("cannot get sender of message {0}")]
     GetSenderError(u32),
+    #[error("cannot get internal date of email {0}")]
+    GetInternalDateError(u32),
     #[error("cannot get imap session")]
     GetSessionError,
     #[error("cannot retrieve message {0}'s uid")]
@@ -121,7 +128,7 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-enum ImapSessionStream {
+pub enum ImapSessionStream {
     Tls(TlsStream<TcpStream>),
     Tcp(TcpStream),
 }
@@ -160,31 +167,68 @@ impl Write for ImapSessionStream {
     }
 }
 
-type ImapSession = imap::Session<ImapSessionStream>;
+pub type ImapSession = imap::Session<ImapSessionStream>;
+
+pub struct ImapBackendBuilder {
+    sessions_pool_size: usize,
+}
+
+impl Default for ImapBackendBuilder {
+    fn default() -> Self {
+        Self {
+            sessions_pool_size: 1,
+        }
+    }
+}
+
+impl<'a> ImapBackendBuilder {
+    pub fn pool_size(mut self, size: usize) -> Self {
+        self.sessions_pool_size = size;
+        self
+    }
+
+    pub fn build(
+        &self,
+        account_config: Cow<'a, AccountConfig>,
+        imap_config: Cow<'a, ImapConfig>,
+    ) -> Result<ImapBackend<'a>> {
+        Ok(ImapBackend {
+            account_config,
+            imap_config: imap_config.clone(),
+            sessions_pool_size: self.sessions_pool_size,
+            sessions_pool_cursor: Mutex::new(0),
+            sessions_pool: (0..self.sessions_pool_size).try_fold(vec![], |mut pool, _| {
+                ImapBackend::create_session(Cow::Borrowed(&imap_config)).map(|session| {
+                    pool.push(Mutex::new(session));
+                    pool
+                })
+            })?,
+        })
+    }
+}
 
 pub struct ImapBackend<'a> {
     account_config: Cow<'a, AccountConfig>,
     imap_config: Cow<'a, ImapConfig>,
-    session: Mutex<ImapSession>,
+    sessions_pool_size: usize,
+    sessions_pool_cursor: Mutex<usize>,
+    sessions_pool: Vec<Mutex<ImapSession>>,
 }
 
 impl<'a> ImapBackend<'a> {
-    pub fn new(
-        account_config: Cow<'a, AccountConfig>,
-        imap_config: Cow<'a, ImapConfig>,
-    ) -> Result<Self> {
+    fn create_session(config: Cow<'a, ImapConfig>) -> Result<ImapSession> {
         let builder = TlsConnector::builder()
-            .danger_accept_invalid_certs(imap_config.insecure())
-            .danger_accept_invalid_hostnames(imap_config.insecure())
+            .danger_accept_invalid_certs(config.insecure())
+            .danger_accept_invalid_hostnames(config.insecure())
             .build()
             .map_err(Error::CreateTlsConnectorError)?;
 
-        let mut client_builder = imap::ClientBuilder::new(&imap_config.host, imap_config.port);
-        if imap_config.starttls() {
+        let mut client_builder = imap::ClientBuilder::new(&config.host, config.port);
+        if config.starttls() {
             client_builder.starttls();
         }
 
-        let client = if imap_config.ssl() {
+        let client = if config.ssl() {
             client_builder.connect(|domain, tcp| {
                 let connector = TlsConnector::connect(&builder, domain, tcp)?;
                 Ok(ImapSessionStream::Tls(connector))
@@ -195,15 +239,31 @@ impl<'a> ImapBackend<'a> {
         .map_err(Error::ConnectImapServerError)?;
 
         let mut session = client
-            .login(&imap_config.login, &imap_config.passwd()?)
+            .login(&config.login, &config.passwd()?)
             .map_err(|res| Error::LoginImapServerError(res.0))?;
         session.debug = log_enabled!(Level::Trace);
 
-        Ok(Self {
-            account_config,
-            imap_config,
-            session: Mutex::new(session),
-        })
+        Result::Ok(session)
+    }
+
+    pub fn new(
+        account_config: Cow<'a, AccountConfig>,
+        imap_config: Cow<'a, ImapConfig>,
+    ) -> Result<Self> {
+        ImapBackendBuilder::default().build(account_config, imap_config)
+    }
+
+    pub fn session(&self) -> Result<MutexGuard<ImapSession>> {
+        let mut cursor = self
+            .sessions_pool_cursor
+            .lock()
+            .map_err(|err| Error::LockSessionsPoolCursorError(err.to_string()))?;
+        let session = self.sessions_pool.get(*cursor).unwrap();
+        println!("cursor: {:?}", *cursor);
+        *cursor = (*cursor + 1) % self.sessions_pool_size;
+        session
+            .lock()
+            .map_err(|err| Error::LockSessionError(err.to_string()))
     }
 
     fn search_new_msgs(&self, session: &mut ImapSession, query: &str) -> Result<Vec<u32>> {
@@ -219,10 +279,7 @@ impl<'a> ImapBackend<'a> {
     }
 
     pub fn notify(&self, keepalive: u64, mbox: &str) -> Result<()> {
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .examine(mbox)
@@ -284,10 +341,7 @@ impl<'a> ImapBackend<'a> {
 
     pub fn watch(&self, keepalive: u64, mbox: &str) -> Result<()> {
         debug!("examine folder: {}", mbox);
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .examine(mbox)
@@ -323,10 +377,7 @@ impl<'a> Backend for ImapBackend<'a> {
     }
 
     fn add_folder(&self, folder: &str) -> backend::Result<()> {
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
         let folder = encode_utf7(folder.to_owned());
 
         session
@@ -337,10 +388,7 @@ impl<'a> Backend for ImapBackend<'a> {
     }
 
     fn list_folder(&self) -> backend::Result<Folders> {
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
         let imap_mboxes = session
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
@@ -369,10 +417,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let flags = Flags::from_iter([Flag::Deleted]);
         let seq = String::from("1:*");
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -388,10 +433,7 @@ impl<'a> Backend for ImapBackend<'a> {
     }
 
     fn delete_folder(&self, folder: &str) -> backend::Result<()> {
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
         let folder = encode_utf7(folder.to_owned());
 
         session
@@ -408,10 +450,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let folder = encode_utf7(folder.to_owned());
         debug!("utf7 encoded folder: {:?}", folder);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -433,10 +472,7 @@ impl<'a> Backend for ImapBackend<'a> {
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
         let folder = encode_utf7(folder.to_owned());
         let last_seq = session
             .select(&folder)
@@ -473,10 +509,7 @@ impl<'a> Backend for ImapBackend<'a> {
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
         let folder = encode_utf7(folder.to_owned());
         let last_seq = session
             .select(&folder)
@@ -528,10 +561,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let mut flags = flags.clone();
         flags.insert(Flag::Seen);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .append(&folder, email)
@@ -561,10 +591,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let mut flags = flags.clone();
         flags.insert(Flag::Seen);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .append(&folder, email)
@@ -588,10 +615,8 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("utf7 encoded folder: {:?}", folder);
 
         let seq = ids.join(",");
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -615,20 +640,19 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("utf7 encoded folder: {:?}", folder);
 
         let seq = internal_ids.join(",");
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)
             .map_err(|err| Error::SelectFolderError(err, folder.clone()))?;
-
         let fetches = session
             .uid_fetch(&seq, "BODY[]")
             .map_err(|err| Error::GetEmailsBySeqError(err, seq))?;
+        let emails = Emails::try_from(fetches)?;
 
-        Ok(Emails::try_from(fetches)?)
+        thread::sleep(Duration::from_secs(1));
+
+        Ok(emails)
     }
 
     fn copy_emails(
@@ -647,10 +671,7 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("from folder (utf7 encoded): {}", from_folder_encoded);
         debug!("to folder (utf7 encoded): {}", to_folder_encoded);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(from_folder_encoded)
@@ -678,10 +699,7 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("from folder (utf7 encoded): {}", from_folder_encoded);
         debug!("to folder (utf7 encoded): {}", to_folder_encoded);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(from_folder_encoded)
@@ -709,10 +727,7 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("from folder (utf7 encoded): {}", from_folder_encoded);
         debug!("to folder (utf7 encoded): {}", to_folder_encoded);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(from_folder_encoded)
@@ -740,10 +755,7 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("from folder (utf7 encoded): {}", from_folder_encoded);
         debug!("to folder (utf7 encoded): {}", to_folder_encoded);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(from_folder_encoded)
@@ -772,10 +784,8 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("folder (utf7 encoded): {}", folder);
 
         let seq = ids.join(",");
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -804,10 +814,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let folder = encode_utf7(folder.to_owned());
         debug!("folder (utf7 encoded): {}", folder);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -831,10 +838,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let folder = encode_utf7(folder.to_owned());
         debug!("folder (utf7 encoded): {}", folder);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -860,10 +864,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let folder = encode_utf7(folder.to_owned());
         debug!("folder (utf7 encoded): {}", folder);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -884,10 +885,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let folder = encode_utf7(folder.to_owned());
         debug!("folder (utf7 encoded): {}", folder);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)
@@ -913,10 +911,7 @@ impl<'a> Backend for ImapBackend<'a> {
         let folder = encode_utf7(folder.to_owned());
         debug!("folder (utf7 encoded): {}", folder);
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|err| Error::LockSessionError(err.to_string()))?;
+        let mut session = self.session()?;
 
         session
             .select(&folder)

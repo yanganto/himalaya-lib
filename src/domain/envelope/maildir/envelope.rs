@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{Local, NaiveDateTime};
 use log::{trace, warn};
 use mailparse::MailAddr;
 
@@ -28,18 +28,6 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
         trace!("header value: {}", val);
 
         match key.to_lowercase().as_str() {
-            "date" => {
-                envelope.date = mailparse::dateparse(&val)
-                    .map_err(|err| {
-                        warn!("skipping invalid date {}", val);
-                        err
-                    })
-                    .ok()
-                    .and_then(|secs| NaiveDateTime::from_timestamp_opt(secs, 0))
-                    .map(|naive_date_time| {
-                        DateTime::<Utc>::from_utc(naive_date_time, Utc).to_rfc2822()
-                    })
-            }
             "subject" => {
                 envelope.subject = val.into();
             }
@@ -53,6 +41,25 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
                         None => Err(Error::FindSenderError),
                     }?
                 }
+            }
+            "date" => {
+                let timestamp = match mailparse::dateparse(&val) {
+                    Ok(timestamp) => Some(timestamp),
+                    Err(err) => {
+                        warn!("invalid date {}, skipping it: {}", val, err);
+                        None
+                    }
+                };
+
+                let date = timestamp
+                    .and_then(|timestamp| NaiveDateTime::from_timestamp_opt(timestamp, 0))
+                    .and_then(|date| date.and_local_timezone(Local).earliest());
+
+                if let None = date {
+                    warn!("invalid date {}, skipping it", val);
+                }
+
+                envelope.date = date
             }
             _ => (),
         }
