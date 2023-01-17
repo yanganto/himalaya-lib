@@ -256,6 +256,31 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(envelope)
     }
 
+    fn get_envelope_internal(&self, dir: &str, internal_id: &str) -> backend::Result<Envelope> {
+        debug!("dir: {}", dir);
+        debug!("internal id: {}", internal_id);
+
+        let mdir = self.get_mdir_from_dir(dir)?;
+
+        let matching_id = |entry: io::Result<maildir::MailEntry>| match entry {
+            Ok(entry) if internal_id == entry.id() => Some(entry),
+            Ok(_) => None,
+            Err(err) => {
+                warn!("skipping invalid maildir entry: {}", err);
+                None
+            }
+        };
+
+        let envelope = envelope::from_raw(
+            mdir.list_cur()
+                .find_map(&matching_id)
+                .or(mdir.list_new().find_map(&matching_id))
+                .ok_or_else(|| Error::GetEnvelopeError(internal_id.to_owned()))?,
+        )?;
+
+        Ok(envelope)
+    }
+
     fn list_envelopes(
         &self,
         dir: &str,
@@ -267,6 +292,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         debug!("page: {}", page);
 
         let mdir = self.get_mdir_from_dir(dir)?;
+        println!("mdir path: {:?}", mdir.path());
 
         // Reads envelopes from the "cur" folder of the selected
         // maildir.
@@ -389,19 +415,31 @@ impl<'a> Backend for MaildirBackend<'a> {
         debug!("ids: {:?}", ids);
 
         let matching_ids = |entry: io::Result<maildir::MailEntry>| match entry {
-            Ok(entry) if ids.contains(&entry.id()) => Some(entry),
-            Ok(_) => None,
+            Ok(entry) => {
+                if let Some(pos) = ids.iter().position(|id| *id == entry.id()) {
+                    Some((pos, entry))
+                } else {
+                    None
+                }
+            }
             Err(err) => {
                 warn!("skipping invalid maildir entry: {}", err);
                 None
             }
         };
 
-        let emails: Emails = mdir
+        let mut emails = mdir
             .list_cur()
             .filter_map(&matching_ids)
             .chain(mdir.list_new().filter_map(&matching_ids))
-            .collect::<Vec<maildir::MailEntry>>()
+            .collect::<Vec<(usize, maildir::MailEntry)>>();
+
+        emails.sort_by_key(|(pos, _)| *pos);
+
+        let emails: Emails = emails
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>()
             .try_into()?;
 
         Ok(emails)

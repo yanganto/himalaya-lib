@@ -466,6 +466,29 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(envelope)
     }
 
+    fn get_envelope_internal(&self, folder: &str, internal_id: &str) -> backend::Result<Envelope> {
+        debug!("folder: {}", folder);
+        debug!("internal id: {}", internal_id);
+
+        let folder = encode_utf7(folder.to_owned());
+        debug!("utf7 encoded folder: {:?}", folder);
+
+        let mut session = self.session()?;
+
+        session
+            .select(&folder)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+        let fetches = session
+            .uid_fetch(internal_id, "(UID ENVELOPE FLAGS INTERNALDATE)")
+            .map_err(|err| Error::FetchMsgsByRangeError(err, internal_id.to_owned()))?;
+        let fetch = fetches
+            .get(0)
+            .ok_or_else(|| Error::GetEnvelopeError(internal_id.to_owned()))?;
+        let envelope = envelope::imap::from_raw(&fetch)?;
+
+        Ok(envelope)
+    }
+
     fn list_envelopes(
         &self,
         folder: &str,
@@ -649,8 +672,6 @@ impl<'a> Backend for ImapBackend<'a> {
             .uid_fetch(&seq, "BODY[]")
             .map_err(|err| Error::GetEmailsBySeqError(err, seq))?;
         let emails = Emails::try_from(fetches)?;
-
-        thread::sleep(Duration::from_secs(1));
 
         Ok(emails)
     }

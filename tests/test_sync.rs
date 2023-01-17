@@ -1,15 +1,17 @@
+use chrono::{DateTime, Local};
 use env_logger;
 use log::LevelFilter;
 use std::{
     borrow::Cow,
-    collections::HashMap,
     env::temp_dir,
     fs::{create_dir_all, remove_dir_all},
+    thread,
+    time::Duration,
 };
 
 use himalaya_lib::{
-    imap::ImapBackendBuilder, sync, AccountConfig, Backend, CompilerBuilder, Flag, Flags,
-    ImapConfig, MaildirBackend, MaildirConfig, SyncIdMapper, TplBuilder,
+    imap::ImapBackendBuilder, sync, AccountConfig, Backend, CompilerBuilder, Envelope, Flag, Flags,
+    ImapConfig, MaildirBackend, MaildirConfig, TplBuilder,
 };
 
 #[test]
@@ -27,7 +29,8 @@ fn test_sync() {
     }
     create_dir_all(&sync_dir).unwrap();
 
-    let config = AccountConfig {
+    let account = AccountConfig {
+        name: "account".into(),
         sync: true,
         sync_dir: Some(sync_dir.clone()),
         ..AccountConfig::default()
@@ -38,7 +41,7 @@ fn test_sync() {
     let imap = ImapBackendBuilder::default()
         .pool_size(10)
         .build(
-            Cow::Borrowed(&config),
+            Cow::Borrowed(&account),
             Cow::Owned(ImapConfig {
                 host: "localhost".into(),
                 port: 3143,
@@ -64,6 +67,7 @@ fn test_sync() {
         .add_email(
             "INBOX",
             &TplBuilder::default()
+                .message_id("<a@localhost>")
                 .from("alice@localhost")
                 .to("bob@localhost")
                 .subject("A")
@@ -73,12 +77,14 @@ fn test_sync() {
             &Flags::default(),
         )
         .unwrap();
-    let imap_internal_id_a = imap.get_envelope("INBOX", &imap_id_a).unwrap().internal_id;
+    let imap_a = imap.get_envelope("INBOX", &imap_id_a).unwrap();
+    thread::sleep(Duration::from_secs(1));
 
     let imap_id_b = imap
         .add_email(
             "INBOX",
             &TplBuilder::default()
+                .message_id("<b@localhost>")
                 .from("alice@localhost")
                 .to("bob@localhost")
                 .subject("B")
@@ -88,12 +94,14 @@ fn test_sync() {
             &Flags::from_iter([Flag::Flagged]),
         )
         .unwrap();
-    let imap_internal_id_b = imap.get_envelope("INBOX", &imap_id_b).unwrap().internal_id;
+    let imap_b = imap.get_envelope("INBOX", &imap_id_b).unwrap();
+    thread::sleep(Duration::from_secs(1));
 
     let imap_id_c = imap
         .add_email(
             "INBOX",
             &TplBuilder::default()
+                .message_id("<c@localhost>")
                 .from("alice@localhost")
                 .to("bob@localhost")
                 .subject("C")
@@ -103,57 +111,118 @@ fn test_sync() {
             &Flags::default(),
         )
         .unwrap();
-    let imap_internal_id_c = imap.get_envelope("INBOX", &imap_id_c).unwrap().internal_id;
+    let imap_c = imap.get_envelope("INBOX", &imap_id_c).unwrap();
+    thread::sleep(Duration::from_secs(1));
 
     // init maildir backend reader
 
     let mdir = MaildirBackend::new(
-        Cow::Borrowed(&config),
+        Cow::Borrowed(&account),
         Cow::Owned(MaildirConfig {
-            root_dir: sync_dir.clone(),
+            root_dir: sync_dir.join(&account.name),
         }),
     )
     .unwrap();
 
-    // sync imap account
+    // sync imap account twice in a row to see if all work as expected
+    // (no duplicate)
 
-    sync(&config, &imap).unwrap();
+    sync::sync(&account, &imap).unwrap();
+    sync::sync(&account, &imap).unwrap();
 
-    // retrigger sync to check duplication issues
+    // check maildir envelopes integrity
 
-    sync(&config, &imap).unwrap();
+    let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
+    assert_eq!(3, mdir_envelopes.len());
 
-    // check envelopes validity
+    assert_eq!("C", mdir_envelopes[0].subject);
+    assert_eq!(imap_c.date, mdir_envelopes[0].date);
+    assert_eq!(Flags::from_iter([Flag::Seen]), mdir_envelopes[0].flags);
 
-    let mut envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
-    envelopes.sort_by(|a, b| a.subject.partial_cmp(&b.subject).unwrap());
-    let mut envelopes = envelopes.iter();
-    assert_eq!(3, envelopes.len());
-
-    let envelope = envelopes.next().unwrap();
-    let mdir_internal_id_a = envelope.internal_id.clone();
-    assert_eq!("A", envelope.subject);
-    assert_eq!(Flags::from_iter([Flag::Seen]), envelope.flags);
-
-    let envelope = envelopes.next().unwrap();
-    let mdir_internal_id_b = envelope.internal_id.clone();
-    assert_eq!("B", envelope.subject);
+    assert_eq!("B", mdir_envelopes[1].subject);
     assert_eq!(
         Flags::from_iter([Flag::Seen, Flag::Flagged]),
-        envelope.flags
+        mdir_envelopes[1].flags
     );
+    assert_eq!(imap_b.date, mdir_envelopes[1].date);
 
-    let envelope = envelopes.next().unwrap();
-    let mdir_internal_id_c = envelope.internal_id.clone();
-    assert_eq!("C", envelope.subject);
-    assert_eq!(Flags::from_iter([Flag::Seen]), envelope.flags);
+    assert_eq!("A", mdir_envelopes[2].subject);
+    assert_eq!(Flags::from_iter([Flag::Seen]), mdir_envelopes[2].flags);
+    assert_eq!(imap_a.date, mdir_envelopes[2].date);
 
-    let emails = mdir.get_emails("INBOX", vec![&envelope.id]).unwrap();
+    let ids = vec![
+        mdir_envelopes[2].id.as_str(),
+        mdir_envelopes[1].id.as_str(),
+        mdir_envelopes[0].id.as_str(),
+    ];
+    let emails = mdir.get_emails("INBOX", ids).unwrap();
     let emails = emails.to_vec();
-    assert_eq!(1, emails.len());
+    assert_eq!(3, emails.len());
+    assert_eq!("A\r\n", emails[0].parsed().unwrap().get_body().unwrap());
+    assert_eq!("B\r\n", emails[1].parsed().unwrap().get_body().unwrap());
+    assert_eq!("C\r\n", emails[2].parsed().unwrap().get_body().unwrap());
 
-    let email = emails.first().unwrap().parsed().unwrap();
-    assert_eq!("C\r\n", email.get_body().unwrap());
+    // check cache integrity
 
-    // TODO: check cache validity
+    let cache = sqlite::Connection::open_with_flags(
+        sync_dir.join("database.sqlite"),
+        sqlite::OpenFlags::new().set_read_only(),
+    )
+    .unwrap();
+
+    let query = "
+        SELECT id, internal_id, hash, account, folder, GROUP_CONCAT(flag) AS flags, message_id, sender, subject, date
+        FROM envelopes
+        WHERE account = ?
+        GROUP BY hash
+        ORDER BY date DESC
+    ";
+
+    let cached_mdir_envelopes = cache
+        .prepare(query)
+        .unwrap()
+        .into_iter()
+        .bind((1, format!("{}:cache", account.name).as_str()))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .map(|row| Envelope {
+            id: row.read::<&str, _>("id").into(),
+            internal_id: row.read::<&str, _>("internal_id").into(),
+            flags: Flags::from_iter(row.read::<&str, _>("flags").split(",").map(Flag::from)),
+            message_id: row.read::<&str, _>("message_id").into(),
+            subject: row.read::<&str, _>("subject").into(),
+            sender: row.read::<&str, _>("sender").into(),
+            date: Some(
+                DateTime::parse_from_rfc3339(row.read::<&str, _>("date"))
+                    .unwrap()
+                    .with_timezone(&Local),
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    let cached_imap_envelopes = cache
+        .prepare(query)
+        .unwrap()
+        .into_iter()
+        .bind((1, account.name.as_str()))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .map(|row| Envelope {
+            id: row.read::<&str, _>("id").into(),
+            internal_id: row.read::<&str, _>("internal_id").into(),
+            flags: Flags::from_iter(row.read::<&str, _>("flags").split(",").map(Flag::from)),
+            message_id: row.read::<&str, _>("message_id").into(),
+            subject: row.read::<&str, _>("subject").into(),
+            sender: row.read::<&str, _>("sender").into(),
+            date: Some(
+                DateTime::parse_from_rfc3339(row.read::<&str, _>("date"))
+                    .unwrap()
+                    .with_timezone(&Local),
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    println!("cached_mdir_envelopes: {:?}", cached_mdir_envelopes);
+    assert_eq!(cached_mdir_envelopes, *mdir_envelopes);
+    assert_eq!(cached_imap_envelopes, vec![imap_c, imap_b, imap_a]);
 }

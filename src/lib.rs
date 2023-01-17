@@ -14,5 +14,4 @@ pub use sender::*;
 pub mod domain;
 pub use domain::*;
 
-mod sync;
-pub use sync::{sync, SyncIdMapper};
+pub mod sync;

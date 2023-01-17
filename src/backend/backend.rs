@@ -54,6 +54,8 @@ pub trait Backend {
     fn delete_folder(&self, folder: &str) -> Result<()>;
 
     fn get_envelope(&self, folder: &str, id: &str) -> Result<Envelope>;
+    fn get_envelope_internal(&self, folder: &str, internal_id: &str) -> Result<Envelope>;
+
     fn list_envelopes(&self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn search_envelopes(
         &self,

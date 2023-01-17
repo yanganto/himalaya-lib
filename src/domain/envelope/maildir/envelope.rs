@@ -28,6 +28,9 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
         trace!("header value: {}", val);
 
         match key.to_lowercase().as_str() {
+            "message-id" => {
+                envelope.message_id = val.into();
+            }
             "subject" => {
                 envelope.subject = val.into();
             }

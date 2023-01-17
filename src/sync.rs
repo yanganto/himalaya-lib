@@ -5,13 +5,12 @@ use rayon::prelude::*;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    fs::{create_dir_all, OpenOptions},
-    io::{self, prelude::*, BufReader},
-    path::{Path, PathBuf},
+    fs::create_dir_all,
+    io,
+    path::PathBuf,
     result,
 };
 use thiserror::Error;
-use uuid::Uuid;
 
 use crate::{
     backend, email, AccountConfig, Backend, Envelope, Flag, Flags, MaildirBackend, MaildirConfig,
@@ -59,38 +58,58 @@ pub type Envelopes = HashMap<String, Envelope>;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum HunkKind {
-    PrevLeft,
-    NextLeft,
-    PrevRight,
-    NextRight,
+    LocalCache,
+    Local,
+    RemoteCache,
+    Remote,
 }
 
-pub type Id = String;
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum HunkKindRestricted {
+    Local,
+    Remote,
+}
+
+pub type InternalId = String;
 pub type Folder = String;
 pub type Source = HunkKind;
+pub type SourceRestricted = HunkKindRestricted;
 pub type Target = HunkKind;
+pub type TargetRestricted = HunkKindRestricted;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Hunk {
-    CopyEmail(Folder, Envelope, Source, Target),
-    RemoveEmail(Folder, Id, Target),
-    AddFlag(Folder, Envelope, Flag, Target),
-    RemoveFlag(Folder, Id, Flag, Target),
+    CacheEnvelope(Folder, InternalId, SourceRestricted),
+    CopyEmail(Folder, Envelope, SourceRestricted, TargetRestricted),
+    RemoveEmail(Folder, InternalId, Target),
+    SetFlags(Folder, InternalId, Flags, Target),
 }
 
 type Patch = Vec<Hunk>;
 
-const SELECT: &str = "
-    SELECT id, hash, account, folder, GROUP_CONCAT(flag) AS flags, message_id, sender, subject, date
+pub const CREATE_ENVELOPES_TABLE: &str = "
+CREATE TABLE IF NOT EXISTS envelopes (
+    id          TEXT NOT NULL,
+    internal_id TEXT NOT NULL,
+    hash        TEXT NOT NULL,
+    account     TEXT NOT NULL,
+    folder      TEXT NOT NULL,
+    flag        TEXT NOT NULL,
+    message_id  TEXT NOT NULL,
+    sender      TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    date        DATETIME
+)";
+
+const INSERT_ENVELOPE: &str = "INSERT INTO envelopes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+const DELETE_ENVELOPE: &str = "DELETE FROM envelopes WHERE account = ? AND folder = ? AND id = ?";
+pub const SELECT_ENVELOPES: &str = "
+    SELECT id, internal_id, hash, account, folder, GROUP_CONCAT(flag) AS flags, message_id, sender, subject, date
     FROM envelopes
     WHERE account = ?
     AND folder = ?
     GROUP BY hash
 ";
-const INSERT: &str = "INSERT INTO envelopes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
-const DELETE_EMAIL: &str = "DELETE FROM envelopes WHERE account = ? AND folder = ? AND id = ?";
-const DELETE_FLAG: &str =
-    "DELETE FROM envelopes WHERE account = ? AND folder = ? AND id = ? AND flag = ?";
 
 pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result<()> {
     debug!("starting synchronization");
@@ -116,20 +135,7 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
     create_dir_all(&sync_dir).map_err(Error::CreateXdgDataDirsError)?;
 
     let cache = sqlite::Connection::open_with_full_mutex(sync_dir.join("database.sqlite"))?;
-
-    cache.execute(
-        "CREATE TABLE IF NOT EXISTS envelopes (
-            id         TEXT NOT NULL,
-            hash       TEXT NOT NULL,
-            account    TEXT NOT NULL,
-            folder     TEXT NOT NULL,
-            flag       TEXT NOT NULL,
-            message_id TEXT NOT NULL,
-            sender     TEXT NOT NULL,
-            subject    TEXT NOT NULL,
-            date       DATETIME
-        );",
-    )?;
+    cache.execute(CREATE_ENVELOPES_TABLE)?;
 
     let local = MaildirBackend::new(
         Cow::Borrowed(account),
@@ -149,7 +155,7 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
 
     let prev_right_envelopes: Envelopes = HashMap::from_iter(
         cache
-            .prepare(SELECT)?
+            .prepare(SELECT_ENVELOPES)?
             .into_iter()
             .bind((1, account.name.as_str()))?
             .bind((2, "inbox"))?
@@ -158,13 +164,13 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
             .map(|row| {
                 let envelope = Envelope {
                     id: row.read::<&str, _>("id").into(),
-                    internal_id: row.read::<&str, _>("id").into(),
+                    internal_id: row.read::<&str, _>("internal_id").into(),
                     flags: Flags::from_iter(
                         row.read::<&str, _>("flags").split(",").map(Flag::from),
                     ),
                     message_id: row.read::<&str, _>("message_id").into(),
-                    subject: row.read::<&str, _>("subject").into(),
                     sender: row.read::<&str, _>("sender").into(),
+                    subject: row.read::<&str, _>("subject").into(),
                     date: {
                         let date_str = row.read::<&str, _>("date");
                         match DateTime::parse_from_rfc3339(date_str) {
@@ -194,7 +200,7 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
 
     let prev_left_envelopes: Envelopes = HashMap::from_iter(
         cache
-            .prepare(SELECT)?
+            .prepare(SELECT_ENVELOPES)?
             .into_iter()
             .bind((1, format!("{}:cache", account.name).as_str()))?
             .bind((2, "inbox"))?
@@ -203,7 +209,7 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
             .map(|row| {
                 let envelope = Envelope {
                     id: row.read::<&str, _>("id").into(),
-                    internal_id: row.read::<&str, _>("id").into(),
+                    internal_id: row.read::<&str, _>("internal_id").into(),
                     flags: Flags::from_iter(
                         row.read::<&str, _>("flags").split(",").map(Flag::from),
                     ),
@@ -236,7 +242,7 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
         next_right_envelopes,
     );
 
-    println!("patch: {:#?}", patch);
+    println!("============= patch: {:#?}", patch);
     debug!("patch length: {}", patch.len());
 
     for (batch_num, chunks) in patch.chunks(3).enumerate() {
@@ -250,19 +256,66 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
 
                 let op = || {
                     match hunk {
+                        Hunk::CacheEnvelope(folder, internal_id, source) => match source {
+                            HunkKindRestricted::Local => {
+                                let envelope =
+                                    local.get_envelope_internal(&folder, &internal_id)?;
+                                let mut statement = cache.prepare(INSERT_ENVELOPE)?;
+                                for flag in envelope.flags.iter() {
+                                    statement.reset()?;
+                                    statement.bind((1, envelope.id.as_str()))?;
+                                    statement.bind((2, envelope.internal_id.as_str()))?;
+                                    statement.bind((3, envelope.hash(&folder).as_str()))?;
+                                    statement
+                                        .bind((4, format!("{}:cache", account.name).as_str()))?;
+                                    statement.bind((5, folder.as_str()))?;
+                                    statement.bind((6, flag.to_string().as_str()))?;
+                                    statement.bind((7, envelope.message_id.as_str()))?;
+                                    statement.bind((8, envelope.sender.as_str()))?;
+                                    statement.bind((9, envelope.subject.as_str()))?;
+                                    statement.bind((
+                                        10,
+                                        match envelope.date {
+                                            Some(date) => date.to_rfc3339().into(),
+                                            None => sqlite::Value::Null,
+                                        },
+                                    ))?;
+                                    statement.next()?;
+                                }
+                            }
+                            HunkKindRestricted::Remote => {
+                                let envelope =
+                                    remote.get_envelope_internal(&folder, &internal_id)?;
+                                let mut statement = cache.prepare(INSERT_ENVELOPE)?;
+                                for flag in envelope.flags.iter() {
+                                    statement.reset()?;
+                                    statement.bind((1, envelope.id.as_str()))?;
+                                    statement.bind((2, envelope.internal_id.as_str()))?;
+                                    statement.bind((3, envelope.hash(&folder).as_str()))?;
+                                    statement.bind((4, account.name.as_str()))?;
+                                    statement.bind((5, folder.as_str()))?;
+                                    statement.bind((6, flag.to_string().as_str()))?;
+                                    statement.bind((7, envelope.message_id.as_str()))?;
+                                    statement.bind((8, envelope.sender.as_str()))?;
+                                    statement.bind((9, envelope.subject.as_str()))?;
+                                    statement.bind((
+                                        10,
+                                        match envelope.date {
+                                            Some(date) => date.to_rfc3339().into(),
+                                            None => sqlite::Value::Null,
+                                        },
+                                    ))?;
+                                    statement.next()?;
+                                }
+                            }
+                        },
                         Hunk::CopyEmail(folder, envelope, source, target) => {
                             let internal_ids = vec![envelope.internal_id.as_str()];
                             let emails = match source {
-                                HunkKind::PrevLeft => {
-                                    panic!("prev left");
-                                }
-                                HunkKind::NextLeft => {
+                                HunkKindRestricted::Local => {
                                     local.get_emails_internal(&folder, internal_ids)
                                 }
-                                HunkKind::PrevRight => {
-                                    panic!("prev right");
-                                }
-                                HunkKind::NextRight => {
+                                HunkKindRestricted::Remote => {
                                     remote.get_emails_internal(&folder, internal_ids)
                                 }
                             }?;
@@ -272,23 +325,31 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
                             })?;
 
                             match target {
-                                HunkKind::PrevLeft => {
-                                    let mut statement = cache.prepare(INSERT)?;
+                                HunkKindRestricted::Local => {
+                                    let internal_id = local.add_email_internal(
+                                        &folder,
+                                        email.raw()?,
+                                        &envelope.flags,
+                                    )?;
+                                    let envelope = local.get_envelope(&folder, &internal_id)?;
+
+                                    let mut statement = cache.prepare(INSERT_ENVELOPE)?;
                                     for flag in envelope.flags.iter() {
                                         statement.reset()?;
-                                        statement.bind((1, envelope.internal_id.as_str()))?;
-                                        statement.bind((2, envelope.hash(&folder).as_str()))?;
+                                        statement.bind((1, envelope.id.as_str()))?;
+                                        statement.bind((2, envelope.internal_id.as_str()))?;
+                                        statement.bind((3, envelope.hash(&folder).as_str()))?;
                                         statement.bind((
-                                            3,
+                                            4,
                                             format!("{}:cache", account.name).as_str(),
                                         ))?;
-                                        statement.bind((4, folder.as_str()))?;
-                                        statement.bind((5, flag.to_string().as_str()))?;
-                                        statement.bind((6, envelope.message_id.as_str()))?;
-                                        statement.bind((7, envelope.sender.as_str()))?;
-                                        statement.bind((8, envelope.subject.as_str()))?;
+                                        statement.bind((5, folder.as_str()))?;
+                                        statement.bind((6, flag.to_string().as_str()))?;
+                                        statement.bind((7, envelope.message_id.as_str()))?;
+                                        statement.bind((8, envelope.sender.as_str()))?;
+                                        statement.bind((9, envelope.subject.as_str()))?;
                                         statement.bind((
-                                            9,
+                                            10,
                                             match envelope.date {
                                                 Some(date) => date.to_rfc3339().into(),
                                                 None => sqlite::Value::Null,
@@ -297,27 +358,28 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
                                         statement.next()?;
                                     }
                                 }
-                                HunkKind::NextLeft => {
-                                    local.add_email_internal(
+                                HunkKindRestricted::Remote => {
+                                    let internal_id = remote.add_email_internal(
                                         &folder,
                                         email.raw()?,
                                         &envelope.flags,
                                     )?;
-                                }
-                                HunkKind::PrevRight => {
-                                    let mut statement = cache.prepare(INSERT)?;
+                                    let envelope = local.get_envelope(&folder, &internal_id)?;
+
+                                    let mut statement = cache.prepare(INSERT_ENVELOPE)?;
                                     for flag in envelope.flags.iter() {
                                         statement.reset()?;
-                                        statement.bind((1, envelope.internal_id.as_str()))?;
-                                        statement.bind((2, envelope.hash(&folder).as_str()))?;
-                                        statement.bind((3, account.name.as_str()))?;
-                                        statement.bind((4, folder.as_str()))?;
-                                        statement.bind((5, flag.to_string().as_str()))?;
-                                        statement.bind((6, envelope.message_id.as_str()))?;
-                                        statement.bind((7, envelope.sender.as_str()))?;
-                                        statement.bind((8, envelope.subject.as_str()))?;
+                                        statement.bind((1, envelope.id.as_str()))?;
+                                        statement.bind((2, envelope.internal_id.as_str()))?;
+                                        statement.bind((3, envelope.hash(&folder).as_str()))?;
+                                        statement.bind((4, account.name.as_str()))?;
+                                        statement.bind((5, folder.as_str()))?;
+                                        statement.bind((6, flag.to_string().as_str()))?;
+                                        statement.bind((7, envelope.message_id.as_str()))?;
+                                        statement.bind((8, envelope.sender.as_str()))?;
+                                        statement.bind((9, envelope.subject.as_str()))?;
                                         statement.bind((
-                                            9,
+                                            10,
                                             match envelope.date {
                                                 Some(date) => date.to_rfc3339().into(),
                                                 None => sqlite::Value::Null,
@@ -325,13 +387,6 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
                                         ))?;
                                         statement.next()?;
                                     }
-                                }
-                                HunkKind::NextRight => {
-                                    remote.add_email_internal(
-                                        &folder,
-                                        email.raw()?,
-                                        &envelope.flags,
-                                    )?;
                                 }
                             };
                         }
@@ -339,85 +394,100 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
                             let internal_ids = vec![internal_id.as_str()];
 
                             match target {
-                                HunkKind::PrevLeft | HunkKind::PrevRight => {
-                                    let mut statement = cache.prepare(DELETE_EMAIL)?;
+                                HunkKind::LocalCache => {
+                                    let mut statement = cache.prepare(DELETE_ENVELOPE)?;
+                                    statement
+                                        .bind((1, format!("{}:cache", account.name).as_str()))?;
+                                    statement.bind((2, folder.as_str()))?;
+                                    statement.bind((3, internal_id.as_str()))?;
+                                    statement.next()?;
+                                }
+                                HunkKind::Local => {
+                                    local.delete_emails_internal("inbox", internal_ids.clone())?;
+                                }
+                                HunkKind::RemoteCache => {
+                                    let mut statement = cache.prepare(DELETE_ENVELOPE)?;
                                     statement.bind((1, account.name.as_str()))?;
                                     statement.bind((2, folder.as_str()))?;
                                     statement.bind((3, internal_id.as_str()))?;
                                     statement.next()?;
                                 }
-                                HunkKind::NextLeft => {
-                                    local.delete_emails_internal("inbox", internal_ids.clone())?;
-                                }
-                                HunkKind::NextRight => {
+                                HunkKind::Remote => {
                                     remote.delete_emails_internal("inbox", internal_ids.clone())?;
                                 }
                             };
                         }
-                        Hunk::AddFlag(folder, envelope, flag, target) => {
-                            let internal_ids = vec![envelope.internal_id.as_str()];
-                            let flags = Flags::from_iter([flag.clone()]);
-
+                        Hunk::SetFlags(folder, internal_id, flags, target) => {
                             match target {
-                                HunkKind::PrevLeft | HunkKind::PrevRight => {
-                                    let mut statement = cache.prepare(INSERT)?;
-                                    statement.bind((1, envelope.internal_id.as_str()))?;
-                                    statement.bind((2, envelope.hash(&folder).as_str()))?;
-                                    statement.bind((3, account.name.as_str()))?;
-                                    statement.bind((4, folder.as_str()))?;
-                                    statement.bind((5, flag.to_string().as_str()))?;
-                                    statement.bind((6, envelope.message_id.as_str()))?;
-                                    statement.bind((7, envelope.sender.as_str()))?;
-                                    statement.bind((8, envelope.subject.as_str()))?;
-                                    statement.bind((
-                                        9,
-                                        match envelope.date {
-                                            Some(date) => date.to_rfc3339().into(),
-                                            None => sqlite::Value::Null,
-                                        },
-                                    ))?;
+                                HunkKind::LocalCache => {
+                                    let mut statement = cache.prepare(DELETE_ENVELOPE)?;
+                                    statement
+                                        .bind((1, format!("{}:cache", account.name).as_str()))?;
+                                    statement.bind((2, folder.as_str()))?;
+                                    statement.bind((3, internal_id.as_str()))?;
                                     statement.next()?;
-                                }
-                                HunkKind::NextLeft => {
-                                    local.add_flags_internal(
-                                        "inbox",
-                                        internal_ids.clone(),
-                                        &flags,
-                                    )?;
-                                }
-                                HunkKind::NextRight => {
-                                    remote.add_flags_internal(
-                                        "inbox",
-                                        internal_ids.clone(),
-                                        &flags,
-                                    )?;
-                                }
-                            };
-                        }
-                        Hunk::RemoveFlag(folder, internal_id, flag, target) => {
-                            let internal_ids = vec![internal_id.as_str()];
-                            let flags = Flags::from_iter([flag.clone()]);
 
-                            match target {
-                                HunkKind::PrevLeft | HunkKind::PrevRight => {
-                                    let mut statement = cache.prepare(DELETE_FLAG)?;
+                                    let envelope = local.get_envelope(&folder, &internal_id)?;
+                                    let mut statement = cache.prepare(INSERT_ENVELOPE)?;
+                                    for flag in flags.iter() {
+                                        statement.bind((1, envelope.id.as_str()))?;
+                                        statement.bind((2, envelope.internal_id.as_str()))?;
+                                        statement.bind((3, envelope.hash(&folder).as_str()))?;
+                                        statement.bind((
+                                            4,
+                                            format!("{}:cache", account.name).as_str(),
+                                        ))?;
+                                        statement.bind((5, folder.as_str()))?;
+                                        statement.bind((6, flag.to_string().as_str()))?;
+                                        statement.bind((7, envelope.message_id.as_str()))?;
+                                        statement.bind((8, envelope.sender.as_str()))?;
+                                        statement.bind((9, envelope.subject.as_str()))?;
+                                        statement.bind((
+                                            10,
+                                            match envelope.date {
+                                                Some(date) => date.to_rfc3339().into(),
+                                                None => sqlite::Value::Null,
+                                            },
+                                        ))?;
+                                        statement.next()?;
+                                    }
+                                }
+                                HunkKind::Local => {
+                                    local.set_flags_internal("inbox", vec![internal_id], &flags)?;
+                                }
+                                HunkKind::RemoteCache => {
+                                    let mut statement = cache.prepare(DELETE_ENVELOPE)?;
                                     statement.bind((1, account.name.as_str()))?;
                                     statement.bind((2, folder.as_str()))?;
                                     statement.bind((3, internal_id.as_str()))?;
-                                    statement.bind((4, flag.to_string().as_str()))?;
                                     statement.next()?;
+
+                                    let envelope = remote.get_envelope(&folder, &internal_id)?;
+                                    let mut statement = cache.prepare(INSERT_ENVELOPE)?;
+                                    for flag in flags.iter() {
+                                        statement.bind((1, envelope.id.as_str()))?;
+                                        statement.bind((2, envelope.internal_id.as_str()))?;
+                                        statement.bind((3, envelope.hash(&folder).as_str()))?;
+                                        statement.bind((4, account.name.as_str()))?;
+                                        statement.bind((5, folder.as_str()))?;
+                                        statement.bind((6, flag.to_string().as_str()))?;
+                                        statement.bind((7, envelope.message_id.as_str()))?;
+                                        statement.bind((8, envelope.sender.as_str()))?;
+                                        statement.bind((9, envelope.subject.as_str()))?;
+                                        statement.bind((
+                                            10,
+                                            match envelope.date {
+                                                Some(date) => date.to_rfc3339().into(),
+                                                None => sqlite::Value::Null,
+                                            },
+                                        ))?;
+                                        statement.next()?;
+                                    }
                                 }
-                                HunkKind::NextLeft => {
-                                    local.remove_flags_internal(
+                                HunkKind::Remote => {
+                                    remote.set_flags_internal(
                                         "inbox",
-                                        internal_ids.clone(),
-                                        &flags,
-                                    )?;
-                                }
-                                HunkKind::NextRight => {
-                                    remote.remove_flags_internal(
-                                        "inbox",
-                                        internal_ids.clone(),
+                                        vec![internal_id],
                                         &flags,
                                     )?;
                                 }
@@ -467,287 +537,160 @@ pub fn build_patch<F: ToString + Clone>(
         match (prev_left, next_left, prev_right, next_right) {
             // 0000
             //
-            // The hash exists nowhere, which cannot happen since the
-            // hash hashset has been built from envelopes hash.
+            // The hash exists nowhere, which cannot happen since
+            // hashes has been built from all envelopes hash.
             (None, None, None, None) => (),
 
             // 0001
             //
-            // The id only exists in the next right side, which means
-            // a new email has been added next right and needs to be
-            // synchronized prev left, next left and prev right sides.
-            (None, None, None, Some(next_right)) => patch.extend([
-                Hunk::CopyEmail(
+            // The hash only exists in the remote side, which means a
+            // new email has been added remote side and needs to be
+            // cached remote side + copied local side.
+            (None, None, None, Some(remote)) => patch.extend([
+                Hunk::CacheEnvelope(
                     folder.to_string(),
-                    next_right.clone(),
-                    HunkKind::NextRight,
-                    HunkKind::PrevLeft,
+                    remote.internal_id.clone(),
+                    HunkKindRestricted::Remote,
                 ),
                 Hunk::CopyEmail(
                     folder.to_string(),
-                    next_right.clone(),
-                    HunkKind::NextRight,
-                    HunkKind::NextLeft,
-                ),
-                Hunk::CopyEmail(
-                    folder.to_string(),
-                    next_right.clone(),
-                    HunkKind::NextRight,
-                    HunkKind::PrevRight,
+                    remote.clone(),
+                    HunkKindRestricted::Remote,
+                    HunkKindRestricted::Local,
                 ),
             ]),
 
             // 0010
             //
-            // The id only exists in the prev right side, which means
-            // an email is outdated prev right side and needs to be
-            // removed.
-            (None, None, Some(prev_right), None) => patch.push(Hunk::RemoveEmail(
+            // The hash only exists in the remote cache, which means
+            // an email is outdated and needs to be removed from the
+            // remote cache.
+            (None, None, Some(remote_cache), None) => patch.push(Hunk::RemoveEmail(
                 folder.to_string(),
-                prev_right.internal_id.clone(),
-                HunkKind::PrevRight,
+                remote_cache.internal_id.clone(),
+                HunkKind::RemoteCache,
             )),
 
             // 0011
             //
-            // The id exists in the right side but not in the left
+            // The hash exists in the remote side but not in the local
             // side, which means there is a conflict. Since we cannot
-            // determine which side (left removed or right added) is
-            // the most up-to-date, it is safer to consider the right
+            // determine which side (local removed or remote added) is
+            // the most up-to-date, it is safer to consider the remote
             // added side up-to-date in order not to lose data.
             //
             // TODO: make this behaviour customizable.
-            (None, None, Some(prev_right), Some(next_right)) => {
-                let mut all_flags: HashSet<Flag> = HashSet::default();
-                all_flags.extend(prev_right.flags.0.clone());
-                all_flags.extend(next_right.flags.0.clone());
+            (None, None, Some(remote_cache), Some(remote)) => {
+                patch.push(Hunk::CopyEmail(
+                    folder.to_string(),
+                    remote.clone(),
+                    HunkKindRestricted::Remote,
+                    HunkKindRestricted::Local,
+                ));
 
-                let mut flags = Flags::default();
-
-                for flag in all_flags {
-                    match (prev_right.flags.get(&flag), next_right.flags.get(&flag)) {
-                        // The flag exists nowhere, which cannot
-                        // happen since the flags hashset has been
-                        // built from envelopes flags.
-                        (None, None) => (),
-
-                        // The [`Flag::Deleted`] exists next right
-                        // side but not prev right side, which means
-                        // there is a conflict. Since we cannot
-                        // determine which side is the most
-                        // up-to-date, it is safer to remove the flag
-                        // next right side in order not to lose data.
-                        //
-                        // TODO: make this behaviour customizable.
-                        (None, Some(&Flag::Deleted)) => patch.push(Hunk::RemoveFlag(
-                            folder.to_string(),
-                            next_right.internal_id.clone(),
-                            Flag::Deleted,
-                            HunkKind::NextRight,
-                        )),
-
-                        // The flag exists next right side but not
-                        // prev right side, which means there is a
-                        // conflict. Since we cannot determine which
-                        // side is the most up-to-date, it is safer to
-                        // add the flag prev right side in order not
-                        // to lose data.
-                        //
-                        // TODO: make this behaviour customizable.
-                        (None, Some(flag)) => {
-                            flags.insert(flag.clone());
-                            patch.push(Hunk::AddFlag(
-                                folder.to_string(),
-                                prev_right.clone(),
-                                flag.clone(),
-                                HunkKind::PrevRight,
-                            ));
-                        }
-
-                        // The [`Flag::Deleted`] exists prev right
-                        // side but not next right side, which means
-                        // there is a conflict. Since we cannot
-                        // determine which side is the most
-                        // up-to-date, it is safer to remove the flag
-                        // prev right side in order not to lose data.
-                        //
-                        // TODO: make this behaviour customizable.
-                        (Some(&Flag::Deleted), None) => patch.push(Hunk::RemoveFlag(
-                            folder.to_string(),
-                            prev_right.internal_id.clone(),
-                            Flag::Deleted,
-                            HunkKind::PrevRight,
-                        )),
-
-                        // The flag exists prev right side but not
-                        // next right side, which means there is a
-                        // conflict. Since we cannot determine which
-                        // side is the most up-to-date, it is safer to
-                        // add the flag next right side in order not
-                        // to lose data.
-                        //
-                        // TODO: make this behaviour customizable.
-                        (Some(flag), None) => {
-                            flags.insert(flag.clone());
-                            patch.push(Hunk::AddFlag(
-                                folder.to_string(),
-                                next_right.clone(),
-                                flag.clone(),
-                                HunkKind::NextRight,
-                            ))
-                        }
-
-                        // The flag exists everywhere, nothing to do.
-                        (Some(_), Some(flag)) => {
-                            flags.insert(flag.clone());
-                        }
-                    }
+                if remote_cache.flags != remote.flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        remote_cache.internal_id.clone(),
+                        remote.flags.clone(),
+                        HunkKind::RemoteCache,
+                    ))
                 }
-
-                patch.extend([
-                    Hunk::CopyEmail(
-                        folder.to_string(),
-                        Envelope {
-                            flags: flags.clone(),
-                            ..next_right.clone()
-                        },
-                        HunkKind::NextRight,
-                        HunkKind::PrevLeft,
-                    ),
-                    Hunk::CopyEmail(
-                        folder.to_string(),
-                        Envelope {
-                            flags: flags.clone(),
-                            ..next_right.clone()
-                        },
-                        HunkKind::NextRight,
-                        HunkKind::NextLeft,
-                    ),
-                ]);
             }
 
             // 0100
             //
-            // The id only exists in the next left side, which means a
-            // new email has been added next left side and needs to be
-            // added prev left, prev right and next right sides.
-            (None, Some(next_left), None, None) => patch.extend([
-                Hunk::CopyEmail(
+            // The hash only exists in the local side, which means a
+            // new email has been added local side and needs to be
+            // added cached local side + added remote sides.
+            (None, Some(local), None, None) => patch.extend([
+                Hunk::CacheEnvelope(
                     folder.to_string(),
-                    next_left.clone(),
-                    HunkKind::NextLeft,
-                    HunkKind::PrevLeft,
+                    local.internal_id.clone(),
+                    HunkKindRestricted::Local,
                 ),
                 Hunk::CopyEmail(
                     folder.to_string(),
-                    next_left.clone(),
-                    HunkKind::NextLeft,
-                    HunkKind::PrevRight,
-                ),
-                Hunk::CopyEmail(
-                    folder.to_string(),
-                    next_left.clone(),
-                    HunkKind::NextLeft,
-                    HunkKind::NextRight,
+                    local.clone(),
+                    HunkKindRestricted::Local,
+                    HunkKindRestricted::Remote,
                 ),
             ]),
 
             // 0101
             //
-            // The id exists in both next sides, which means a new
-            // (same) email has been added both sides and the most
-            // recent needs to by kept.
+            // The hash exists in both local and remote sides, which
+            // means a new (same) email has been added both sides and
+            // the most recent needs to be kept.
             //
             // NOTE: this case should never happen: new emails
-            // internal identifier are feeded with auto-generated UUID
-            // v4 and should (in theory) never conflict, but we
-            // implement this case for the sake of exhaustiveness.
-            (None, Some(next_left), None, Some(next_right)) => {
-                match (next_left.date.as_ref(), next_right.date.as_ref()) {
-                    // The date exists only on the next left side, so
-                    // we keep the next left side and remove the next
-                    // right side.
+            // internal identifier are unique and should (in theory)
+            // never conflict, but we implement this case for the sake
+            // of exhaustiveness.
+            (None, Some(local), None, Some(remote)) => {
+                match (local.date.as_ref(), remote.date.as_ref()) {
+                    // The date exists only on the local side, so we
+                    // keep the local side and remove the remote side.
                     (Some(_), None) => patch.extend([
                         Hunk::RemoveEmail(
                             folder.to_string(),
-                            next_right.internal_id.clone(),
-                            HunkKind::NextRight,
+                            remote.internal_id.clone(),
+                            HunkKind::Remote,
                         ),
                         Hunk::CopyEmail(
                             folder.to_string(),
-                            next_left.clone(),
-                            HunkKind::NextLeft,
-                            HunkKind::PrevLeft,
+                            local.clone(),
+                            HunkKindRestricted::Local,
+                            HunkKindRestricted::Remote,
                         ),
-                        Hunk::CopyEmail(
+                        Hunk::CacheEnvelope(
                             folder.to_string(),
-                            next_left.clone(),
-                            HunkKind::NextLeft,
-                            HunkKind::PrevRight,
-                        ),
-                        Hunk::CopyEmail(
-                            folder.to_string(),
-                            next_left.clone(),
-                            HunkKind::NextLeft,
-                            HunkKind::NextRight,
+                            local.internal_id.clone(),
+                            HunkKindRestricted::Local,
                         ),
                     ]),
 
-                    // The date exists in both next side and the left
-                    // date is greater than the right date, so we keep
-                    // the next left side.
+                    // The date exists in both sides and the local
+                    // date is greater than the remote date, so we
+                    // keep the local side.
                     (Some(date_left), Some(date_right)) if date_left > date_right => {
                         patch.extend([
                             Hunk::RemoveEmail(
                                 folder.to_string(),
-                                next_right.internal_id.clone(),
-                                HunkKind::NextRight,
+                                remote.internal_id.clone(),
+                                HunkKind::Remote,
                             ),
                             Hunk::CopyEmail(
                                 folder.to_string(),
-                                next_left.clone(),
-                                HunkKind::NextLeft,
-                                HunkKind::PrevLeft,
+                                local.clone(),
+                                HunkKindRestricted::Local,
+                                HunkKindRestricted::Remote,
                             ),
-                            Hunk::CopyEmail(
+                            Hunk::CacheEnvelope(
                                 folder.to_string(),
-                                next_left.clone(),
-                                HunkKind::NextLeft,
-                                HunkKind::PrevRight,
-                            ),
-                            Hunk::CopyEmail(
-                                folder.to_string(),
-                                next_left.clone(),
-                                HunkKind::NextLeft,
-                                HunkKind::NextRight,
+                                local.internal_id.clone(),
+                                HunkKindRestricted::Local,
                             ),
                         ])
                     }
 
-                    // For all other cases we keep the next right side.
-                    (None, None) | (None, Some(_)) | (Some(_), Some(_)) => patch.extend([
+                    // For all other cases we keep the remote side.
+                    _ => patch.extend([
                         Hunk::RemoveEmail(
                             folder.to_string(),
-                            next_left.internal_id.clone(),
-                            HunkKind::NextLeft,
+                            local.internal_id.clone(),
+                            HunkKind::Local,
                         ),
                         Hunk::CopyEmail(
                             folder.to_string(),
-                            next_right.clone(),
-                            HunkKind::NextRight,
-                            HunkKind::PrevLeft,
+                            remote.clone(),
+                            HunkKindRestricted::Remote,
+                            HunkKindRestricted::Local,
                         ),
-                        Hunk::CopyEmail(
+                        Hunk::CacheEnvelope(
                             folder.to_string(),
-                            next_right.clone(),
-                            HunkKind::NextRight,
-                            HunkKind::NextLeft,
-                        ),
-                        Hunk::CopyEmail(
-                            folder.to_string(),
-                            next_right.clone(),
-                            HunkKind::NextRight,
-                            HunkKind::PrevRight,
+                            remote.internal_id.clone(),
+                            HunkKindRestricted::Remote,
                         ),
                     ]),
                 }
@@ -755,244 +698,297 @@ pub fn build_patch<F: ToString + Clone>(
 
             // 0110
             //
-            // The id exists in the next left and prev right sides,
-            // which means a new (same) email has been added left side
-            // but removed right side. Since we cannot determine which
-            // side (left added or right removed) is the most
-            // up-to-date, it is safer to consider the left added side
-            // up-to-date in order not to lose data.
+            // The hash exists in the local side and in the remote
+            // cache side, which means a new (same) email has been
+            // added local side but removed remote side. Since we
+            // cannot determine which side (local added or remote
+            // removed) is the most up-to-date, it is safer to
+            // consider the remote added side up-to-date in order not
+            // to lose data.
             //
             // TODO: make this behaviour customizable.
-            (None, Some(next_left), Some(_), None) => patch.extend([
-                Hunk::RemoveEmail(folder.to_string(), hash.to_owned(), HunkKind::PrevRight),
-                Hunk::CopyEmail(
+            (None, Some(local), Some(remote_cache), None) => patch.extend([
+                Hunk::RemoveEmail(
                     folder.to_string(),
-                    next_left.clone(),
-                    HunkKind::NextLeft,
-                    HunkKind::PrevLeft,
+                    remote_cache.internal_id.clone(),
+                    HunkKind::RemoteCache,
+                ),
+                Hunk::CacheEnvelope(
+                    folder.to_string(),
+                    local.internal_id.clone(),
+                    HunkKindRestricted::Local,
                 ),
                 Hunk::CopyEmail(
                     folder.to_string(),
-                    next_left.clone(),
-                    HunkKind::NextLeft,
-                    HunkKind::PrevRight,
-                ),
-                Hunk::CopyEmail(
-                    folder.to_string(),
-                    next_left.clone(),
-                    HunkKind::NextLeft,
-                    HunkKind::NextRight,
+                    local.clone(),
+                    HunkKindRestricted::Local,
+                    HunkKindRestricted::Remote,
                 ),
             ]),
 
             // 0111
             //
-            // The id exists everywhere except in prev left side,
-            // which means the prev left side is outdated and needs to
-            // be updated.
-            (None, Some(next_left), Some(prev_right), Some(next_right)) => {
-                patch.push(Hunk::CopyEmail(
+            // The hash exists everywhere except in the local cache,
+            // which means the local cache misses an email and needs
+            // to be updated. Flags also need to be synchronized.
+            (None, Some(local), Some(remote_cache), Some(remote)) => {
+                patch.push(Hunk::CacheEnvelope(
                     folder.to_string(),
-                    Envelope {
-                        flags: Flags::default(),
-                        ..next_left.clone()
-                    },
-                    HunkKind::NextLeft,
-                    HunkKind::PrevLeft,
+                    local.internal_id.clone(),
+                    HunkKindRestricted::Local,
                 ));
-                patch.extend(build_flags_patch(
-                    folder.clone(),
-                    None,
-                    Some(next_left),
-                    Some(prev_right),
-                    Some(next_right),
-                ))
+
+                let flags = sync_flags(None, Some(local), Some(remote_cache), Some(remote));
+
+                if local.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        local.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::Local,
+                    ));
+                }
+
+                if remote_cache.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        remote_cache.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::RemoteCache,
+                    ));
+                }
+
+                if remote.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        remote.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::Remote,
+                    ));
+                }
             }
 
             // 1000
             //
-            // The id only exists in the prev left side, which means
-            // an old email is not up-to-date and needs to be deleted.
-            (Some(prev_left), None, None, None) => patch.push(Hunk::RemoveEmail(
+            // The hash only exists in the local cache, which means
+            // the local cache has an outdated email and need to be
+            // cleaned.
+            (Some(local_cache), None, None, None) => patch.push(Hunk::RemoveEmail(
                 folder.to_string(),
-                prev_left.internal_id.clone(),
-                HunkKind::PrevLeft,
+                local_cache.internal_id.clone(),
+                HunkKind::LocalCache,
             )),
 
             // 1001
             //
-            // The id exists in the prev left and next right sides,
-            // which means a new (same) email has been removed left
-            // side but added right side. Since we cannot determine
-            // which side (left removed or right added) is the most
-            // up-to-date, it is safer to consider the right added
+            // The hash exists in the local cache and in the remote,
+            // which means a new (same) email has been removed local
+            // side but added remote side. Since we cannot determine
+            // which side (local removed or remote added) is the most
+            // up-to-date, it is safer to consider the remote added
             // side up-to-date in order not to lose data.
             //
             // TODO: make this behaviour customizable.
-            (Some(prev_left), None, None, Some(next_right)) => patch.extend([
+            (Some(local_cache), None, None, Some(remote)) => patch.extend([
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    prev_left.internal_id.clone(),
-                    HunkKind::PrevLeft,
+                    local_cache.internal_id.clone(),
+                    HunkKind::LocalCache,
+                ),
+                Hunk::CacheEnvelope(
+                    folder.to_string(),
+                    remote.internal_id.clone(),
+                    HunkKindRestricted::Remote,
                 ),
                 Hunk::CopyEmail(
                     folder.to_string(),
-                    next_right.clone(),
-                    HunkKind::NextRight,
-                    HunkKind::PrevLeft,
-                ),
-                Hunk::CopyEmail(
-                    folder.to_string(),
-                    next_right.clone(),
-                    HunkKind::NextRight,
-                    HunkKind::NextLeft,
-                ),
-                Hunk::CopyEmail(
-                    folder.to_string(),
-                    next_right.clone(),
-                    HunkKind::NextRight,
-                    HunkKind::PrevRight,
+                    remote.clone(),
+                    HunkKindRestricted::Remote,
+                    HunkKindRestricted::Local,
                 ),
             ]),
 
             // 1010
             //
-            // The id exists in prev sides but not next sides, which
-            // means an outdated email needs to be removed everywhere.
-            (Some(prev_left), None, Some(prev_right), None) => patch.extend([
+            // The hash only exists in both caches, which means caches
+            // have an outdated email and need to be cleaned up.
+            (Some(local_cache), None, Some(remote_cache), None) => patch.extend([
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    prev_left.internal_id.clone(),
-                    HunkKind::PrevLeft,
+                    local_cache.internal_id.clone(),
+                    HunkKind::LocalCache,
                 ),
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    prev_right.internal_id.clone(),
-                    HunkKind::PrevRight,
+                    remote_cache.internal_id.clone(),
+                    HunkKind::RemoteCache,
                 ),
             ]),
 
             // 1011
             //
-            // The id exists everywhere except in next left side,
-            // which means an email has been removed next left side
-            // and needs to be removed everywhere else.
-            (Some(prev_left), None, Some(prev_right), Some(next_right)) => patch.extend([
+            // The hash exists everywhere except in local side, which
+            // means an email has been removed local side and needs to
+            // be removed everywhere else.
+            (Some(local_cache), None, Some(remote_cache), Some(remote)) => patch.extend([
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    prev_left.internal_id.clone(),
-                    HunkKind::PrevLeft,
+                    local_cache.internal_id.clone(),
+                    HunkKind::LocalCache,
                 ),
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    prev_right.internal_id.clone(),
-                    HunkKind::PrevRight,
+                    remote_cache.internal_id.clone(),
+                    HunkKind::RemoteCache,
                 ),
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    next_right.internal_id.clone(),
-                    HunkKind::NextRight,
+                    remote.internal_id.clone(),
+                    HunkKind::Remote,
                 ),
             ]),
 
             // 1100
             //
-            // The id exists in the left side but not in the right
-            // side, which means there is a conflict. Since we cannot
-            // determine which side (left added or right removed) is
-            // the most up-to-date, it is safer to consider the left
-            // added side up-to-date in order not to lose data.
+            // The hash exists in local side but not in remote side,
+            // which means there is a conflict. Since we cannot
+            // determine which side (local updated or remote removed)
+            // is the most up-to-date, it is safer to consider the
+            // local updated side up-to-date in order not to lose
+            // data.
             //
             // TODO: make this behaviour customizable.
-            (Some(prev_left), Some(next_left), None, None) => {
-                patch.extend([
-                    Hunk::CopyEmail(
+            (Some(local_cache), Some(local), None, None) => {
+                patch.push(Hunk::CopyEmail(
+                    folder.to_string(),
+                    local.clone(),
+                    HunkKindRestricted::Local,
+                    HunkKindRestricted::Remote,
+                ));
+
+                if local_cache.flags != local.flags {
+                    patch.push(Hunk::SetFlags(
                         folder.to_string(),
-                        Envelope {
-                            flags: Flags::default(),
-                            ..next_left.clone()
-                        },
-                        HunkKind::NextLeft,
-                        HunkKind::PrevRight,
-                    ),
-                    Hunk::CopyEmail(
-                        folder.to_string(),
-                        Envelope {
-                            flags: Flags::default(),
-                            ..next_left.clone()
-                        },
-                        HunkKind::NextLeft,
-                        HunkKind::NextRight,
-                    ),
-                ]);
-                patch.extend(build_flags_patch(
-                    folder.clone(),
-                    Some(prev_left),
-                    Some(next_left),
-                    None,
-                    None,
-                ))
+                        local_cache.internal_id.clone(),
+                        local.flags.clone(),
+                        HunkKind::LocalCache,
+                    ));
+                }
             }
 
             // 1101
             //
-            // The id exists everywhere except in prev right side,
-            // which means an email is missing prev right side and
-            // needs to be synchronized.
-            (Some(prev_left), Some(next_left), None, Some(next_right)) => {
-                patch.push(Hunk::CopyEmail(
+            // The hash exists everywhere except in remote cache side,
+            // which means an email is missing remote cache side and
+            // needs to be updated. Flags also need to be
+            // synchronized.
+            (Some(local_cache), Some(local), None, Some(remote)) => {
+                let flags = sync_flags(Some(local_cache), Some(local), None, Some(remote));
+
+                if local_cache.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        local_cache.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::LocalCache,
+                    ));
+                }
+
+                if local.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        local.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::Local,
+                    ));
+                }
+
+                if remote.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        remote.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::Remote,
+                    ));
+                }
+
+                patch.push(Hunk::CacheEnvelope(
                     folder.to_string(),
-                    Envelope {
-                        flags: Flags::default(),
-                        ..next_right.clone()
-                    },
-                    HunkKind::NextRight,
-                    HunkKind::PrevRight,
+                    remote.internal_id.clone(),
+                    HunkKindRestricted::Remote,
                 ));
-                patch.extend(build_flags_patch(
-                    folder.clone(),
-                    Some(prev_left),
-                    Some(next_left),
-                    None,
-                    Some(next_right),
-                ))
             }
 
             // 1110
             //
-            // The id exists everywhere except in next right side,
-            // which means an email has been removed next right side
-            // and needs to be removed everywhere else.
-            (Some(prev_left), Some(next_left), Some(prev_right), None) => patch.extend([
+            // The hash exists everywhere except in remote side, which
+            // means an email has been removed remote side and needs
+            // to be removed everywhere else.
+            (Some(local_cache), Some(local), Some(remote_cache), None) => patch.extend([
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    prev_left.internal_id.clone(),
-                    HunkKind::PrevLeft,
+                    local_cache.internal_id.clone(),
+                    HunkKind::LocalCache,
                 ),
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    next_left.internal_id.clone(),
-                    HunkKind::NextLeft,
+                    local.internal_id.clone(),
+                    HunkKind::Local,
                 ),
                 Hunk::RemoveEmail(
                     folder.to_string(),
-                    prev_right.internal_id.clone(),
-                    HunkKind::PrevRight,
+                    remote_cache.internal_id.clone(),
+                    HunkKind::RemoteCache,
                 ),
             ]),
 
             // 1111
             //
-            // The id exists everywhere, which means flags need to be
-            // synchronized.
-            (Some(prev_left), Some(next_left), Some(prev_right), Some(next_right)) => {
-                patch.extend(build_flags_patch(
-                    folder.clone(),
-                    Some(prev_left),
-                    Some(next_left),
-                    Some(prev_right),
-                    Some(next_right),
-                ));
+            // The hash exists everywhere, which means all flags need
+            // to be synchronized.
+            (Some(local_cache), Some(local), Some(remote_cache), Some(remote)) => {
+                let flags = sync_flags(
+                    Some(local_cache),
+                    Some(local),
+                    Some(remote_cache),
+                    Some(remote),
+                );
+
+                if local_cache.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        local_cache.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::LocalCache,
+                    ));
+                }
+
+                if local.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        local.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::Local,
+                    ));
+                }
+
+                if remote_cache.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        remote_cache.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::RemoteCache,
+                    ));
+                }
+
+                if remote.flags != flags {
+                    patch.push(Hunk::SetFlags(
+                        folder.to_string(),
+                        remote.internal_id.clone(),
+                        flags.clone(),
+                        HunkKind::Remote,
+                    ));
+                }
             }
         }
     }
@@ -1000,430 +996,154 @@ pub fn build_patch<F: ToString + Clone>(
     patch
 }
 
-pub fn build_flags_patch<F: ToString>(
-    folder: F,
-    prev_left: Option<&Envelope>,
-    next_left: Option<&Envelope>,
-    prev_right: Option<&Envelope>,
-    next_right: Option<&Envelope>,
-) -> Patch {
-    let mut patch = vec![];
+pub fn sync_flags(
+    local_cache: Option<&Envelope>,
+    local: Option<&Envelope>,
+    remote_cache: Option<&Envelope>,
+    remote: Option<&Envelope>,
+) -> Flags {
+    let mut synchronized_flags: HashSet<Flag> = HashSet::default();
 
     let mut all_flags: HashSet<Flag> = HashSet::default();
-    all_flags.extend(prev_left.map(|e| e.flags.clone().0).unwrap_or_default());
-    all_flags.extend(next_left.map(|e| e.flags.clone().0).unwrap_or_default());
-    all_flags.extend(prev_right.map(|e| e.flags.clone().0).unwrap_or_default());
-    all_flags.extend(next_right.map(|e| e.flags.clone().0).unwrap_or_default());
+    all_flags.extend(local_cache.map(|e| e.flags.clone().0).unwrap_or_default());
+    all_flags.extend(local.map(|e| e.flags.clone().0).unwrap_or_default());
+    all_flags.extend(remote_cache.map(|e| e.flags.clone().0).unwrap_or_default());
+    all_flags.extend(remote.map(|e| e.flags.clone().0).unwrap_or_default());
 
     for flag in all_flags {
         match (
-            prev_left.and_then(|e| e.flags.get(&flag)),
-            next_left.and_then(|e| e.flags.get(&flag)),
-            prev_right.and_then(|e| e.flags.get(&flag)),
-            next_right.and_then(|e| e.flags.get(&flag)),
+            local_cache.and_then(|e| e.flags.get(&flag)),
+            local.and_then(|e| e.flags.get(&flag)),
+            remote_cache.and_then(|e| e.flags.get(&flag)),
+            remote.and_then(|e| e.flags.get(&flag)),
         ) {
             // The flag exists nowhere, which cannot happen since the
             // flags hashset is built from envelopes flags.
             (None, None, None, None) => (),
 
-            // The flag only exists in the next right side, which
-            // means a new flag needs to be added prev left, next left
-            // and prev right sides.
+            // The flag only exists in remote side, which means a new
+            // flag has been added.
             (None, None, None, Some(_)) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_left.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(next_left) = next_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        next_left.clone(),
-                        flag.clone(),
-                        HunkKind::NextLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_right.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag only exists in the prev right, which means it
-            // is an old flag that needs to be removed.
+            // The flag only exists in remote cache, which means an
+            // outdated flag needs to be removed.
             (None, None, Some(_), None) => {
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_right.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
 
-            // The flag exists in right sides but not in left sides,
+            // The flag exists in remote side but not in local side,
             // which means there is a conflict. Since we cannot
-            // determine which side (left removed or right added) is
-            // the most up-to-date, it is safer to consider the right
-            // added side up-to-date (or left removed in case of
+            // determine which side (local removed or remote added) is
+            // the most up-to-date, it is safer to consider the remote
+            // added side up-to-date (or local removed in case of
             // [`Flag::Deleted`]) in order not to lose data.
             //
             // TODO: make this behaviour customizable.
             (None, None, Some(_), Some(_)) if flag == Flag::Deleted => {
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_right.internal_id.clone(),
-                        Flag::Deleted,
-                        HunkKind::PrevRight,
-                    ))
-                }
-                if let Some(next_right) = next_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        next_right.internal_id.clone(),
-                        Flag::Deleted,
-                        HunkKind::NextRight,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
             (None, None, Some(_), Some(_)) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_left.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(next_left) = next_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        next_left.clone(),
-                        flag.clone(),
-                        HunkKind::NextLeft,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag only exists in the next left side, which means
-            // a new flag has been added and needs to be synchronized
-            // prev left, prev right and next right sides.
+            // The flag only exists in local side, which means a new
+            // flag has been added.
             (None, Some(_), None, None) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_left.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_right.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
-                if let Some(next_right) = next_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        next_right.clone(),
-                        flag.clone(),
-                        HunkKind::NextRight,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag exists in next sides but not in prev sides,
-            // which means a new (same) flag has been added both sides
-            // at the same time and needs to be synchronized with prev
-            // sides.
+            // The flag exists in local and remote sides, which means
+            // a new (same) flag has been added both sides at the same
+            // time.
             (None, Some(_), None, Some(_)) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_left.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_right.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag exists in the next left and prev right sides,
-            // which means a new (same) flag has been added left side
-            // but removed right side. Since we cannot determine which
-            // side (left added or right removed) is the most
-            // up-to-date, it is safer to consider the left added side
-            // up-to-date (or right removed in case of
+            // The flag exists in local side and remote cache side,
+            // which means a new (same) flag has been added local side
+            // but removed remote side. Since we cannot determine
+            // which side (local added or remote removed) is the most
+            // up-to-date, it is safer to consider the local added
+            // side up-to-date (or remote removed in case of
             // [`Flag::Deleted`]) in order not to lose data.
             //
             // TODO: make this behaviour customizable.
             (None, Some(_), Some(_), None) if flag == Flag::Deleted => {
-                if let Some(next_left) = next_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        next_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::NextLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_right.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
             (None, Some(_), Some(_), None) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_left.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(next_right) = next_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        next_right.clone(),
-                        flag.clone(),
-                        HunkKind::NextRight,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag exists everywhere except in prev left side,
-            // which means the prev left is outdated and needs to be
-            // updated.
+            // The flag exists everywhere except in local cache, which
+            // means the local cache misses a flag.
             (None, Some(_), Some(_), Some(_)) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_left.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag exists only in prev left side, which means the
-            // prev left is outdated and needs to be updated.
+            // The flag only exists in local cache side, which means
+            // the local cache has an outdated flag.
             (Some(_), None, None, None) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
 
-            // The flag exists in the prev left and next right side,
-            // which means a new (same) flag has been removed left
-            // side but added right side. Since we cannot determine
-            // which side (left removed or right added) is the most
-            // up-to-date, it is safer to consider the right added
-            // side up-to-date (or left removed in case of
+            // The flag exists in local cache side and remote side,
+            // which means a new (same) flag has been removed local
+            // cache side but added remote side. Since we cannot
+            // determine which side (local removed or remote added) is
+            // the most up-to-date, it is safer to consider the remote
+            // added side up-to-date (or local removed in case of
             // [`Flag::Deleted`]) in order not to lose data.
             //
             // TODO: make this behaviour customizable.
             (Some(_), None, None, Some(_)) if flag == Flag::Deleted => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(next_right) = next_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        next_right.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::NextRight,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
             (Some(_), None, None, Some(_)) => {
-                if let Some(next_left) = next_left {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        next_left.clone(),
-                        flag.clone(),
-                        HunkKind::NextLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_right.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag exists in prev sides, which means a old flag
+            // The flag exists in both caches, which means a old flag
             // needs to be removed everywhere.
             (Some(_), None, Some(_), None) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_right.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
 
-            // The flag exists everywhere except in next left, which
-            // means a flag has been removed next left and needs to be
-            // removed everywhere else.
+            // The flag exists everywhere except in local side, which
+            // means a flag has been removed local side and needs to
+            // be removed everywhere else.
             (Some(_), None, Some(_), Some(_)) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_right.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
-                if let Some(next_right) = next_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        next_right.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::NextRight,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
 
-            // The flag exists in the prev left and next left sides,
-            // which means there is a conflict. Since we cannot
-            // determine which side (left added or right removed) is
-            // the most up-to-date, it is safer to consider the left
-            // added side up-to-date (or right removed in case of
-            // [`Flag::Deleted`]) in order not to lose data.
+            // The flag exists in the local sides but not in remote
+            // sides, which means there is a conflict. Since we cannot
+            // determine which side is the most up-to-date, it is
+            // safer to consider the local side side up-to-date (or
+            // remote side in case of [`Flag::Deleted`]) in order not
+            // to lose data.
             //
             // TODO: make this behaviour customizable.
             (Some(_), Some(_), None, None) if flag == Flag::Deleted => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(next_left) = next_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        next_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::NextLeft,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
             (Some(_), Some(_), None, None) => {
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_right.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
-                if let Some(next_right) = next_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        next_right.clone(),
-                        flag.clone(),
-                        HunkKind::NextRight,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag exists everywhere except in prev right side,
-            // which means the prev right flag is outdated and needs
-            // to be updated.
+            // The flag exists everywhere except in remote cache side,
+            // which means the remote cache misses a flag.
             (Some(_), Some(_), None, Some(_)) => {
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::AddFlag(
-                        folder.to_string(),
-                        prev_right.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.insert(flag.clone());
             }
 
-            // The flag exists everywhere except in next right side,
-            // which means a flag has been removed next right side and
-            // needs to be removed everywhere else.
+            // The flag exists everywhere except in remote side, which
+            // means a flag has been removed remote side and needs to
+            // be removed everywhere else.
             (Some(_), Some(_), Some(_), None) => {
-                if let Some(prev_left) = prev_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevLeft,
-                    ))
-                }
-                if let Some(next_left) = next_left {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        next_left.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::NextLeft,
-                    ))
-                }
-                if let Some(prev_right) = prev_right {
-                    patch.push(Hunk::RemoveFlag(
-                        folder.to_string(),
-                        prev_right.internal_id.clone(),
-                        flag.clone(),
-                        HunkKind::PrevRight,
-                    ))
-                }
+                synchronized_flags.remove(&flag);
             }
 
             // The flag exists everything, nothing to do.
@@ -1431,754 +1151,438 @@ pub fn build_flags_patch<F: ToString>(
         }
     }
 
-    patch
-}
-
-#[derive(Debug, Default)]
-pub struct SyncIdMapper {
-    path: PathBuf,
-    pub map: HashMap<String, String>,
-}
-
-impl SyncIdMapper {
-    pub fn new<P: AsRef<Path>>(dir: P) -> Result<Self> {
-        let mut mapper = Self::default();
-        mapper.path = dir.as_ref().join(".himalaya-sync-id-map");
-
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&mapper.path)
-            .map_err(|err| Error::OpenHashMapFileError(err, mapper.path.clone()))?;
-        let reader = BufReader::new(file);
-
-        for line in reader.lines() {
-            let line = line.map_err(Error::ReadHashMapFileLineError)?;
-            let (left_id, right_id) = line
-                .split_once(' ')
-                .ok_or_else(|| Error::ParseLineError(line.clone()))?;
-            mapper.map.insert(left_id.to_string(), right_id.to_string());
-        }
-
-        Ok(mapper)
-    }
-
-    pub fn map_ids(&self, envelopes: Envelopes) -> Envelopes {
-        envelopes
-            .into_iter()
-            .map(|(internal_id, mut envelope)| {
-                envelope.id = if let Some(id) = self.map.get(&internal_id) {
-                    id.clone()
-                } else {
-                    Uuid::new_v4().to_string()
-                };
-                (envelope.id.clone(), envelope)
-            })
-            .collect()
-    }
-
-    pub fn insert<L: ToString, R: ToString, T: IntoIterator<Item = (L, R)>>(&mut self, lines: T) {
-        for (left, right) in lines {
-            self.map.insert(left.to_string(), right.to_string());
-        }
-    }
-
-    pub fn remove<K: AsRef<str>>(&mut self, key: K) {
-        self.map.remove(key.as_ref());
-    }
-
-    pub fn save(&mut self) -> Result<()> {
-        let mut buffer = String::default();
-
-        for (left, right) in &self.map {
-            buffer.push_str(left);
-            buffer.push(' ');
-            buffer.push_str(right);
-            buffer.push('\n');
-        }
-
-        OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&self.path)
-            .map_err(|err| Error::OpenHashMapFileError(err, self.path.clone()))?
-            .write(buffer.as_bytes())
-            .map_err(|err| Error::WriteHashMapFileError(err, self.path.clone()))?;
-
-        Ok(())
-    }
-}
-
-impl<'a> FromIterator<(&'a str, &'a str)> for SyncIdMapper {
-    fn from_iter<T: IntoIterator<Item = (&'a str, &'a str)>>(iter: T) -> Self {
-        let mut id_mapper = Self::default();
-
-        for (left, right) in iter {
-            id_mapper.map.insert(left.to_string(), right.to_string());
-        }
-
-        id_mapper
-    }
+    Flags::from_iter(synchronized_flags)
 }
 
 #[cfg(test)]
 mod sync {
     use crate::{Envelope, Flag};
 
-    use super::{Envelopes, Hunk, HunkKind, Patch};
+    use super::{Envelopes, Flags, Hunk, HunkKind, HunkKindRestricted, Patch};
 
     #[test]
-    fn build_flags_patch() {
-        assert_eq!(
-            super::build_flags_patch("inbox", None, None, None, None),
-            vec![] as Patch,
-        );
+    fn sync_flags() {
+        assert_eq!(super::sync_flags(None, None, None, None), Flags::default());
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 None,
                 None,
                 None,
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![] as Patch,
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevLeft
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::NextLeft
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevRight
-                ),
-            ],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "local-cache-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "local-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "remote-cache-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "remote-id".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![Hunk::RemoveFlag(
-                "inbox".into(),
-                "id".into(),
-                Flag::Seen,
-                HunkKind::PrevRight,
-            )],
+            Flags::default()
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevLeft
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::NextLeft
-                ),
-            ],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevLeft
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevRight
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::NextRight
-                ),
-            ],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevLeft
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevRight
-                ),
-            ],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevLeft
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::NextRight
-                ),
-            ],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![Hunk::AddFlag(
-                "inbox".into(),
-                Envelope {
-                    internal_id: "id".into(),
-                    ..Envelope::default()
-                },
-                Flag::Seen,
-                HunkKind::PrevLeft
-            )],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![Hunk::RemoveFlag(
-                "inbox".into(),
-                "id".into(),
-                Flag::Seen,
-                HunkKind::PrevLeft
-            )],
+            Flags::default()
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::NextLeft
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevRight
-                ),
-            ],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::PrevLeft),
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::PrevRight),
-            ],
+            Flags::default(),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::PrevLeft),
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::PrevRight),
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::NextRight),
-            ],
+            Flags::default(),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::PrevRight
-                ),
-                Hunk::AddFlag(
-                    "inbox".into(),
-                    Envelope {
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    Flag::Seen,
-                    HunkKind::NextRight
-                ),
-            ],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![Hunk::AddFlag(
-                "inbox".into(),
-                Envelope {
-                    internal_id: "id".into(),
-                    ..Envelope::default()
-                },
-                Flag::Seen,
-                HunkKind::PrevRight,
-            )],
+            Flags::from_iter([Flag::Seen]),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::PrevLeft),
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::NextLeft),
-                Hunk::RemoveFlag("inbox".into(), "id".into(), Flag::Seen, HunkKind::PrevRight),
-            ],
+            Flags::default(),
         );
 
         assert_eq!(
-            super::build_flags_patch(
-                "inbox",
+            super::sync_flags(
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
                 Some(&Envelope {
-                    internal_id: "id".into(),
+                    internal_id: "internal-id".into(),
                     flags: "seen".into(),
                     ..Envelope::default()
                 }),
             ),
-            vec![] as Patch,
+            Flags::default()
         );
     }
 
     #[test]
     fn build_patch_0000() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::default();
+        let local_cache = Envelopes::default();
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::default();
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
         assert_eq!(patch, vec![] as Patch);
     }
 
     #[test]
     fn build_patch_0001() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::default();
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "remote-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
         assert_eq!(
-            patch,
+            super::build_patch("inbox", local_cache, local, remote_cache, remote),
             vec![
-                Hunk::CopyEmail(
+                Hunk::CacheEnvelope(
                     "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextRight,
-                    HunkKind::PrevLeft
+                    "remote-id".into(),
+                    HunkKindRestricted::Remote,
                 ),
                 Hunk::CopyEmail(
                     "inbox".into(),
                     Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
+                        internal_id: "remote-id".into(),
                         flags: "seen".into(),
                         ..Envelope::default()
                     },
-                    HunkKind::NextRight,
-                    HunkKind::NextLeft
-                ),
-                Hunk::CopyEmail(
-                    "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextRight,
-                    HunkKind::PrevRight
+                    HunkKindRestricted::Remote,
+                    HunkKindRestricted::Local
                 ),
             ],
         );
@@ -2186,320 +1590,254 @@ mod sync {
 
     #[test]
     fn build_patch_0010() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::default();
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::default();
+        let remote = Envelopes::default();
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
         assert_eq!(
-            patch,
+            super::build_patch("inbox", local_cache, local, remote_cache, remote),
             vec![Hunk::RemoveEmail(
                 "inbox".into(),
-                "id".into(),
-                HunkKind::PrevRight
+                "internal-id".into(),
+                HunkKind::RemoteCache
             )],
         );
     }
 
     #[test]
     fn build_patch_0011_same_flags() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::default();
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
         assert_eq!(
-            patch,
-            vec![
-                Hunk::CopyEmail(
-                    "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextRight,
-                    HunkKind::PrevLeft
-                ),
-                Hunk::CopyEmail(
-                    "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextRight,
-                    HunkKind::NextLeft
-                ),
-            ],
+            super::build_patch("inbox", local_cache, local, remote_cache, remote),
+            vec![Hunk::CopyEmail(
+                "inbox".into(),
+                Envelope {
+                    id: "id".into(),
+                    internal_id: "internal-id".into(),
+                    flags: "seen".into(),
+                    ..Envelope::default()
+                },
+                HunkKindRestricted::Remote,
+                HunkKindRestricted::Local,
+            ),],
         );
     }
 
     #[test]
     fn build_patch_0011_different_flags() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::default();
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "remote-cache-id".into(),
                 flags: "seen replied".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "remote-id".into(),
                 flags: "seen flagged deleted".into(),
                 ..Envelope::default()
             },
         )]);
-
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
-
-        assert_eq!(patch.len(), 5);
-        assert!(patch.contains(&Hunk::AddFlag(
-            "inbox".into(),
-            Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
-                flags: "seen flagged deleted".into(),
-                ..Envelope::default()
-            },
-            Flag::Answered,
-            HunkKind::NextRight
-        )));
-        assert!(patch.contains(&Hunk::AddFlag(
-            "inbox".into(),
-            Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
-                flags: "seen replied".into(),
-                ..Envelope::default()
-            },
-            Flag::Flagged,
-            HunkKind::PrevRight
-        )));
-        assert!(patch.contains(&Hunk::RemoveFlag(
-            "inbox".into(),
-            "id".into(),
-            Flag::Deleted,
-            HunkKind::NextRight
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
-                flags: "seen replied flagged".into(),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::PrevLeft,
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
-                flags: "seen replied flagged".into(),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::NextLeft
-        )));
-    }
-
-    #[test]
-    fn build_patch_0100() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::from_iter([(
-            "id".into(),
-            Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
-                flags: "seen".into(),
-                ..Envelope::default()
-            },
-        )]);
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::default();
-
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
 
         assert_eq!(
-            patch,
+            super::build_patch("inbox", local_cache, local, remote_cache, remote),
             vec![
                 Hunk::CopyEmail(
                     "inbox".into(),
                     Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
+                        internal_id: "remote-id".into(),
+                        flags: "seen flagged deleted".into(),
                         ..Envelope::default()
                     },
-                    HunkKind::NextLeft,
-                    HunkKind::PrevLeft,
+                    HunkKindRestricted::Remote,
+                    HunkKindRestricted::Local,
                 ),
-                Hunk::CopyEmail(
+                Hunk::SetFlags(
                     "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextLeft,
-                    HunkKind::PrevRight,
-                ),
-                Hunk::CopyEmail(
-                    "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextLeft,
-                    HunkKind::NextRight,
+                    "remote-cache-id".into(),
+                    "seen flagged deleted".into(),
+                    HunkKind::RemoteCache,
                 )
+            ]
+        );
+    }
+
+    #[test]
+    fn build_patch_0100() {
+        let local_cache = Envelopes::default();
+        let local = Envelopes::from_iter([(
+            "hash".into(),
+            Envelope {
+                id: "id".into(),
+                internal_id: "internal-id".into(),
+                flags: "seen".into(),
+                ..Envelope::default()
+            },
+        )]);
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::default();
+
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
+
+        assert_eq!(
+            patch,
+            vec![
+                Hunk::CacheEnvelope(
+                    "inbox".into(),
+                    "internal-id".into(),
+                    HunkKindRestricted::Local,
+                ),
+                Hunk::CopyEmail(
+                    "inbox".into(),
+                    Envelope {
+                        id: "id".into(),
+                        internal_id: "internal-id".into(),
+                        flags: "seen".into(),
+                        ..Envelope::default()
+                    },
+                    HunkKindRestricted::Local,
+                    HunkKindRestricted::Remote,
+                ),
             ],
         );
     }
 
     #[test]
     fn build_patch_0101() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::from_iter([
+        let local_cache = Envelopes::default();
+        let local = Envelopes::from_iter([
             (
-                "id-1".into(),
+                "hash-1".into(),
                 Envelope {
                     id: "id-1".into(),
-                    internal_id: "id-1".into(),
+                    internal_id: "internal-id-1".into(),
                     flags: "seen".into(),
                     date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                     ..Envelope::default()
                 },
             ),
             (
-                "id-2".into(),
+                "hash-2".into(),
                 Envelope {
                     id: "id-2".into(),
-                    internal_id: "id-2".into(),
+                    internal_id: "internal-id-2".into(),
                     flags: "seen".into(),
                     date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                     ..Envelope::default()
                 },
             ),
             (
-                "id-3".into(),
+                "hash-3".into(),
                 Envelope {
                     id: "id-3".into(),
-                    internal_id: "id-3".into(),
+                    internal_id: "internal-id-3".into(),
                     flags: "seen".into(),
                     date: None,
                     ..Envelope::default()
                 },
             ),
             (
-                "id-4".into(),
+                "hash-4".into(),
                 Envelope {
                     id: "id-4".into(),
-                    internal_id: "id-4".into(),
+                    internal_id: "internal-id-4".into(),
                     flags: "seen".into(),
                     date: None,
                     ..Envelope::default()
                 },
             ),
             (
-                "id-5".into(),
+                "hash-5".into(),
                 Envelope {
                     id: "id-5".into(),
-                    internal_id: "id-5".into(),
+                    internal_id: "internal-id-5".into(),
                     flags: "seen".into(),
                     date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                     ..Envelope::default()
                 },
             ),
         ]);
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::from_iter([
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::from_iter([
             (
-                "id-1".into(),
+                "hash-1".into(),
                 Envelope {
                     id: "id-1".into(),
-                    internal_id: "id-1".into(),
+                    internal_id: "internal-id-1".into(),
                     flags: "seen".into(),
                     date: None,
                     ..Envelope::default()
                 },
             ),
             (
-                "id-2".into(),
+                "hash-2".into(),
                 Envelope {
                     id: "id-1".into(),
-                    internal_id: "id-2".into(),
+                    internal_id: "internal-id-2".into(),
                     flags: "seen".into(),
                     date: Some("2021-01-01T00:00:00-00:00".parse().unwrap()),
                     ..Envelope::default()
                 },
             ),
             (
-                "id-3".into(),
+                "hash-3".into(),
                 Envelope {
                     id: "id-3".into(),
-                    internal_id: "id-3".into(),
+                    internal_id: "internal-id-3".into(),
                     flags: "seen".into(),
                     date: None,
                     ..Envelope::default()
                 },
             ),
             (
-                "id-4".into(),
+                "hash-4".into(),
                 Envelope {
                     id: "id-4".into(),
-                    internal_id: "id-4".into(),
+                    internal_id: "internal-id-4".into(),
                     flags: "seen".into(),
                     date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                     ..Envelope::default()
                 },
             ),
             (
-                "id-5".into(),
+                "hash-5".into(),
                 Envelope {
                     id: "id-5".into(),
-                    internal_id: "id-5".into(),
+                    internal_id: "internal-id-5".into(),
                     flags: "seen".into(),
                     date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                     ..Envelope::default()
@@ -2507,274 +1845,164 @@ mod sync {
             ),
         ]);
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
-        assert_eq!(patch.len(), 20);
+        assert_eq!(patch.len(), 15);
         assert!(patch.contains(&Hunk::RemoveEmail(
             "inbox".into(),
-            "id-1".into(),
-            HunkKind::NextRight
+            "internal-id-1".into(),
+            HunkKind::Remote
+        )));
+        assert!(patch.contains(&Hunk::CacheEnvelope(
+            "inbox".into(),
+            "internal-id-1".into(),
+            HunkKindRestricted::Local,
         )));
         assert!(patch.contains(&Hunk::CopyEmail(
             "inbox".into(),
             Envelope {
                 id: "id-1".into(),
-                internal_id: "id-1".into(),
+                internal_id: "internal-id-1".into(),
                 flags: "seen".into(),
                 date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                 ..Envelope::default()
             },
-            HunkKind::NextLeft,
-            HunkKind::PrevLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-1".into(),
-                internal_id: "id-1".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextLeft,
-            HunkKind::PrevRight
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-1".into(),
-                internal_id: "id-1".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextLeft,
-            HunkKind::NextRight
+            HunkKindRestricted::Local,
+            HunkKindRestricted::Remote
         )));
         assert!(patch.contains(&Hunk::RemoveEmail(
             "inbox".into(),
-            "id-2".into(),
-            HunkKind::NextRight
+            "internal-id-2".into(),
+            HunkKind::Remote
+        )));
+        assert!(patch.contains(&Hunk::CacheEnvelope(
+            "inbox".into(),
+            "internal-id-2".into(),
+            HunkKindRestricted::Local,
         )));
         assert!(patch.contains(&Hunk::CopyEmail(
             "inbox".into(),
             Envelope {
                 id: "id-2".into(),
-                internal_id: "id-2".into(),
+                internal_id: "internal-id-2".into(),
                 flags: "seen".into(),
                 date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                 ..Envelope::default()
             },
-            HunkKind::NextLeft,
-            HunkKind::PrevLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-2".into(),
-                internal_id: "id-2".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextLeft,
-            HunkKind::PrevRight
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-2".into(),
-                internal_id: "id-2".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextLeft,
-            HunkKind::NextRight
+            HunkKindRestricted::Local,
+            HunkKindRestricted::Remote
         )));
         assert!(patch.contains(&Hunk::RemoveEmail(
             "inbox".into(),
-            "id-3".into(),
-            HunkKind::NextLeft
+            "internal-id-3".into(),
+            HunkKind::Local
+        )));
+        assert!(patch.contains(&Hunk::CacheEnvelope(
+            "inbox".into(),
+            "internal-id-3".into(),
+            HunkKindRestricted::Remote,
         )));
         assert!(patch.contains(&Hunk::CopyEmail(
             "inbox".into(),
             Envelope {
                 id: "id-3".into(),
-                internal_id: "id-3".into(),
+                internal_id: "internal-id-3".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
-            HunkKind::NextRight,
-            HunkKind::PrevLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-3".into(),
-                internal_id: "id-3".into(),
-                flags: "seen".into(),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::NextLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-3".into(),
-                internal_id: "id-3".into(),
-                flags: "seen".into(),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::PrevRight
+            HunkKindRestricted::Remote,
+            HunkKindRestricted::Local
         )));
         assert!(patch.contains(&Hunk::RemoveEmail(
             "inbox".into(),
-            "id-4".into(),
-            HunkKind::NextLeft
+            "internal-id-4".into(),
+            HunkKind::Local
+        )));
+        assert!(patch.contains(&Hunk::CacheEnvelope(
+            "inbox".into(),
+            "internal-id-4".into(),
+            HunkKindRestricted::Remote,
         )));
         assert!(patch.contains(&Hunk::CopyEmail(
             "inbox".into(),
             Envelope {
                 id: "id-4".into(),
-                internal_id: "id-4".into(),
+                internal_id: "internal-id-4".into(),
                 flags: "seen".into(),
                 date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                 ..Envelope::default()
             },
-            HunkKind::NextRight,
-            HunkKind::PrevLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-4".into(),
-                internal_id: "id-4".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::NextLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-4".into(),
-                internal_id: "id-4".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::PrevRight
+            HunkKindRestricted::Remote,
+            HunkKindRestricted::Local
         )));
         assert!(patch.contains(&Hunk::RemoveEmail(
             "inbox".into(),
-            "id-5".into(),
-            HunkKind::NextLeft
+            "internal-id-5".into(),
+            HunkKind::Local
+        )));
+        assert!(patch.contains(&Hunk::CacheEnvelope(
+            "inbox".into(),
+            "internal-id-5".into(),
+            HunkKindRestricted::Remote,
         )));
         assert!(patch.contains(&Hunk::CopyEmail(
             "inbox".into(),
             Envelope {
                 id: "id-5".into(),
-                internal_id: "id-5".into(),
+                internal_id: "internal-id-5".into(),
                 flags: "seen".into(),
                 date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
                 ..Envelope::default()
             },
-            HunkKind::NextRight,
-            HunkKind::PrevLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-5".into(),
-                internal_id: "id-5".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::NextLeft
-        )));
-        assert!(patch.contains(&Hunk::CopyEmail(
-            "inbox".into(),
-            Envelope {
-                id: "id-5".into(),
-                internal_id: "id-5".into(),
-                flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
-                ..Envelope::default()
-            },
-            HunkKind::NextRight,
-            HunkKind::PrevRight
+            HunkKindRestricted::Remote,
+            HunkKindRestricted::Local
         )));
     }
 
     #[test]
     fn build_patch_0110() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::default();
+        let local = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "flagged".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::default();
+        let remote = Envelopes::default();
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
         assert_eq!(
             patch,
             vec![
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevRight),
-                Hunk::CopyEmail(
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::RemoteCache),
+                Hunk::CacheEnvelope(
                     "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextLeft,
-                    HunkKind::PrevLeft
+                    "internal-id".into(),
+                    HunkKindRestricted::Local,
                 ),
                 Hunk::CopyEmail(
                     "inbox".into(),
                     Envelope {
                         id: "id".into(),
-                        internal_id: "id".into(),
+                        internal_id: "internal-id".into(),
                         flags: "seen".into(),
                         ..Envelope::default()
                     },
-                    HunkKind::NextLeft,
-                    HunkKind::PrevRight
-                ),
-                Hunk::CopyEmail(
-                    "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextLeft,
-                    HunkKind::NextRight
+                    HunkKindRestricted::Local,
+                    HunkKindRestricted::Remote
                 )
             ],
         );
@@ -2782,140 +2010,118 @@ mod sync {
 
     #[test]
     fn build_patch_0111() {
-        let prev_left = Envelopes::default();
-        let next_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::default();
+        let local = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
         assert_eq!(
             patch,
-            vec![Hunk::CopyEmail(
+            vec![Hunk::CacheEnvelope(
                 "inbox".into(),
-                Envelope {
-                    id: "id".into(),
-                    internal_id: "id".into(),
-                    ..Envelope::default()
-                },
-                HunkKind::NextLeft,
-                HunkKind::PrevLeft,
+                "internal-id".into(),
+                HunkKindRestricted::Local,
             ),]
         );
     }
 
     #[test]
     fn build_patch_1000() {
-        let prev_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::default();
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::default();
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
         assert_eq!(
             patch,
             vec![Hunk::RemoveEmail(
                 "inbox".into(),
-                "id".into(),
-                HunkKind::PrevLeft
+                "internal-id".into(),
+                HunkKind::LocalCache
             )]
         );
     }
 
     #[test]
     fn build_patch_1001() {
-        let prev_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::from_iter([(
-            "id".into(),
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
         assert_eq!(
             patch,
             vec![
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevLeft),
-                Hunk::CopyEmail(
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::LocalCache),
+                Hunk::CacheEnvelope(
                     "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextRight,
-                    HunkKind::PrevLeft,
+                    "internal-id".into(),
+                    HunkKindRestricted::Remote,
                 ),
                 Hunk::CopyEmail(
                     "inbox".into(),
                     Envelope {
                         id: "id".into(),
-                        internal_id: "id".into(),
+                        internal_id: "internal-id".into(),
                         flags: "seen".into(),
                         ..Envelope::default()
                     },
-                    HunkKind::NextRight,
-                    HunkKind::NextLeft,
-                ),
-                Hunk::CopyEmail(
-                    "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        flags: "seen".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextRight,
-                    HunkKind::PrevRight,
+                    HunkKindRestricted::Remote,
+                    HunkKindRestricted::Local,
                 ),
             ]
         );
@@ -2923,220 +2129,241 @@ mod sync {
 
     #[test]
     fn build_patch_1010() {
-        let prev_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::default();
+        let remote = Envelopes::default();
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
         assert_eq!(
             patch,
             vec![
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevLeft),
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevRight),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::LocalCache),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::RemoteCache),
             ]
         );
     }
 
     #[test]
     fn build_patch_1011() {
-        let prev_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_left = Envelopes::default();
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let local = Envelopes::default();
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
         assert_eq!(
             patch,
             vec![
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevLeft),
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevRight),
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::NextRight),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::LocalCache),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::RemoteCache),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::Remote),
             ]
         );
     }
 
     #[test]
-    fn build_patch_1100() {
-        let prev_left = Envelopes::from_iter([(
-            "id".into(),
+    fn build_patch_1100_same_flags() {
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "local-cache-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_left = Envelopes::from_iter([(
-            "id".into(),
+        let local = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
-                id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "local-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::default();
-
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::default();
 
         assert_eq!(
-            patch,
+            super::build_patch("inbox", local_cache, local, remote_cache, remote),
+            vec![Hunk::CopyEmail(
+                "inbox".into(),
+                Envelope {
+                    internal_id: "local-id".into(),
+                    flags: "seen".into(),
+                    ..Envelope::default()
+                },
+                HunkKindRestricted::Local,
+                HunkKindRestricted::Remote,
+            ),]
+        );
+    }
+
+    #[test]
+    fn build_patch_1100_different_flags() {
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
+            Envelope {
+                internal_id: "local-cache-id".into(),
+                flags: "seen".into(),
+                ..Envelope::default()
+            },
+        )]);
+        let local = Envelopes::from_iter([(
+            "hash".into(),
+            Envelope {
+                internal_id: "local-id".into(),
+                flags: "flagged".into(),
+                ..Envelope::default()
+            },
+        )]);
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::default();
+
+        assert_eq!(
+            super::build_patch("inbox", local_cache, local, remote_cache, remote),
             vec![
                 Hunk::CopyEmail(
                     "inbox".into(),
                     Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
+                        internal_id: "local-id".into(),
+                        flags: "flagged".into(),
                         ..Envelope::default()
                     },
-                    HunkKind::NextLeft,
-                    HunkKind::PrevRight,
+                    HunkKindRestricted::Local,
+                    HunkKindRestricted::Remote,
                 ),
-                Hunk::CopyEmail(
+                Hunk::SetFlags(
                     "inbox".into(),
-                    Envelope {
-                        id: "id".into(),
-                        internal_id: "id".into(),
-                        ..Envelope::default()
-                    },
-                    HunkKind::NextLeft,
-                    HunkKind::NextRight,
-                ),
+                    "local-cache-id".into(),
+                    "flagged".into(),
+                    HunkKind::LocalCache,
+                )
             ]
         );
     }
 
     #[test]
     fn build_patch_1101() {
-        let prev_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_left = Envelopes::from_iter([(
-            "id".into(),
+        let local = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let prev_right = Envelopes::default();
-        let next_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote_cache = Envelopes::default();
+        let remote = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
 
         assert_eq!(
-            patch,
-            vec![Hunk::CopyEmail(
+            super::build_patch("inbox", local_cache, local, remote_cache, remote),
+            vec![Hunk::CacheEnvelope(
                 "inbox".into(),
-                Envelope {
-                    id: "id".into(),
-                    internal_id: "id".into(),
-                    ..Envelope::default()
-                },
-                HunkKind::NextRight,
-                HunkKind::PrevRight,
+                "internal-id".into(),
+                HunkKindRestricted::Remote,
             ),]
         );
     }
 
     #[test]
     fn build_patch_1110() {
-        let prev_left = Envelopes::from_iter([(
-            "id".into(),
+        let local_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_left = Envelopes::from_iter([(
-            "id".into(),
+        let local = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let prev_right = Envelopes::from_iter([(
-            "id".into(),
+        let remote_cache = Envelopes::from_iter([(
+            "hash".into(),
             Envelope {
                 id: "id".into(),
-                internal_id: "id".into(),
+                internal_id: "internal-id".into(),
                 flags: "seen".into(),
                 ..Envelope::default()
             },
         )]);
-        let next_right = Envelopes::default();
+        let remote = Envelopes::default();
 
-        let patch = super::build_patch("inbox", prev_left, next_left, prev_right, next_right);
+        let patch = super::build_patch("inbox", local_cache, local, remote_cache, remote);
 
         assert_eq!(
             patch,
             vec![
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevLeft),
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::NextLeft),
-                Hunk::RemoveEmail("inbox".into(), "id".into(), HunkKind::PrevRight),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::LocalCache),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::Local),
+                Hunk::RemoveEmail("inbox".into(), "internal-id".into(), HunkKind::RemoteCache),
             ]
         );
     }
