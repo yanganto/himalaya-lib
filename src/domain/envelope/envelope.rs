@@ -5,7 +5,7 @@ use crate::Flags;
 
 /// Represents the message envelope. The envelope is just a message
 /// subset, and is mostly used for listings.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, Serialize)]
 pub struct Envelope {
     /// Represents the identifier.
     pub id: String,
@@ -28,6 +28,16 @@ fn date<S: Serializer>(date: &Option<DateTime<Local>>, s: S) -> Result<S::Ok, S:
     match date {
         Some(date) => s.serialize_str(&date.to_rfc3339()),
         None => s.serialize_none(),
+    }
+}
+
+impl PartialEq for Envelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.flags == other.flags
+            && self.message_id == other.message_id
+            && self.sender == other.sender
+            && self.subject == other.subject
+            && self.date == other.date
     }
 }
 

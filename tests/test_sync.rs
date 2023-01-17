@@ -18,7 +18,7 @@ use himalaya_lib::{
 fn test_sync() {
     env_logger::builder()
         .is_test(true)
-        .filter_level(LevelFilter::Debug)
+        .filter_level(LevelFilter::Warn)
         .init();
 
     // set up account
@@ -61,58 +61,55 @@ fn test_sync() {
     imap.purge_folder("INBOX").unwrap();
     imap.purge_folder("Sent").unwrap();
 
-    // add 3 emails
+    // add 3 emails with delay (in order to have a different date)
 
-    let imap_id_a = imap
-        .add_email(
-            "INBOX",
-            &TplBuilder::default()
-                .message_id("<a@localhost>")
-                .from("alice@localhost")
-                .to("bob@localhost")
-                .subject("A")
-                .text_plain_part("A")
-                .compile(CompilerBuilder::default())
-                .unwrap(),
-            &Flags::default(),
-        )
-        .unwrap();
-    let imap_a = imap.get_envelope("INBOX", &imap_id_a).unwrap();
+    imap.add_email(
+        "INBOX",
+        &TplBuilder::default()
+            .message_id("<a@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("A")
+            .text_plain_part("A")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::default(),
+    )
+    .unwrap();
+
     thread::sleep(Duration::from_secs(1));
 
-    let imap_id_b = imap
-        .add_email(
-            "INBOX",
-            &TplBuilder::default()
-                .message_id("<b@localhost>")
-                .from("alice@localhost")
-                .to("bob@localhost")
-                .subject("B")
-                .text_plain_part("B")
-                .compile(CompilerBuilder::default())
-                .unwrap(),
-            &Flags::from_iter([Flag::Flagged]),
-        )
-        .unwrap();
-    let imap_b = imap.get_envelope("INBOX", &imap_id_b).unwrap();
+    imap.add_email(
+        "INBOX",
+        &TplBuilder::default()
+            .message_id("<b@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("B")
+            .text_plain_part("B")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::from_iter([Flag::Flagged]),
+    )
+    .unwrap();
+
     thread::sleep(Duration::from_secs(1));
 
-    let imap_id_c = imap
-        .add_email(
-            "INBOX",
-            &TplBuilder::default()
-                .message_id("<c@localhost>")
-                .from("alice@localhost")
-                .to("bob@localhost")
-                .subject("C")
-                .text_plain_part("C")
-                .compile(CompilerBuilder::default())
-                .unwrap(),
-            &Flags::default(),
-        )
-        .unwrap();
-    let imap_c = imap.get_envelope("INBOX", &imap_id_c).unwrap();
-    thread::sleep(Duration::from_secs(1));
+    imap.add_email(
+        "INBOX",
+        &TplBuilder::default()
+            .message_id("<c@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("C")
+            .text_plain_part("C")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::default(),
+    )
+    .unwrap();
+
+    let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
 
     // init maildir backend reader
 
@@ -125,7 +122,7 @@ fn test_sync() {
     .unwrap();
 
     // sync imap account twice in a row to see if all work as expected
-    // (no duplicate)
+    // without duplicate items
 
     sync::sync(&account, &imap).unwrap();
     sync::sync(&account, &imap).unwrap();
@@ -133,34 +130,17 @@ fn test_sync() {
     // check maildir envelopes integrity
 
     let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
-    assert_eq!(3, mdir_envelopes.len());
+    assert_eq!(*imap_envelopes, *mdir_envelopes);
 
-    assert_eq!("C", mdir_envelopes[0].subject);
-    assert_eq!(imap_c.date, mdir_envelopes[0].date);
-    assert_eq!(Flags::from_iter([Flag::Seen]), mdir_envelopes[0].flags);
+    // check maildir emails content integrity
 
-    assert_eq!("B", mdir_envelopes[1].subject);
-    assert_eq!(
-        Flags::from_iter([Flag::Seen, Flag::Flagged]),
-        mdir_envelopes[1].flags
-    );
-    assert_eq!(imap_b.date, mdir_envelopes[1].date);
-
-    assert_eq!("A", mdir_envelopes[2].subject);
-    assert_eq!(Flags::from_iter([Flag::Seen]), mdir_envelopes[2].flags);
-    assert_eq!(imap_a.date, mdir_envelopes[2].date);
-
-    let ids = vec![
-        mdir_envelopes[2].id.as_str(),
-        mdir_envelopes[1].id.as_str(),
-        mdir_envelopes[0].id.as_str(),
-    ];
+    let ids = mdir_envelopes.iter().map(|e| e.id.as_str()).collect();
     let emails = mdir.get_emails("INBOX", ids).unwrap();
     let emails = emails.to_vec();
     assert_eq!(3, emails.len());
-    assert_eq!("A\r\n", emails[0].parsed().unwrap().get_body().unwrap());
+    assert_eq!("C\r\n", emails[0].parsed().unwrap().get_body().unwrap());
     assert_eq!("B\r\n", emails[1].parsed().unwrap().get_body().unwrap());
-    assert_eq!("C\r\n", emails[2].parsed().unwrap().get_body().unwrap());
+    assert_eq!("A\r\n", emails[2].parsed().unwrap().get_body().unwrap());
 
     // check cache integrity
 
@@ -200,6 +180,8 @@ fn test_sync() {
         })
         .collect::<Vec<_>>();
 
+    assert_eq!(cached_mdir_envelopes, *mdir_envelopes);
+
     let cached_imap_envelopes = cache
         .prepare(query)
         .unwrap()
@@ -222,7 +204,5 @@ fn test_sync() {
         })
         .collect::<Vec<_>>();
 
-    println!("cached_mdir_envelopes: {:?}", cached_mdir_envelopes);
-    assert_eq!(cached_mdir_envelopes, *mdir_envelopes);
-    assert_eq!(cached_imap_envelopes, vec![imap_c, imap_b, imap_a]);
+    assert_eq!(cached_imap_envelopes, *imap_envelopes);
 }
