@@ -317,7 +317,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         envelopes.sort_by(|a, b| b.date.partial_cmp(&a.date).unwrap());
 
         // Applies pagination boundaries.
-        envelopes.0 = envelopes[page_begin..page_end].to_owned();
+        *envelopes = envelopes[page_begin..page_end].to_owned();
 
         // Appends envelopes hash to the id mapper cache file and
         // calculates the new short hash length. The short hash length

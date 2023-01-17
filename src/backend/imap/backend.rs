@@ -28,6 +28,8 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("cannot find session from pool at cursor {0}")]
+    FindSessionByCursorError(usize),
     #[error("cannot parse Message-ID of email {0}")]
     ParseMessageIdError(#[source] FromUtf8Error, u32),
     #[error("cannot lock imap session: {0}")]
@@ -182,8 +184,8 @@ impl Default for ImapBackendBuilder {
 }
 
 impl<'a> ImapBackendBuilder {
-    pub fn pool_size(mut self, size: usize) -> Self {
-        self.sessions_pool_size = size;
+    pub fn pool_size(mut self, pool_size: usize) -> Self {
+        self.sessions_pool_size = pool_size;
         self
     }
 
@@ -258,8 +260,12 @@ impl<'a> ImapBackend<'a> {
             .sessions_pool_cursor
             .lock()
             .map_err(|err| Error::LockSessionsPoolCursorError(err.to_string()))?;
-        let session = self.sessions_pool.get(*cursor).unwrap();
-        println!("cursor: {:?}", *cursor);
+        let session = self
+            .sessions_pool
+            .get(*cursor)
+            .ok_or(Error::FindSessionByCursorError(*cursor))?;
+        // TODO: find a way to get the next available connection
+        // instead of the next one in the list
         *cursor = (*cursor + 1) % self.sessions_pool_size;
         session
             .lock()

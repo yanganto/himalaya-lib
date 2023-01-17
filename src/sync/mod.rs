@@ -1,4 +1,6 @@
-use chrono::{DateTime, Local};
+mod cache;
+pub(crate) use cache::Cache;
+
 use dirs::data_dir;
 use log::{debug, error, trace, warn};
 use rayon::prelude::*;
@@ -49,7 +51,7 @@ pub enum Error {
     MaildirError(#[from] backend::maildir::Error),
 
     #[error(transparent)]
-    CacheError(#[from] sqlite::Error),
+    CacheError(#[from] cache::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -87,30 +89,6 @@ pub enum Hunk {
 
 type Patch = Vec<Vec<Hunk>>;
 
-pub const CREATE_ENVELOPES_TABLE: &str = "
-CREATE TABLE IF NOT EXISTS envelopes (
-    id          TEXT NOT NULL,
-    internal_id TEXT NOT NULL,
-    hash        TEXT NOT NULL,
-    account     TEXT NOT NULL,
-    folder      TEXT NOT NULL,
-    flag        TEXT NOT NULL,
-    message_id  TEXT NOT NULL,
-    sender      TEXT NOT NULL,
-    subject     TEXT NOT NULL,
-    date        DATETIME
-)";
-
-const INSERT_ENVELOPE: &str = "INSERT INTO envelopes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-const DELETE_ENVELOPE: &str = "DELETE FROM envelopes WHERE account = ? AND folder = ? AND id = ?";
-pub const SELECT_ENVELOPES: &str = "
-    SELECT id, internal_id, hash, account, folder, GROUP_CONCAT(flag) AS flags, message_id, sender, subject, date
-    FROM envelopes
-    WHERE account = ?
-    AND folder = ?
-    GROUP BY hash
-";
-
 pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result<()> {
     debug!("starting synchronization");
 
@@ -134,8 +112,7 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
 
     create_dir_all(&sync_dir).map_err(Error::CreateXdgDataDirsError)?;
 
-    let cache = sqlite::Connection::open_with_full_mutex(sync_dir.join("database.sqlite"))?;
-    cache.execute(CREATE_ENVELOPES_TABLE)?;
+    let cache = Cache::new(Cow::Borrowed(account), &sync_dir)?;
 
     let local = MaildirBackend::new(
         Cow::Borrowed(account),
@@ -144,45 +121,11 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
         }),
     )?;
 
-    let remote_envelopes: Envelopes = HashMap::from_iter(
-        remote
-            .list_envelopes("inbox", 0, 0)?
+    let local_envelopes_cached: Envelopes = HashMap::from_iter(
+        cache
+            .list_local_envelopes("inbox")?
             .iter()
             .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
-    );
-
-    let remote_envelopes_cached: Envelopes = HashMap::from_iter(
-        cache
-            .prepare(SELECT_ENVELOPES)?
-            .into_iter()
-            .bind((1, account.name.as_str()))?
-            .bind((2, "inbox"))?
-            .collect::<sqlite::Result<Vec<_>>>()?
-            .iter()
-            .map(|row| {
-                let envelope = Envelope {
-                    id: row.read::<&str, _>("id").into(),
-                    internal_id: row.read::<&str, _>("internal_id").into(),
-                    flags: Flags::from_iter(
-                        row.read::<&str, _>("flags").split(",").map(Flag::from),
-                    ),
-                    message_id: row.read::<&str, _>("message_id").into(),
-                    sender: row.read::<&str, _>("sender").into(),
-                    subject: row.read::<&str, _>("subject").into(),
-                    date: {
-                        let date_str = row.read::<&str, _>("date");
-                        match DateTime::parse_from_rfc3339(date_str) {
-                            Ok(date) => Some(date.with_timezone(&Local)),
-                            Err(err) => {
-                                warn!("invalid date {}, skipping it: {}", date_str, err);
-                                None
-                            }
-                        }
-                    },
-                };
-
-                (envelope.hash("inbox"), envelope)
-            }),
     );
 
     let local_envelopes: Envelopes = HashMap::from_iter(
@@ -192,41 +135,19 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
             .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
     );
 
-    let local_envelopes_cached: Envelopes = HashMap::from_iter(
+    let remote_envelopes_cached: Envelopes = HashMap::from_iter(
         cache
-            .prepare(SELECT_ENVELOPES)?
-            .into_iter()
-            .bind((1, format!("{}:cache", account.name).as_str()))?
-            .bind((2, "inbox"))?
-            .collect::<sqlite::Result<Vec<_>>>()?
+            .list_remote_envelopes("inbox")?
             .iter()
-            .map(|row| {
-                let envelope = Envelope {
-                    id: row.read::<&str, _>("id").into(),
-                    internal_id: row.read::<&str, _>("internal_id").into(),
-                    flags: Flags::from_iter(
-                        row.read::<&str, _>("flags").split(",").map(Flag::from),
-                    ),
-                    message_id: row.read::<&str, _>("message_id").into(),
-                    sender: row.read::<&str, _>("sender").into(),
-                    subject: row.read::<&str, _>("subject").into(),
-                    date: {
-                        let date_str = row.read::<&str, _>("date");
-                        match DateTime::parse_from_rfc3339(date_str) {
-                            Ok(date) => Some(date.with_timezone(&Local)),
-                            Err(err) => {
-                                warn!("invalid date {}, skipping it: {}", date_str, err);
-                                None
-                            }
-                        }
-                    },
-                };
-
-                (row.read::<&str, _>("hash").into(), envelope)
-            }),
+            .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
     );
 
-    println!("prev_left_envelopes: {:#?}", local_envelopes_cached);
+    let remote_envelopes: Envelopes = HashMap::from_iter(
+        remote
+            .list_envelopes("inbox", 0, 0)?
+            .iter()
+            .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
+    );
 
     let patch = build_patch(
         "inbox",
@@ -236,59 +157,19 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
         remote_envelopes,
     );
 
-    println!("============= patch: {:#?}", patch);
     debug!("patch length: {}", patch.len());
+    trace!("patch: {:#?}", patch);
 
     let process_hunk = |hunk: &Hunk| {
         match hunk {
             Hunk::CacheEnvelope(folder, internal_id, source) => match source {
                 HunkKindRestricted::Local => {
                     let envelope = local.get_envelope_internal(&folder, &internal_id)?;
-                    let mut statement = cache.prepare(INSERT_ENVELOPE)?;
-                    for flag in envelope.flags.iter() {
-                        statement.reset()?;
-                        statement.bind((1, envelope.id.as_str()))?;
-                        statement.bind((2, envelope.internal_id.as_str()))?;
-                        statement.bind((3, envelope.hash(&folder).as_str()))?;
-                        statement.bind((4, format!("{}:cache", account.name).as_str()))?;
-                        statement.bind((5, folder.as_str()))?;
-                        statement.bind((6, flag.to_string().as_str()))?;
-                        statement.bind((7, envelope.message_id.as_str()))?;
-                        statement.bind((8, envelope.sender.as_str()))?;
-                        statement.bind((9, envelope.subject.as_str()))?;
-                        statement.bind((
-                            10,
-                            match envelope.date {
-                                Some(date) => date.to_rfc3339().into(),
-                                None => sqlite::Value::Null,
-                            },
-                        ))?;
-                        statement.next()?;
-                    }
+                    cache.insert_local_envelope(folder, envelope)?;
                 }
                 HunkKindRestricted::Remote => {
                     let envelope = remote.get_envelope_internal(&folder, &internal_id)?;
-                    let mut statement = cache.prepare(INSERT_ENVELOPE)?;
-                    for flag in envelope.flags.iter() {
-                        statement.reset()?;
-                        statement.bind((1, envelope.id.as_str()))?;
-                        statement.bind((2, envelope.internal_id.as_str()))?;
-                        statement.bind((3, envelope.hash(&folder).as_str()))?;
-                        statement.bind((4, account.name.as_str()))?;
-                        statement.bind((5, folder.as_str()))?;
-                        statement.bind((6, flag.to_string().as_str()))?;
-                        statement.bind((7, envelope.message_id.as_str()))?;
-                        statement.bind((8, envelope.sender.as_str()))?;
-                        statement.bind((9, envelope.subject.as_str()))?;
-                        statement.bind((
-                            10,
-                            match envelope.date {
-                                Some(date) => date.to_rfc3339().into(),
-                                None => sqlite::Value::Null,
-                            },
-                        ))?;
-                        statement.next()?;
-                    }
+                    cache.insert_remote_envelope(folder, envelope)?;
                 }
             },
             Hunk::CopyEmail(folder, envelope, source, target) => {
@@ -307,55 +188,13 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
                         let internal_id =
                             local.add_email_internal(&folder, email.raw()?, &envelope.flags)?;
                         let envelope = local.get_envelope_internal(&folder, &internal_id)?;
-
-                        let mut statement = cache.prepare(INSERT_ENVELOPE)?;
-                        for flag in envelope.flags.iter() {
-                            statement.reset()?;
-                            statement.bind((1, envelope.id.as_str()))?;
-                            statement.bind((2, envelope.internal_id.as_str()))?;
-                            statement.bind((3, envelope.hash(&folder).as_str()))?;
-                            statement.bind((4, format!("{}:cache", account.name).as_str()))?;
-                            statement.bind((5, folder.as_str()))?;
-                            statement.bind((6, flag.to_string().as_str()))?;
-                            statement.bind((7, envelope.message_id.as_str()))?;
-                            statement.bind((8, envelope.sender.as_str()))?;
-                            statement.bind((9, envelope.subject.as_str()))?;
-                            statement.bind((
-                                10,
-                                match envelope.date {
-                                    Some(date) => date.to_rfc3339().into(),
-                                    None => sqlite::Value::Null,
-                                },
-                            ))?;
-                            statement.next()?;
-                        }
+                        cache.insert_local_envelope(folder, envelope)?;
                     }
                     HunkKindRestricted::Remote => {
                         let internal_id =
                             remote.add_email_internal(&folder, email.raw()?, &envelope.flags)?;
                         let envelope = local.get_envelope_internal(&folder, &internal_id)?;
-
-                        let mut statement = cache.prepare(INSERT_ENVELOPE)?;
-                        for flag in envelope.flags.iter() {
-                            statement.reset()?;
-                            statement.bind((1, envelope.id.as_str()))?;
-                            statement.bind((2, envelope.internal_id.as_str()))?;
-                            statement.bind((3, envelope.hash(&folder).as_str()))?;
-                            statement.bind((4, account.name.as_str()))?;
-                            statement.bind((5, folder.as_str()))?;
-                            statement.bind((6, flag.to_string().as_str()))?;
-                            statement.bind((7, envelope.message_id.as_str()))?;
-                            statement.bind((8, envelope.sender.as_str()))?;
-                            statement.bind((9, envelope.subject.as_str()))?;
-                            statement.bind((
-                                10,
-                                match envelope.date {
-                                    Some(date) => date.to_rfc3339().into(),
-                                    None => sqlite::Value::Null,
-                                },
-                            ))?;
-                            statement.next()?;
-                        }
+                        cache.insert_remote_envelope(folder, envelope)?;
                     }
                 };
             }
@@ -364,89 +203,33 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
 
                 match target {
                     HunkKind::LocalCache => {
-                        let mut statement = cache.prepare(DELETE_ENVELOPE)?;
-                        statement.bind((1, format!("{}:cache", account.name).as_str()))?;
-                        statement.bind((2, folder.as_str()))?;
-                        statement.bind((3, internal_id.as_str()))?;
-                        statement.next()?;
+                        cache.delete_local_envelope(folder, internal_id)?;
                     }
                     HunkKind::Local => {
-                        local.delete_emails_internal("inbox", internal_ids.clone())?;
+                        local.delete_emails_internal(folder, internal_ids.clone())?;
                     }
                     HunkKind::RemoteCache => {
-                        let mut statement = cache.prepare(DELETE_ENVELOPE)?;
-                        statement.bind((1, account.name.as_str()))?;
-                        statement.bind((2, folder.as_str()))?;
-                        statement.bind((3, internal_id.as_str()))?;
-                        statement.next()?;
+                        cache.delete_remote_envelope(folder, internal_id)?;
                     }
                     HunkKind::Remote => {
-                        remote.delete_emails_internal("inbox", internal_ids.clone())?;
+                        remote.delete_emails_internal(folder, internal_ids.clone())?;
                     }
                 };
             }
             Hunk::SetFlags(folder, internal_id, flags, target) => {
                 match target {
                     HunkKind::LocalCache => {
-                        let mut statement = cache.prepare(DELETE_ENVELOPE)?;
-                        statement.bind((1, format!("{}:cache", account.name).as_str()))?;
-                        statement.bind((2, folder.as_str()))?;
-                        statement.bind((3, internal_id.as_str()))?;
-                        statement.next()?;
-
                         let envelope = local.get_envelope_internal(&folder, &internal_id)?;
-                        let mut statement = cache.prepare(INSERT_ENVELOPE)?;
-                        for flag in flags.iter() {
-                            statement.bind((1, envelope.id.as_str()))?;
-                            statement.bind((2, envelope.internal_id.as_str()))?;
-                            statement.bind((3, envelope.hash(&folder).as_str()))?;
-                            statement.bind((4, format!("{}:cache", account.name).as_str()))?;
-                            statement.bind((5, folder.as_str()))?;
-                            statement.bind((6, flag.to_string().as_str()))?;
-                            statement.bind((7, envelope.message_id.as_str()))?;
-                            statement.bind((8, envelope.sender.as_str()))?;
-                            statement.bind((9, envelope.subject.as_str()))?;
-                            statement.bind((
-                                10,
-                                match envelope.date {
-                                    Some(date) => date.to_rfc3339().into(),
-                                    None => sqlite::Value::Null,
-                                },
-                            ))?;
-                            statement.next()?;
-                        }
+                        cache.delete_local_envelope(folder, internal_id)?;
+                        cache.insert_local_envelope(folder, envelope)?;
                     }
                     HunkKind::Local => {
                         local.set_flags_internal("inbox", vec![&internal_id], &flags)?;
                     }
                     HunkKind::RemoteCache => {
-                        let mut statement = cache.prepare(DELETE_ENVELOPE)?;
-                        statement.bind((1, account.name.as_str()))?;
-                        statement.bind((2, folder.as_str()))?;
-                        statement.bind((3, internal_id.as_str()))?;
-                        statement.next()?;
-
-                        let envelope = remote.get_envelope_internal(&folder, &internal_id)?;
-                        let mut statement = cache.prepare(INSERT_ENVELOPE)?;
-                        for flag in flags.iter() {
-                            statement.bind((1, envelope.id.as_str()))?;
-                            statement.bind((2, envelope.internal_id.as_str()))?;
-                            statement.bind((3, envelope.hash(&folder).as_str()))?;
-                            statement.bind((4, account.name.as_str()))?;
-                            statement.bind((5, folder.as_str()))?;
-                            statement.bind((6, flag.to_string().as_str()))?;
-                            statement.bind((7, envelope.message_id.as_str()))?;
-                            statement.bind((8, envelope.sender.as_str()))?;
-                            statement.bind((9, envelope.subject.as_str()))?;
-                            statement.bind((
-                                10,
-                                match envelope.date {
-                                    Some(date) => date.to_rfc3339().into(),
-                                    None => sqlite::Value::Null,
-                                },
-                            ))?;
-                            statement.next()?;
-                        }
+                        let envelope = local.get_envelope_internal(&folder, &internal_id)?;
+                        cache.delete_remote_envelope(folder, internal_id)?;
+                        cache.insert_remote_envelope(folder, envelope)?;
                     }
                     HunkKind::Remote => {
                         remote.set_flags_internal("inbox", vec![internal_id], &flags)?;
@@ -486,31 +269,34 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
     Ok(())
 }
 
-pub fn build_patch<F: ToString + Clone>(
+pub fn build_patch<F>(
     folder: F,
-    prev_left: Envelopes,
-    next_left: Envelopes,
-    prev_right: Envelopes,
-    next_right: Envelopes,
-) -> Patch {
+    local_cache: Envelopes,
+    local: Envelopes,
+    remote_cache: Envelopes,
+    remote: Envelopes,
+) -> Patch
+where
+    F: Clone + ToString,
+{
     let mut patch: Patch = vec![];
     let mut hashes = HashSet::new();
 
     // Gathers all existing hashes found in all envelopes.
-    hashes.extend(prev_left.iter().map(|(hash, _)| hash.as_str()));
-    hashes.extend(next_left.iter().map(|(hash, _)| hash.as_str()));
-    hashes.extend(prev_right.iter().map(|(hash, _)| hash.as_str()));
-    hashes.extend(next_right.iter().map(|(hash, _)| hash.as_str()));
+    hashes.extend(local_cache.iter().map(|(hash, _)| hash.as_str()));
+    hashes.extend(local.iter().map(|(hash, _)| hash.as_str()));
+    hashes.extend(remote_cache.iter().map(|(hash, _)| hash.as_str()));
+    hashes.extend(remote.iter().map(|(hash, _)| hash.as_str()));
 
-    // Given the matrice prev_left × next_left × prev_right × next_right,
+    // Given the matrice local_cache × local × remote_cache × remote,
     // checks every 2⁴ = 16 possibilities:
     for hash in hashes {
-        let prev_left = prev_left.get(hash);
-        let next_left = next_left.get(hash);
-        let prev_right = prev_right.get(hash);
-        let next_right = next_right.get(hash);
+        let local_cache = local_cache.get(hash);
+        let local = local.get(hash);
+        let remote_cache = remote_cache.get(hash);
+        let remote = remote.get(hash);
 
-        match (prev_left, next_left, prev_right, next_right) {
+        match (local_cache, local, remote_cache, remote) {
             // 0000
             //
             // The hash exists nowhere, which cannot happen since
