@@ -237,19 +237,8 @@ impl<'a> Backend for MaildirBackend<'a> {
         let id = id_mapper.find(short_hash)?;
         debug!("id: {}", id);
 
-        let matching_id = |entry: io::Result<maildir::MailEntry>| match entry {
-            Ok(entry) if id == entry.id() => Some(entry),
-            Ok(_) => None,
-            Err(err) => {
-                warn!("skipping invalid maildir entry: {}", err);
-                None
-            }
-        };
-
         let envelope = envelope::from_raw(
-            mdir.list_cur()
-                .find_map(&matching_id)
-                .or(mdir.list_new().find_map(&matching_id))
+            mdir.find(&id)
                 .ok_or_else(|| Error::GetEnvelopeError(short_hash.to_owned()))?,
         )?;
 
@@ -262,19 +251,8 @@ impl<'a> Backend for MaildirBackend<'a> {
 
         let mdir = self.get_mdir_from_dir(dir)?;
 
-        let matching_id = |entry: io::Result<maildir::MailEntry>| match entry {
-            Ok(entry) if internal_id == entry.id() => Some(entry),
-            Ok(_) => None,
-            Err(err) => {
-                warn!("skipping invalid maildir entry: {}", err);
-                None
-            }
-        };
-
         let envelope = envelope::from_raw(
-            mdir.list_cur()
-                .find_map(&matching_id)
-                .or(mdir.list_new().find_map(&matching_id))
+            mdir.find(internal_id)
                 .ok_or_else(|| Error::GetEnvelopeError(internal_id.to_owned()))?,
         )?;
 
@@ -292,7 +270,6 @@ impl<'a> Backend for MaildirBackend<'a> {
         debug!("page: {}", page);
 
         let mdir = self.get_mdir_from_dir(dir)?;
-        println!("mdir path: {:?}", mdir.path());
 
         // Reads envelopes from the "cur" folder of the selected
         // maildir.
@@ -702,7 +679,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         let mdir = self.get_mdir_from_dir(dir)?;
 
         for internal_id in internal_ids {
-            mdir.set_flags(&internal_id, &flags::to_normalized_string(&flags))
+            mdir.set_flags(internal_id, &flags::to_normalized_string(&flags))
                 .map_err(Error::SetFlagsError)?;
         }
 

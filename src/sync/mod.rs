@@ -1,5 +1,5 @@
 mod cache;
-pub(crate) use cache::Cache;
+pub use cache::Cache;
 
 use dirs::data_dir;
 use log::{debug, error, trace, warn};
@@ -7,8 +7,7 @@ use rayon::prelude::*;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    fs::create_dir_all,
-    io,
+    fs, io,
     path::PathBuf,
     result,
 };
@@ -84,7 +83,7 @@ pub enum Hunk {
     CacheEnvelope(Folder, InternalId, SourceRestricted),
     CopyEmail(Folder, Envelope, SourceRestricted, TargetRestricted),
     RemoveEmail(Folder, InternalId, Target),
-    SetFlags(Folder, InternalId, Flags, Target),
+    SetFlags(Folder, Envelope, Target),
 }
 
 type Patch = Vec<Vec<Hunk>>;
@@ -110,7 +109,7 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
         }
     };
 
-    create_dir_all(&sync_dir).map_err(Error::CreateXdgDataDirsError)?;
+    fs::create_dir_all(&sync_dir).map_err(Error::CreateXdgDataDirsError)?;
 
     let cache = Cache::new(Cow::Borrowed(account), &sync_dir)?;
 
@@ -123,34 +122,34 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
 
     let local_envelopes_cached: Envelopes = HashMap::from_iter(
         cache
-            .list_local_envelopes("inbox")?
+            .list_local_envelopes("INBOX")?
             .iter()
-            .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
+            .map(|envelope| (envelope.hash("INBOX"), envelope.clone())),
     );
 
     let local_envelopes: Envelopes = HashMap::from_iter(
         local
-            .list_envelopes("inbox", 0, 0)?
+            .list_envelopes("INBOX", 0, 0)?
             .iter()
-            .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
+            .map(|envelope| (envelope.hash("INBOX"), envelope.clone())),
     );
 
     let remote_envelopes_cached: Envelopes = HashMap::from_iter(
         cache
-            .list_remote_envelopes("inbox")?
+            .list_remote_envelopes("INBOX")?
             .iter()
-            .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
+            .map(|envelope| (envelope.hash("INBOX"), envelope.clone())),
     );
 
     let remote_envelopes: Envelopes = HashMap::from_iter(
         remote
-            .list_envelopes("inbox", 0, 0)?
+            .list_envelopes("INBOX", 0, 0)?
             .iter()
-            .map(|envelope| (envelope.hash("inbox"), envelope.clone())),
+            .map(|envelope| (envelope.hash("INBOX"), envelope.clone())),
     );
 
     let patch = build_patch(
-        "inbox",
+        "INBOX",
         local_envelopes_cached,
         local_envelopes,
         remote_envelopes_cached,
@@ -216,23 +215,29 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
                     }
                 };
             }
-            Hunk::SetFlags(folder, internal_id, flags, target) => {
+            Hunk::SetFlags(folder, envelope, target) => {
                 match target {
                     HunkKind::LocalCache => {
-                        let envelope = local.get_envelope_internal(&folder, &internal_id)?;
-                        cache.delete_local_envelope(folder, internal_id)?;
-                        cache.insert_local_envelope(folder, envelope)?;
+                        cache.delete_local_envelope(folder, &envelope.internal_id)?;
+                        cache.insert_local_envelope(folder, envelope.clone())?;
                     }
                     HunkKind::Local => {
-                        local.set_flags_internal("inbox", vec![&internal_id], &flags)?;
+                        local.set_flags_internal(
+                            folder,
+                            vec![&envelope.internal_id],
+                            &envelope.flags,
+                        )?;
                     }
                     HunkKind::RemoteCache => {
-                        let envelope = local.get_envelope_internal(&folder, &internal_id)?;
-                        cache.delete_remote_envelope(folder, internal_id)?;
-                        cache.insert_remote_envelope(folder, envelope)?;
+                        cache.delete_remote_envelope(folder, &envelope.internal_id)?;
+                        cache.insert_remote_envelope(folder, envelope.clone())?;
                     }
                     HunkKind::Remote => {
-                        remote.set_flags_internal("inbox", vec![internal_id], &flags)?;
+                        remote.set_flags_internal(
+                            folder,
+                            vec![&envelope.internal_id],
+                            &envelope.flags,
+                        )?;
                     }
                 };
             }
@@ -242,28 +247,22 @@ pub fn sync<B: ThreadSafeBackend>(account: &AccountConfig, remote: &B) -> Result
     };
 
     for (batch_num, batch) in patch.chunks(3).enumerate() {
-        debug!("processing batch {}/{}", batch_num + 1, patch.len());
+        debug!("processing batch {}/{}", batch_num + 1, patch.len() / 3);
 
-        batch
-            .par_iter()
-            .enumerate()
-            .try_for_each(|(hunks_num, hunks)| {
-                debug!("processing hunks group {}/{}", hunks_num + 1, batch.len());
+        batch.par_iter().try_for_each(|hunks| {
+            trace!("processing hunks: {:#?}", hunks);
 
-                for (hunk_num, hunk) in hunks.iter().enumerate() {
-                    debug!("processing hunk {}/{}", hunk_num + 1, hunks.len());
-                    trace!("hunk: {:#?}", hunk);
-
-                    if let Err(err) = process_hunk(hunk) {
-                        warn!(
-                            "error while processing hunk {:?}, skipping it: {}",
-                            hunk, err
-                        );
-                    }
+            for hunk in hunks {
+                if let Err(err) = process_hunk(hunk) {
+                    warn!(
+                        "error while processing hunk {:?}, skipping it: {:?}",
+                        hunk, err
+                    );
                 }
+            }
 
-                Result::Ok(())
-            })?;
+            Result::Ok(())
+        })?;
     }
 
     Ok(())
@@ -353,8 +352,10 @@ where
                 if remote_cache.flags != remote.flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        remote_cache.internal_id.clone(),
-                        remote.flags.clone(),
+                        Envelope {
+                            flags: remote.flags.clone(),
+                            ..remote_cache.clone()
+                        },
                         HunkKind::RemoteCache,
                     )])
                 }
@@ -505,8 +506,10 @@ where
                 if local.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        local.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..local.clone()
+                        },
                         HunkKind::Local,
                     )]);
                 }
@@ -514,8 +517,10 @@ where
                 if remote_cache.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        remote_cache.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..remote_cache.clone()
+                        },
                         HunkKind::RemoteCache,
                     )]);
                 }
@@ -523,8 +528,10 @@ where
                 if remote.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        remote.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..remote.clone()
+                        },
                         HunkKind::Remote,
                     )]);
                 }
@@ -631,8 +638,10 @@ where
                 if local_cache.flags != local.flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        local_cache.internal_id.clone(),
-                        local.flags.clone(),
+                        Envelope {
+                            flags: local.flags.clone(),
+                            ..local_cache.clone()
+                        },
                         HunkKind::LocalCache,
                     )]);
                 }
@@ -650,8 +659,10 @@ where
                 if local_cache.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        local_cache.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..local_cache.clone()
+                        },
                         HunkKind::LocalCache,
                     )]);
                 }
@@ -659,8 +670,10 @@ where
                 if local.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        local.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..local.clone()
+                        },
                         HunkKind::Local,
                     )]);
                 }
@@ -668,8 +681,10 @@ where
                 if remote.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        remote.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..remote.clone()
+                        },
                         HunkKind::Remote,
                     )]);
                 }
@@ -719,8 +734,10 @@ where
                 if local_cache.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        local_cache.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..local_cache.clone()
+                        },
                         HunkKind::LocalCache,
                     )]);
                 }
@@ -728,8 +745,10 @@ where
                 if local.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        local.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..local.clone()
+                        },
                         HunkKind::Local,
                     )]);
                 }
@@ -737,8 +756,10 @@ where
                 if remote_cache.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        remote_cache.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..remote_cache.clone()
+                        },
                         HunkKind::RemoteCache,
                     )]);
                 }
@@ -746,8 +767,10 @@ where
                 if remote.flags != flags {
                     patch.push(vec![Hunk::SetFlags(
                         folder.to_string(),
-                        remote.internal_id.clone(),
-                        flags.clone(),
+                        Envelope {
+                            flags: flags.clone(),
+                            ..remote.clone()
+                        },
                         HunkKind::Remote,
                     )]);
                 }
@@ -1334,8 +1357,11 @@ mod sync {
                 )],
                 vec![Hunk::SetFlags(
                     "inbox".into(),
-                    "remote-cache-id".into(),
-                    "seen flagged deleted".into(),
+                    Envelope {
+                        internal_id: "remote-cache-id".into(),
+                        flags: Flags::from_iter([Flag::Seen, Flag::Flagged, Flag::Deleted]),
+                        ..Envelope::default()
+                    },
                     HunkKind::RemoteCache,
                 )]
             ]
@@ -1899,8 +1925,11 @@ mod sync {
                 )],
                 vec![Hunk::SetFlags(
                     "inbox".into(),
-                    "local-cache-id".into(),
-                    "flagged".into(),
+                    Envelope {
+                        internal_id: "local-cache-id".into(),
+                        flags: Flags::from_iter([Flag::Flagged]),
+                        ..Envelope::default()
+                    },
                     HunkKind::LocalCache,
                 )]
             ]

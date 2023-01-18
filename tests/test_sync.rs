@@ -1,6 +1,4 @@
-use chrono::{DateTime, Local};
 use env_logger;
-use log::LevelFilter;
 use std::{
     borrow::Cow,
     env::temp_dir,
@@ -10,16 +8,13 @@ use std::{
 };
 
 use himalaya_lib::{
-    imap::ImapBackendBuilder, sync, AccountConfig, Backend, CompilerBuilder, Envelope, Flag, Flags,
+    imap::ImapBackendBuilder, sync, AccountConfig, Backend, CompilerBuilder, Flag, Flags,
     ImapConfig, MaildirBackend, MaildirConfig, TplBuilder,
 };
 
 #[test]
 fn test_sync() {
-    env_logger::builder()
-        .is_test(true)
-        .filter_level(LevelFilter::Warn)
-        .init();
+    env_logger::builder().is_test(true).init();
 
     // set up account
 
@@ -144,65 +139,43 @@ fn test_sync() {
 
     // check cache integrity
 
-    let cache = sqlite::Connection::open_with_flags(
-        sync_dir.join("database.sqlite"),
-        sqlite::OpenFlags::new().set_read_only(),
+    let cache = sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
+
+    let cached_mdir_envelopes = cache.list_local_envelopes("INBOX").unwrap();
+    assert_eq!(cached_mdir_envelopes, mdir_envelopes);
+
+    let cached_imap_envelopes = cache.list_remote_envelopes("INBOX").unwrap();
+    assert_eq!(cached_imap_envelopes, imap_envelopes);
+
+    // remove emails and update flags from both side, sync again and
+    // check integrity
+
+    imap.delete_emails_internal("INBOX", vec![&imap_envelopes[0].internal_id])
+        .unwrap();
+    imap.add_flags_internal(
+        "INBOX",
+        vec![&imap_envelopes[1].internal_id],
+        &Flags::from_iter([Flag::Draft]),
+    )
+    .unwrap();
+    mdir.delete_emails_internal("INBOX", vec![&mdir_envelopes[2].internal_id])
+        .unwrap();
+    mdir.add_flags_internal(
+        "INBOX",
+        vec![&mdir_envelopes[1].internal_id],
+        &Flags::from_iter([Flag::Flagged, Flag::Answered]),
     )
     .unwrap();
 
-    let query = "
-        SELECT id, internal_id, hash, account, folder, GROUP_CONCAT(flag) AS flags, message_id, sender, subject, date
-        FROM envelopes
-        WHERE account = ?
-        GROUP BY hash
-        ORDER BY date DESC
-    ";
+    sync::sync(&account, &imap).unwrap();
 
-    let cached_mdir_envelopes = cache
-        .prepare(query)
-        .unwrap()
-        .into_iter()
-        .bind((1, format!("{}:cache", account.name).as_str()))
-        .unwrap()
-        .map(|row| row.unwrap())
-        .map(|row| Envelope {
-            id: row.read::<&str, _>("id").into(),
-            internal_id: row.read::<&str, _>("internal_id").into(),
-            flags: Flags::from_iter(row.read::<&str, _>("flags").split(",").map(Flag::from)),
-            message_id: row.read::<&str, _>("message_id").into(),
-            subject: row.read::<&str, _>("subject").into(),
-            sender: row.read::<&str, _>("sender").into(),
-            date: Some(
-                DateTime::parse_from_rfc3339(row.read::<&str, _>("date"))
-                    .unwrap()
-                    .with_timezone(&Local),
-            ),
-        })
-        .collect::<Vec<_>>();
+    let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
+    let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
+    assert_eq!(imap_envelopes, mdir_envelopes);
 
-    assert_eq!(cached_mdir_envelopes, *mdir_envelopes);
+    let cached_mdir_envelopes = cache.list_local_envelopes("INBOX").unwrap();
+    assert_eq!(cached_mdir_envelopes, mdir_envelopes);
 
-    let cached_imap_envelopes = cache
-        .prepare(query)
-        .unwrap()
-        .into_iter()
-        .bind((1, account.name.as_str()))
-        .unwrap()
-        .map(|row| row.unwrap())
-        .map(|row| Envelope {
-            id: row.read::<&str, _>("id").into(),
-            internal_id: row.read::<&str, _>("internal_id").into(),
-            flags: Flags::from_iter(row.read::<&str, _>("flags").split(",").map(Flag::from)),
-            message_id: row.read::<&str, _>("message_id").into(),
-            subject: row.read::<&str, _>("subject").into(),
-            sender: row.read::<&str, _>("sender").into(),
-            date: Some(
-                DateTime::parse_from_rfc3339(row.read::<&str, _>("date"))
-                    .unwrap()
-                    .with_timezone(&Local),
-            ),
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(cached_imap_envelopes, *imap_envelopes);
+    let cached_imap_envelopes = cache.list_remote_envelopes("INBOX").unwrap();
+    assert_eq!(cached_imap_envelopes, imap_envelopes);
 }

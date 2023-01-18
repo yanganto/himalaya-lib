@@ -5,35 +5,46 @@ use std::{borrow::Cow, path::Path};
 
 pub(crate) use sqlite::Error;
 
-use crate::{AccountConfig, Envelope, Envelopes, Flag, Flags};
+use crate::{AccountConfig, Envelope, Envelopes};
 
 const CREATE_ENVELOPES_TABLE: &str = "
-CREATE TABLE IF NOT EXISTS envelopes (
-    id          TEXT NOT NULL,
-    internal_id TEXT NOT NULL,
-    hash        TEXT NOT NULL,
-    account     TEXT NOT NULL,
-    folder      TEXT NOT NULL,
-    flag        TEXT NOT NULL,
-    message_id  TEXT NOT NULL,
-    sender      TEXT NOT NULL,
-    subject     TEXT NOT NULL,
-    date        DATETIME
-)";
+    CREATE TABLE IF NOT EXISTS envelopes (
+        id          TEXT NOT NULL,
+        internal_id TEXT NOT NULL,
+        hash        TEXT NOT NULL,
+        account     TEXT NOT NULL,
+        folder      TEXT NOT NULL,
+        flag        TEXT NOT NULL,
+        message_id  TEXT NOT NULL,
+        sender      TEXT NOT NULL,
+        subject     TEXT NOT NULL,
+        date        DATETIME,
+        UNIQUE(internal_id, hash, account, folder, flag)
+    )
+";
 
-const INSERT_ENVELOPE: &str = "INSERT INTO envelopes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+const INSERT_ENVELOPE: &str = "
+    INSERT INTO envelopes
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+";
 
-const DELETE_ENVELOPE: &str = "DELETE FROM envelopes WHERE account = ? AND folder = ? AND id = ?";
+const DELETE_ENVELOPE: &str = "
+    DELETE FROM envelopes
+    WHERE account = ?
+    AND folder = ?
+    AND internal_id = ?
+";
 
 const SELECT_ENVELOPES: &str = "
-    SELECT id, internal_id, hash, account, folder, GROUP_CONCAT(flag) AS flags, message_id, sender, subject, date
+    SELECT id, internal_id, hash, account, folder, GROUP_CONCAT(flag, ' ') AS flags, message_id, sender, subject, date
     FROM envelopes
     WHERE account = ?
     AND folder = ?
     GROUP BY hash
+    ORDER BY date DESC
 ";
 
-pub(crate) struct Cache<'a> {
+pub struct Cache<'a> {
     account_config: Cow<'a, AccountConfig>,
     conn: ConnectionWithFullMutex,
 }
@@ -70,9 +81,7 @@ impl<'a> Cache<'a> {
                 .map(|row| Envelope {
                     id: row.read::<&str, _>("id").into(),
                     internal_id: row.read::<&str, _>("internal_id").into(),
-                    flags: Flags::from_iter(
-                        row.read::<&str, _>("flags").split(",").map(Flag::from),
-                    ),
+                    flags: row.read::<&str, _>("flags").into(),
                     message_id: row.read::<&str, _>("message_id").into(),
                     sender: row.read::<&str, _>("sender").into(),
                     subject: row.read::<&str, _>("subject").into(),
