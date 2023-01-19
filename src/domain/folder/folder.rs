@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::fmt;
 
 /// Represents the folder.
-#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Folder {
     /// Represents the folder hierarchie delimiter.
     pub delim: String,

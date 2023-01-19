@@ -9,7 +9,7 @@ use std::{
 
 use himalaya_lib::{
     imap::ImapBackendBuilder, sync, AccountConfig, Backend, CompilerBuilder, Flag, Flags,
-    ImapConfig, MaildirBackend, MaildirConfig, TplBuilder,
+    ImapConfig, MaildirBackend, MaildirConfig, TplBuilder, DEFAULT_INBOX_FOLDER,
 };
 
 #[test]
@@ -50,13 +50,19 @@ fn test_sync() {
         )
         .unwrap();
 
-    // purge folders
+    // reset folders
 
-    if let Err(_) = imap.add_folder("Sent") {};
-    imap.purge_folder("INBOX").unwrap();
-    imap.purge_folder("Sent").unwrap();
+    for folder in imap.list_folders().unwrap().iter() {
+        match folder.name.as_str() {
+            DEFAULT_INBOX_FOLDER => imap.purge_folder(&folder.name).unwrap(),
+            folder => imap.delete_folder(folder).unwrap(),
+        }
+    }
 
-    // add 3 emails with delay (in order to have a different date)
+    imap.add_folder("Sent").unwrap();
+
+    // add three emails to folder INBOX with delay (in order to have a
+    // different date)
 
     imap.add_email(
         "INBOX",
@@ -106,6 +112,22 @@ fn test_sync() {
 
     let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
 
+    // add one more email to folder Sent
+
+    imap.add_email(
+        "Sent",
+        &TplBuilder::default()
+            .message_id("<d@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("D")
+            .text_plain_part("D")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::default(),
+    )
+    .unwrap();
+
     // init maildir backend reader
 
     let mdir = MaildirBackend::new(
@@ -122,10 +144,21 @@ fn test_sync() {
     sync::sync(&account, &imap).unwrap();
     sync::sync(&account, &imap).unwrap();
 
-    // check maildir envelopes integrity
+    // check maildir folders and envelopes integrity
+
+    assert_eq!(
+        imap.list_folders().unwrap().len(),
+        mdir.list_folders().unwrap().len()
+    );
+
+    // FIXME
+    assert_eq!(
+        imap.list_envelopes("Sent", 0, 0).unwrap(),
+        mdir.list_envelopes("Sent", 0, 0).unwrap()
+    );
 
     let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
-    assert_eq!(*imap_envelopes, *mdir_envelopes);
+    assert_eq!(imap_envelopes, mdir_envelopes);
 
     // check maildir emails content integrity
 

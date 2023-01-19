@@ -117,12 +117,11 @@ impl<'a> MaildirBackend<'a> {
     }
 
     fn validate_mdir_path(&self, mdir_path: PathBuf) -> Result<PathBuf> {
-        let path = if mdir_path.is_dir() {
+        if mdir_path.is_dir() {
             Ok(mdir_path)
         } else {
             Err(Error::ReadDirError(mdir_path.to_owned()))
-        }?;
-        Ok(path)
+        }
     }
 
     /// Creates a maildir instance from a string slice.
@@ -170,22 +169,36 @@ impl<'a> Backend for MaildirBackend<'a> {
     fn add_folder(&self, subdir: &str) -> backend::Result<()> {
         debug!("subdir: {:?}", subdir);
 
-        let path = self.mdir.path().join(format!(".{}", subdir));
+        let path = match self.account_config.folder_alias(subdir)?.as_str() {
+            DEFAULT_INBOX_FOLDER => self.mdir.path().join("cur"),
+            dir => self.mdir.path().join(format!(".{}", dir)),
+        };
         debug!("subdir path: {:?}", path);
 
-        fs::create_dir(&path).map_err(|err| Error::CreateSubdirError(err, subdir.to_owned()))?;
+        fs::create_dir_all(&path)
+            .map_err(|err| Error::CreateSubdirError(err, subdir.to_owned()))?;
+
         Ok(())
     }
 
-    fn list_folder(&self) -> backend::Result<Folders> {
+    fn list_folders(&self) -> backend::Result<Folders> {
         let mut folders = Folders::default();
 
-        for (name, desc) in &self.account_config.folder_aliases {
-            folders.push(Folder {
-                delim: String::from("/"),
-                name: name.into(),
-                desc: desc.into(),
-            })
+        folders.push(Folder {
+            delim: String::from("/"),
+            name: self.account_config.folder_alias(DEFAULT_INBOX_FOLDER)?,
+            desc: DEFAULT_INBOX_FOLDER.into(),
+        });
+
+        for (name, alias) in &self.account_config.folder_aliases {
+            match name.to_lowercase().as_str() {
+                "inbox" => (),
+                name => folders.push(Folder {
+                    delim: String::from("/"),
+                    name: alias.into(),
+                    desc: name.into(),
+                }),
+            }
         }
 
         for entry in self.mdir.list_subdirs() {

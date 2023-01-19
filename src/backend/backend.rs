@@ -49,7 +49,7 @@ pub trait Backend {
     fn name(&self) -> String;
 
     fn add_folder(&self, folder: &str) -> Result<()>;
-    fn list_folder(&self) -> Result<Folders>;
+    fn list_folders(&self) -> Result<Folders>;
     fn purge_folder(&self, folder: &str) -> Result<()>;
     fn delete_folder(&self, folder: &str) -> Result<()>;
 

@@ -393,26 +393,23 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
-    fn list_folder(&self) -> backend::Result<Folders> {
+    fn list_folders(&self) -> backend::Result<Folders> {
         let mut session = self.session()?;
         let imap_mboxes = session
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
-        let mboxes = Folders(
-            imap_mboxes
-                .iter()
-                .map(|imap_mbox| Folder {
-                    delim: imap_mbox.delimiter().unwrap_or_default().into(),
-                    name: decode_utf7(imap_mbox.name().into()),
-                    desc: imap_mbox
-                        .attributes()
-                        .iter()
-                        .map(|attr| format!("{:?}", attr))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                })
-                .collect(),
-        );
+        let mboxes = Folders::from_iter(imap_mboxes.iter().map(|imap_mbox| {
+            Folder {
+                delim: imap_mbox.delimiter().unwrap_or_default().into(),
+                name: decode_utf7(imap_mbox.name().into()),
+                desc: imap_mbox
+                    .attributes()
+                    .iter()
+                    .map(|attr| format!("{:?}", attr))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }
+        }));
 
         trace!("imap folders: {:?}", mboxes);
         Ok(mboxes)
