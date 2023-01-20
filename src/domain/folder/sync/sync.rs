@@ -24,7 +24,12 @@ pub enum Hunk {
     DeleteFolder(FolderName, Target),
 }
 
-pub fn sync_all<B>(cache: &Cache, local: &MaildirBackend, remote: &B) -> Result<FoldersName>
+pub fn sync_all<B>(
+    cache: &Cache,
+    local: &MaildirBackend,
+    remote: &B,
+    dry_run: bool,
+) -> Result<FoldersName>
 where
     B: ThreadSafeBackend + ?Sized,
 {
@@ -60,31 +65,33 @@ where
     debug!("folders sync patch length: {}", patch.len());
     trace!("folders sync patch: {:#?}", patch);
 
-    for hunk in patch {
-        match hunk {
-            Hunk::CreateFolder(folder, HunkKind::LocalCache) => {
-                cache.insert_local_folder(folder)?;
-            }
-            Hunk::CreateFolder(folder, HunkKind::Local) => {
-                local.add_folder(folder.as_str())?;
-            }
-            Hunk::CreateFolder(folder, HunkKind::RemoteCache) => {
-                cache.insert_remote_folder(folder)?;
-            }
-            Hunk::CreateFolder(folder, HunkKind::Remote) => {
-                remote.add_folder(folder.as_str())?;
-            }
-            Hunk::DeleteFolder(folder, HunkKind::LocalCache) => {
-                cache.delete_local_folder(folder)?;
-            }
-            Hunk::DeleteFolder(folder, HunkKind::Local) => {
-                local.delete_folder(folder.as_str())?;
-            }
-            Hunk::DeleteFolder(folder, HunkKind::RemoteCache) => {
-                cache.delete_remote_folder(folder)?;
-            }
-            Hunk::DeleteFolder(folder, HunkKind::Remote) => {
-                remote.delete_folder(folder.as_str())?;
+    if !dry_run {
+        for hunk in patch {
+            match hunk {
+                Hunk::CreateFolder(folder, HunkKind::LocalCache) => {
+                    cache.insert_local_folder(folder)?;
+                }
+                Hunk::CreateFolder(folder, HunkKind::Local) => {
+                    local.add_folder(folder.as_str())?;
+                }
+                Hunk::CreateFolder(folder, HunkKind::RemoteCache) => {
+                    cache.insert_remote_folder(folder)?;
+                }
+                Hunk::CreateFolder(folder, HunkKind::Remote) => {
+                    remote.add_folder(folder.as_str())?;
+                }
+                Hunk::DeleteFolder(folder, HunkKind::LocalCache) => {
+                    cache.delete_local_folder(folder)?;
+                }
+                Hunk::DeleteFolder(folder, HunkKind::Local) => {
+                    local.delete_folder(folder.as_str())?;
+                }
+                Hunk::DeleteFolder(folder, HunkKind::RemoteCache) => {
+                    cache.delete_remote_folder(folder)?;
+                }
+                Hunk::DeleteFolder(folder, HunkKind::Remote) => {
+                    remote.delete_folder(folder.as_str())?;
+                }
             }
         }
     }

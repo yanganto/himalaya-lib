@@ -159,8 +159,8 @@ fn test_sync() {
     // sync imap account twice in a row to see if all work as expected
     // without duplicate items
 
-    imap.sync(&account).unwrap();
-    imap.sync(&account).unwrap();
+    imap.sync(&account, false).unwrap();
+    imap.sync(&account, false).unwrap();
 
     // check folders integrity
 
@@ -249,7 +249,7 @@ fn test_sync() {
     )
     .unwrap();
 
-    imap.sync(&account).unwrap();
+    imap.sync(&account, false).unwrap();
 
     let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
     let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();

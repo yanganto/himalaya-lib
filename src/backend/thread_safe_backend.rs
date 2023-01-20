@@ -26,7 +26,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 // TODO: auto trait?
 pub trait ThreadSafeBackend: Backend + Send + Sync {
-    fn sync(&self, account: &AccountConfig) -> Result<()> {
+    fn sync(&self, account: &AccountConfig, dry_run: bool) -> Result<()> {
         debug!("starting synchronization");
 
         if !account.sync {
@@ -57,11 +57,11 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
         )?;
 
         let cache = folder::sync::Cache::new(Cow::Borrowed(account), &sync_dir)?;
-        let folders = folder::sync_all(&cache, &local, self)?;
+        let folders = folder::sync_all(&cache, &local, self, dry_run)?;
 
         let cache = envelope::sync::Cache::new(Cow::Borrowed(account), &sync_dir)?;
         for folder in &folders {
-            envelope::sync_all(folder, &cache, &local, self)?;
+            envelope::sync_all(folder, &cache, &local, self, dry_run)?;
         }
 
         Ok(())

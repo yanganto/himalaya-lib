@@ -164,11 +164,11 @@ pub fn sync_all(
 }
 
 #[cfg(test)]
-mod sync {
+mod sync_flags {
     use crate::{Envelope, Flag, Flags};
 
     #[test]
-    fn sync_flags() {
+    fn sync_all() {
         assert_eq!(super::sync_all(None, None, None, None), Flags::default());
 
         assert_eq!(
