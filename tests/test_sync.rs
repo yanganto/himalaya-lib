@@ -215,7 +215,7 @@ fn test_sync() {
 
     // check envelopes cache integrity
 
-    let cache = sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
+    let cache = sync::envelope::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
 
     let mdir_inbox_envelopes_cached = cache.list_local_envelopes("INBOX").unwrap();
     let imap_inbox_envelopes_cached = cache.list_remote_envelopes("INBOX").unwrap();
