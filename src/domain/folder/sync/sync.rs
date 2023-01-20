@@ -1,25 +1,14 @@
 use log::{debug, trace};
-use std::{collections::HashSet, result};
-use thiserror::Error;
+use std::collections::HashSet;
 
-use crate::{backend, Backend, MaildirBackend, ThreadSafeBackend};
+use crate::{Backend, MaildirBackend, ThreadSafeBackend};
 
-use super::{cache, Cache};
+use super::{Cache, Result};
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error(transparent)]
-    BackendError(#[from] backend::Error),
-    #[error(transparent)]
-    CacheError(#[from] cache::Error),
-}
-
-pub type Result<T> = result::Result<T, Error>;
-
-pub type FolderName = String;
-pub type FoldersName = HashSet<FolderName>;
-pub type Patch = Vec<Hunk>;
-pub type Target = HunkKind;
+pub(super) type FoldersName = HashSet<FolderName>;
+type FolderName = String;
+type Patch = Vec<Hunk>;
+type Target = HunkKind;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HunkKind {
@@ -35,9 +24,9 @@ pub enum Hunk {
     DeleteFolder(FolderName, Target),
 }
 
-pub fn sync<B>(cache: &Cache, local: &MaildirBackend, remote: &B) -> Result<FoldersName>
+pub fn sync_all<B>(cache: &Cache, local: &MaildirBackend, remote: &B) -> Result<FoldersName>
 where
-    B: ThreadSafeBackend,
+    B: ThreadSafeBackend + ?Sized,
 {
     debug!("starting folders synchronization");
 

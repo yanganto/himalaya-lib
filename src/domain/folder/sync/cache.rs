@@ -1,10 +1,10 @@
 pub use sqlite::Error;
-use sqlite::{Connection, ConnectionWithFullMutex, Result};
+use sqlite::{Connection, ConnectionWithFullMutex};
 use std::{borrow::Cow, path::Path};
 
 use crate::AccountConfig;
 
-use super::FoldersName;
+use super::{FoldersName, Result};
 
 const CREATE_FOLDERS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS folders (

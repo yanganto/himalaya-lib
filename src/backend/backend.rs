@@ -119,9 +119,6 @@ pub trait Backend {
     fn as_any(&'static self) -> &(dyn Any);
 }
 
-// TODO: auto trait?
-pub trait ThreadSafeBackend: Backend + Send + Sync {}
-
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct BackendBuilder;
 

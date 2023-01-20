@@ -13,5 +13,3 @@ pub use sender::*;
 
 pub mod domain;
 pub use domain::*;
-
-pub mod sync;

@@ -1,11 +1,11 @@
 use chrono::{DateTime, Local};
 use log::warn;
-use sqlite::{Connection, ConnectionWithFullMutex, Result};
+use sqlite::{Connection, ConnectionWithFullMutex};
 use std::{borrow::Cow, path::Path};
 
-pub(crate) use sqlite::Error;
-
 use crate::{AccountConfig, Envelope, Envelopes};
+
+use super::Result;
 
 const CREATE_ENVELOPES_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS envelopes (
