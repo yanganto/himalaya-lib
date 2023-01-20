@@ -175,8 +175,9 @@ impl<'a> Backend for MaildirBackend<'a> {
         };
         debug!("subdir path: {:?}", path);
 
-        fs::create_dir_all(&path)
-            .map_err(|err| Error::CreateSubdirError(err, subdir.to_owned()))?;
+        Maildir::from(path)
+            .create_dirs()
+            .map_err(Error::InitDirsError)?;
 
         Ok(())
     }

@@ -1,5 +1,5 @@
-mod sync;
+pub mod sync;
 pub use sync::*;
 
-mod cache;
-pub(super) use cache::Cache;
+pub mod cache;
+pub use cache::Cache;

@@ -1,7 +1,7 @@
-mod cache;
+pub mod cache;
 pub use cache::Cache;
 
-mod folder;
+pub mod folder;
 use folder::FolderName;
 
 use dirs::data_dir;

@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::fmt;
 
 /// Represents the folder.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, Serialize)]
 pub struct Folder {
     /// Represents the folder hierarchie delimiter.
     pub delim: String,
@@ -14,6 +14,12 @@ pub struct Folder {
     pub name: String,
     /// Represents the folder description.
     pub desc: String,
+}
+
+impl PartialEq for Folder {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
 }
 
 impl fmt::Display for Folder {
