@@ -11,7 +11,6 @@ use std::{
 use himalaya_lib::{
     envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackendBuilder,
     ImapConfig, MaildirBackend, MaildirConfig, ThreadSafeBackend, TplBuilder, DEFAULT_INBOX_FOLDER,
-    DEFAULT_SENT_FOLDER,
 };
 
 #[test]
@@ -56,10 +55,12 @@ fn test_sync() {
 
     for folder in imap.list_folders().unwrap().iter() {
         match folder.name.as_str() {
-            DEFAULT_INBOX_FOLDER | DEFAULT_SENT_FOLDER => imap.purge_folder(&folder.name).unwrap(),
+            DEFAULT_INBOX_FOLDER => imap.purge_folder(&folder.name).unwrap(),
             folder => imap.delete_folder(folder).unwrap(),
         }
     }
+
+    imap.add_folder("Sent").unwrap();
 
     // add three emails to folder INBOX with delay (in order to have a
     // different date)
@@ -260,4 +261,6 @@ fn test_sync() {
 
     let cached_imap_envelopes = cache.list_remote_envelopes("INBOX").unwrap();
     assert_eq!(cached_imap_envelopes, imap_envelopes);
+
+    imap.close_sessions().unwrap();
 }

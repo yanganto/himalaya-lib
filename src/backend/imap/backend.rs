@@ -117,8 +117,8 @@ pub enum Error {
     SetFlagsError(#[source] imap::Error, String, String),
     #[error("cannot delete flags {1} to message(s) {2}")]
     DelFlagsError(#[source] imap::Error, String, String),
-    #[error("cannot logout from imap server")]
-    LogoutError(#[source] imap::Error),
+    #[error("cannot close imap session")]
+    CloseImapSessionError(#[source] imap::Error),
 
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
@@ -272,6 +272,17 @@ impl<'a> ImapBackend<'a> {
             .map_err(|err| Error::LockSessionError(err.to_string()))
     }
 
+    pub fn close_sessions(&self) -> Result<()> {
+        for session in &self.sessions_pool {
+            let mut session = session
+                .lock()
+                .map_err(|err| Error::LockSessionError(err.to_string()))?;
+            session.close().map_err(Error::CloseImapSessionError)?;
+        }
+
+        Ok(())
+    }
+
     fn search_new_msgs(&self, session: &mut ImapSession, query: &str) -> Result<Vec<u32>> {
         let uids: Vec<u32> = session
             .uid_search(query)
@@ -395,10 +406,10 @@ impl<'a> Backend for ImapBackend<'a> {
 
     fn list_folders(&self) -> backend::Result<Folders> {
         let mut session = self.session()?;
-        let imap_mboxes = session
+        let folders = session
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
-        let mboxes = Folders::from_iter(imap_mboxes.iter().map(|imap_mbox| {
+        let folders = Folders::from_iter(folders.iter().map(|imap_mbox| {
             Folder {
                 delim: imap_mbox.delimiter().unwrap_or_default().into(),
                 name: decode_utf7(imap_mbox.name().into()),
@@ -411,8 +422,8 @@ impl<'a> Backend for ImapBackend<'a> {
             }
         }));
 
-        trace!("imap folders: {:?}", mboxes);
-        Ok(mboxes)
+        trace!("imap folders: {:?}", folders);
+        Ok(folders)
     }
 
     fn purge_folder(&self, folder: &str) -> backend::Result<()> {

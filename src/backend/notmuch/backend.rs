@@ -41,6 +41,8 @@ pub enum Error {
     PurgeFolderUnimplementedError,
     #[error("cannot delete notmuch mailbox: feature not implemented")]
     DelMboxUnimplementedError,
+    #[error("cannot get notmuch envelope: feature not implemented")]
+    GetEnvelopeInternalNotImplemented,
     #[error("cannot copy notmuch message: feature not implemented")]
     CopyMsgUnimplementedError,
     #[error("cannot move notmuch message: feature not implemented")]
@@ -128,7 +130,7 @@ impl<'a> NotmuchBackend<'a> {
         envelopes.sort_by(|a, b| b.date.partial_cmp(&a.date).unwrap());
 
         // Applies pagination boundaries.
-        envelopes.0 = envelopes[page_begin..page_end].to_owned();
+        *envelopes = envelopes[page_begin..page_end].to_owned();
 
         // Appends envelopes hash to the id mapper cache file and
         // calculates the new short hash length. The short hash length
@@ -162,7 +164,7 @@ impl<'a> Backend for NotmuchBackend<'a> {
         Err(Error::AddMboxUnimplementedError)?
     }
 
-    fn list_folder(&self) -> backend::Result<Folders> {
+    fn list_folders(&self) -> backend::Result<Folders> {
         trace!(">> get notmuch virtual folders");
 
         let mut mboxes = Folders::default();
@@ -203,6 +205,14 @@ impl<'a> Backend for NotmuchBackend<'a> {
         )?;
 
         Ok(envelope)
+    }
+
+    fn get_envelope_internal(
+        &self,
+        _virtual_folder: &str,
+        _internal_id: &str,
+    ) -> backend::Result<Envelope> {
+        Err(Error::GetEnvelopeInternalNotImplemented)?
     }
 
     fn list_envelopes(
