@@ -7,6 +7,7 @@ use log::{debug, trace, warn};
 use maildir::Maildir;
 use std::{
     any::Any,
+    borrow::Cow,
     env,
     ffi::OsStr,
     fs, io,
@@ -20,11 +21,13 @@ use crate::{
     envelope::maildir::{envelope, envelopes},
     flag::maildir::flags,
     id_mapper, AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders,
-    IdMapper, MaildirConfig, DEFAULT_INBOX_FOLDER,
+    IdMapper, MaildirConfig, ThreadSafeBackend, DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot parse header date as timestamp")]
+    ParseDateHeaderError,
     #[error("cannot get envelope by short hash {0}")]
     GetEnvelopeError(String),
     #[error("cannot get maildir backend from config")]
@@ -86,14 +89,23 @@ pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the maildir backend.
 pub struct MaildirBackend<'a> {
-    account_config: &'a AccountConfig,
+    account_config: Cow<'a, AccountConfig>,
     mdir: maildir::Maildir,
+}
+
+impl Clone for MaildirBackend<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            account_config: self.account_config.clone(),
+            mdir: self.mdir.path().to_owned().into(),
+        }
+    }
 }
 
 impl<'a> MaildirBackend<'a> {
     pub fn new(
-        account_config: &'a AccountConfig,
-        backend_config: &'a MaildirConfig,
+        account_config: Cow<'a, AccountConfig>,
+        backend_config: Cow<'a, MaildirConfig>,
     ) -> Result<Self> {
         let mdir = Maildir::from(backend_config.root_dir.clone());
         mdir.create_dirs().map_err(Error::InitDirsError)?;
@@ -105,12 +117,11 @@ impl<'a> MaildirBackend<'a> {
     }
 
     fn validate_mdir_path(&self, mdir_path: PathBuf) -> Result<PathBuf> {
-        let path = if mdir_path.is_dir() {
+        if mdir_path.is_dir() {
             Ok(mdir_path)
         } else {
             Err(Error::ReadDirError(mdir_path.to_owned()))
-        }?;
-        Ok(path)
+        }
     }
 
     /// Creates a maildir instance from a string slice.
@@ -158,22 +169,37 @@ impl<'a> Backend for MaildirBackend<'a> {
     fn add_folder(&self, subdir: &str) -> backend::Result<()> {
         debug!("subdir: {:?}", subdir);
 
-        let path = self.mdir.path().join(format!(".{}", subdir));
+        let path = match self.account_config.folder_alias(subdir)?.as_str() {
+            DEFAULT_INBOX_FOLDER => self.mdir.path().join("cur"),
+            dir => self.mdir.path().join(format!(".{}", dir)),
+        };
         debug!("subdir path: {:?}", path);
 
-        fs::create_dir(&path).map_err(|err| Error::CreateSubdirError(err, subdir.to_owned()))?;
+        Maildir::from(path)
+            .create_dirs()
+            .map_err(Error::InitDirsError)?;
+
         Ok(())
     }
 
-    fn list_folder(&self) -> backend::Result<Folders> {
+    fn list_folders(&self) -> backend::Result<Folders> {
         let mut folders = Folders::default();
 
-        for (name, desc) in &self.account_config.folder_aliases {
-            folders.push(Folder {
-                delim: String::from("/"),
-                name: name.into(),
-                desc: desc.into(),
-            })
+        folders.push(Folder {
+            delim: String::from("/"),
+            name: self.account_config.folder_alias(DEFAULT_INBOX_FOLDER)?,
+            desc: DEFAULT_INBOX_FOLDER.into(),
+        });
+
+        for (name, alias) in &self.account_config.folder_aliases {
+            match name.to_lowercase().as_str() {
+                "inbox" => (),
+                name => folders.push(Folder {
+                    delim: String::from("/"),
+                    name: alias.into(),
+                    desc: name.into(),
+                }),
+            }
         }
 
         for entry in self.mdir.list_subdirs() {
@@ -225,20 +251,23 @@ impl<'a> Backend for MaildirBackend<'a> {
         let id = id_mapper.find(short_hash)?;
         debug!("id: {}", id);
 
-        let matching_id = |entry: io::Result<maildir::MailEntry>| match entry {
-            Ok(entry) if id == entry.id() => Some(entry),
-            Ok(_) => None,
-            Err(err) => {
-                warn!("skipping invalid maildir entry: {}", err);
-                None
-            }
-        };
+        let envelope = envelope::from_raw(
+            mdir.find(&id)
+                .ok_or_else(|| Error::GetEnvelopeError(short_hash.to_owned()))?,
+        )?;
+
+        Ok(envelope)
+    }
+
+    fn get_envelope_internal(&self, dir: &str, internal_id: &str) -> backend::Result<Envelope> {
+        debug!("dir: {}", dir);
+        debug!("internal id: {}", internal_id);
+
+        let mdir = self.get_mdir_from_dir(dir)?;
 
         let envelope = envelope::from_raw(
-            mdir.list_cur()
-                .find_map(&matching_id)
-                .or(mdir.list_new().find_map(&matching_id))
-                .ok_or_else(|| Error::GetEnvelopeError(short_hash.to_owned()))?,
+            mdir.find(internal_id)
+                .ok_or_else(|| Error::GetEnvelopeError(internal_id.to_owned()))?,
         )?;
 
         Ok(envelope)
@@ -279,7 +308,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         envelopes.sort_by(|a, b| b.date.partial_cmp(&a.date).unwrap());
 
         // Applies pagination boundaries.
-        envelopes.0 = envelopes[page_begin..page_end].to_owned();
+        *envelopes = envelopes[page_begin..page_end].to_owned();
 
         // Appends envelopes hash to the id mapper cache file and
         // calculates the new short hash length. The short hash length
@@ -377,19 +406,31 @@ impl<'a> Backend for MaildirBackend<'a> {
         debug!("ids: {:?}", ids);
 
         let matching_ids = |entry: io::Result<maildir::MailEntry>| match entry {
-            Ok(entry) if ids.contains(&entry.id()) => Some(entry),
-            Ok(_) => None,
+            Ok(entry) => {
+                if let Some(pos) = ids.iter().position(|id| *id == entry.id()) {
+                    Some((pos, entry))
+                } else {
+                    None
+                }
+            }
             Err(err) => {
                 warn!("skipping invalid maildir entry: {}", err);
                 None
             }
         };
 
-        let emails: Emails = mdir
+        let mut emails = mdir
             .list_cur()
             .filter_map(&matching_ids)
             .chain(mdir.list_new().filter_map(&matching_ids))
-            .collect::<Vec<maildir::MailEntry>>()
+            .collect::<Vec<(usize, maildir::MailEntry)>>();
+
+        emails.sort_by_key(|(pos, _)| *pos);
+
+        let emails: Emails = emails
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>()
             .try_into()?;
 
         Ok(emails)
@@ -652,7 +693,7 @@ impl<'a> Backend for MaildirBackend<'a> {
         let mdir = self.get_mdir_from_dir(dir)?;
 
         for internal_id in internal_ids {
-            mdir.set_flags(&internal_id, &flags::to_normalized_string(&flags))
+            mdir.set_flags(internal_id, &flags::to_normalized_string(&flags))
                 .map_err(Error::SetFlagsError)?;
         }
 
@@ -710,3 +751,5 @@ impl<'a> Backend for MaildirBackend<'a> {
         self
     }
 }
+
+impl ThreadSafeBackend for MaildirBackend<'_> {}

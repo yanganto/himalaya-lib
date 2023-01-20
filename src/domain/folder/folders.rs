@@ -3,15 +3,15 @@
 //! This module contains the representation of the email folders.
 
 use serde::Serialize;
-use std::ops;
+use std::ops::{Deref, DerefMut};
 
 use crate::Folder;
 
 /// Represents the list of folders.
-#[derive(Debug, Default, PartialEq, Eq, Serialize)]
-pub struct Folders(pub Vec<Folder>);
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Folders(Vec<Folder>);
 
-impl ops::Deref for Folders {
+impl Deref for Folders {
     type Target = Vec<Folder>;
 
     fn deref(&self) -> &Self::Target {
@@ -19,8 +19,16 @@ impl ops::Deref for Folders {
     }
 }
 
-impl ops::DerefMut for Folders {
+impl DerefMut for Folders {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl FromIterator<Folder> for Folders {
+    fn from_iter<T: IntoIterator<Item = Folder>>(iter: T) -> Self {
+        let mut folders = Folders::default();
+        folders.extend(iter);
+        folders
     }
 }

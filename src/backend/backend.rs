@@ -3,7 +3,7 @@
 //! This module exposes the backend trait, which can be used to create
 //! custom backend implementations.
 
-use std::{any::Any, result};
+use std::{any::Any, borrow::Cow, result};
 use thiserror::Error;
 
 use crate::{
@@ -49,11 +49,13 @@ pub trait Backend {
     fn name(&self) -> String;
 
     fn add_folder(&self, folder: &str) -> Result<()>;
-    fn list_folder(&self) -> Result<Folders>;
+    fn list_folders(&self) -> Result<Folders>;
     fn purge_folder(&self, folder: &str) -> Result<()>;
     fn delete_folder(&self, folder: &str) -> Result<()>;
 
     fn get_envelope(&self, folder: &str, id: &str) -> Result<Envelope>;
+    fn get_envelope_internal(&self, folder: &str, internal_id: &str) -> Result<Envelope>;
+
     fn list_envelopes(&self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn search_envelopes(
         &self,
@@ -123,22 +125,24 @@ pub struct BackendBuilder;
 impl<'a> BackendBuilder {
     pub fn build(
         account_config: &'a AccountConfig,
-        backend_config: &'a BackendConfig<'a>,
+        backend_config: &'a BackendConfig,
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(imap_config) => {
-                Ok(Box::new(ImapBackend::new(account_config, imap_config)?))
-            }
+            BackendConfig::Imap(imap_config) => Ok(Box::new(ImapBackend::new(
+                Cow::Borrowed(account_config),
+                Cow::Borrowed(imap_config),
+            )?)),
             #[cfg(feature = "maildir-backend")]
             BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
-                account_config,
-                maildir_config,
+                Cow::Borrowed(account_config),
+                Cow::Borrowed(maildir_config),
             )?)),
             #[cfg(feature = "notmuch-backend")]
-            BackendConfig::Notmuch(config) => {
-                Ok(Box::new(NotmuchBackend::new(account_config, config)?))
-            }
+            BackendConfig::Notmuch(notmuch_config) => Ok(Box::new(NotmuchBackend::new(
+                Cow::Borrowed(account_config),
+                Cow::Borrowed(notmuch_config),
+            )?)),
             BackendConfig::None => Err(Error::BuildBackendError),
         }
     }

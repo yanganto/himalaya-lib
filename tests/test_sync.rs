@@ -1,16 +1,22 @@
+use env_logger;
 use std::{
-    collections::HashMap,
+    borrow::Cow,
+    collections::HashSet,
     env::temp_dir,
     fs::{create_dir_all, remove_dir_all},
+    thread,
+    time::Duration,
 };
 
 use himalaya_lib::{
-    sync, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackend, ImapConfig,
-    MaildirBackend, MaildirConfig, SyncIdMapper, TplBuilder,
+    envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackendBuilder,
+    ImapConfig, MaildirBackend, MaildirConfig, ThreadSafeBackend, TplBuilder, DEFAULT_INBOX_FOLDER,
 };
 
 #[test]
 fn test_sync() {
+    env_logger::builder().is_test(true).init();
+
     // set up account
 
     let sync_dir = temp_dir().join("himalaya-sync");
@@ -19,7 +25,8 @@ fn test_sync() {
     }
     create_dir_all(&sync_dir).unwrap();
 
-    let config = AccountConfig {
+    let account = AccountConfig {
+        name: "account".into(),
         sync: true,
         sync_dir: Some(sync_dir.clone()),
         ..AccountConfig::default()
@@ -27,126 +34,233 @@ fn test_sync() {
 
     // set up imap backend
 
-    let imap_config = ImapConfig {
-        host: "localhost".into(),
-        port: 3143,
-        ssl: Some(false),
-        starttls: Some(false),
-        insecure: Some(true),
-        login: "bob@localhost".into(),
-        passwd_cmd: "echo 'password'".into(),
-        ..ImapConfig::default()
-    };
-    let imap = ImapBackend::new(&config, &imap_config).unwrap();
-
-    // purge folders
-
-    if let Err(_) = imap.add_folder("Sent") {};
-    imap.purge_folder("INBOX").unwrap();
-    imap.purge_folder("Sent").unwrap();
-
-    // add 3 emails
-
-    let imap_id_a = imap
-        .add_email(
-            "INBOX",
-            &TplBuilder::default()
-                .from("alice@localhost")
-                .to("bob@localhost")
-                .subject("A")
-                .text_plain_part("A")
-                .compile(CompilerBuilder::default())
-                .unwrap(),
-            &Flags::default(),
+    let imap = ImapBackendBuilder::default()
+        .pool_size(10)
+        .build(
+            Cow::Borrowed(&account),
+            Cow::Owned(ImapConfig {
+                host: "localhost".into(),
+                port: 3143,
+                ssl: Some(false),
+                starttls: Some(false),
+                insecure: Some(true),
+                login: "bob@localhost".into(),
+                passwd_cmd: "echo 'password'".into(),
+                ..ImapConfig::default()
+            }),
         )
         .unwrap();
-    let imap_internal_id_a = imap.get_envelope("INBOX", &imap_id_a).unwrap().internal_id;
 
-    let imap_id_b = imap
-        .add_email(
-            "INBOX",
-            &TplBuilder::default()
-                .from("alice@localhost")
-                .to("bob@localhost")
-                .subject("B")
-                .text_plain_part("B")
-                .compile(CompilerBuilder::default())
-                .unwrap(),
-            &Flags::from_iter([Flag::Flagged]),
-        )
-        .unwrap();
-    let imap_internal_id_b = imap.get_envelope("INBOX", &imap_id_b).unwrap().internal_id;
+    // reset folders
 
-    let imap_id_c = imap
-        .add_email(
-            "INBOX",
-            &TplBuilder::default()
-                .from("alice@localhost")
-                .to("bob@localhost")
-                .subject("C")
-                .text_plain_part("C")
-                .compile(CompilerBuilder::default())
-                .unwrap(),
-            &Flags::default(),
-        )
-        .unwrap();
-    let imap_internal_id_c = imap.get_envelope("INBOX", &imap_id_c).unwrap().internal_id;
+    for folder in imap.list_folders().unwrap().iter() {
+        match folder.name.as_str() {
+            DEFAULT_INBOX_FOLDER => imap.purge_folder(&folder.name).unwrap(),
+            folder => imap.delete_folder(folder).unwrap(),
+        }
+    }
+
+    imap.add_folder("Sent").unwrap();
+
+    // add three emails to folder INBOX with delay (in order to have a
+    // different date)
+
+    imap.add_email(
+        "INBOX",
+        &TplBuilder::default()
+            .message_id("<a@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("A")
+            .text_plain_part("A")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::default(),
+    )
+    .unwrap();
+
+    thread::sleep(Duration::from_secs(1));
+
+    imap.add_email(
+        "INBOX",
+        &TplBuilder::default()
+            .message_id("<b@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("B")
+            .text_plain_part("B")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::from_iter([Flag::Flagged]),
+    )
+    .unwrap();
+
+    thread::sleep(Duration::from_secs(1));
+
+    imap.add_email(
+        "INBOX",
+        &TplBuilder::default()
+            .message_id("<c@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("C")
+            .text_plain_part("C")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::default(),
+    )
+    .unwrap();
+
+    let imap_inbox_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
+
+    // add two more emails to folder Sent
+
+    imap.add_email(
+        "Sent",
+        &TplBuilder::default()
+            .message_id("<d@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("D")
+            .text_plain_part("D")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::default(),
+    )
+    .unwrap();
+
+    thread::sleep(Duration::from_secs(1));
+
+    imap.add_email(
+        "Sent",
+        &TplBuilder::default()
+            .message_id("<e@localhost>")
+            .from("alice@localhost")
+            .to("bob@localhost")
+            .subject("E")
+            .text_plain_part("E")
+            .compile(CompilerBuilder::default())
+            .unwrap(),
+        &Flags::default(),
+    )
+    .unwrap();
 
     // init maildir backend reader
 
-    let mdir_config = MaildirConfig {
-        root_dir: sync_dir.clone(),
-    };
-    let mdir = MaildirBackend::new(&config, &mdir_config).unwrap();
+    let mdir = MaildirBackend::new(
+        Cow::Borrowed(&account),
+        Cow::Owned(MaildirConfig {
+            root_dir: sync_dir.join(&account.name),
+        }),
+    )
+    .unwrap();
 
-    // sync imap account
+    let imap_sent_envelopes = imap.list_envelopes("Sent", 0, 0).unwrap();
 
-    sync(&config, &imap).unwrap();
+    // sync imap account twice in a row to see if all work as expected
+    // without duplicate items
 
-    // retrigger sync to check duplication issues
+    imap.sync(&account, false).unwrap();
+    imap.sync(&account, false).unwrap();
 
-    sync(&config, &imap).unwrap();
+    // check folders integrity
 
-    // check envelopes validity
-
-    let mut envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
-    envelopes.sort_by(|a, b| a.subject.partial_cmp(&b.subject).unwrap());
-    let mut envelopes = envelopes.iter();
-    assert_eq!(3, envelopes.len());
-
-    let envelope = envelopes.next().unwrap();
-    let mdir_internal_id_a = envelope.internal_id.clone();
-    assert_eq!("A", envelope.subject);
-    assert_eq!(Flags::from_iter([Flag::Seen]), envelope.flags);
-
-    let envelope = envelopes.next().unwrap();
-    let mdir_internal_id_b = envelope.internal_id.clone();
-    assert_eq!("B", envelope.subject);
+    let imap_folders = imap.list_folders().unwrap();
+    assert_eq!(imap_folders, mdir.list_folders().unwrap());
     assert_eq!(
-        Flags::from_iter([Flag::Seen, Flag::Flagged]),
-        envelope.flags
+        imap_folders
+            .iter()
+            .map(|f| f.name.clone())
+            .collect::<Vec<_>>(),
+        vec!["INBOX", "Sent"]
     );
 
-    let envelope = envelopes.next().unwrap();
-    let mdir_internal_id_c = envelope.internal_id.clone();
-    assert_eq!("C", envelope.subject);
-    assert_eq!(Flags::from_iter([Flag::Seen]), envelope.flags);
+    // check maildir envelopes integrity
 
-    let emails = mdir.get_emails("INBOX", vec![&envelope.id]).unwrap();
+    let mdir_inbox_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
+    assert_eq!(imap_inbox_envelopes, mdir_inbox_envelopes);
+
+    let mdir_sent_envelopes = mdir.list_envelopes("Sent", 0, 0).unwrap();
+    assert_eq!(imap_sent_envelopes, mdir_sent_envelopes);
+
+    // check maildir emails content integrity
+
+    let ids = mdir_inbox_envelopes.iter().map(|e| e.id.as_str()).collect();
+    let emails = mdir.get_emails("INBOX", ids).unwrap();
     let emails = emails.to_vec();
-    assert_eq!(1, emails.len());
+    assert_eq!(3, emails.len());
+    assert_eq!("C\r\n", emails[0].parsed().unwrap().get_body().unwrap());
+    assert_eq!("B\r\n", emails[1].parsed().unwrap().get_body().unwrap());
+    assert_eq!("A\r\n", emails[2].parsed().unwrap().get_body().unwrap());
 
-    let email = emails.first().unwrap().parsed().unwrap();
-    assert_eq!("C\r\n", email.get_body().unwrap());
+    let ids = mdir_sent_envelopes.iter().map(|e| e.id.as_str()).collect();
+    let emails = mdir.get_emails("Sent", ids).unwrap();
+    let emails = emails.to_vec();
+    assert_eq!(2, emails.len());
+    assert_eq!("E\r\n", emails[0].parsed().unwrap().get_body().unwrap());
+    assert_eq!("D\r\n", emails[1].parsed().unwrap().get_body().unwrap());
 
-    // check sync id mapper file validity
+    // check folders cache integrity
+
+    let cache = folder::sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
 
     assert_eq!(
-        HashMap::from_iter([
-            (mdir_internal_id_a, imap_internal_id_a),
-            (mdir_internal_id_b, imap_internal_id_b),
-            (mdir_internal_id_c, imap_internal_id_c),
-        ]),
-        SyncIdMapper::new(sync_dir).unwrap().map,
+        HashSet::from_iter(["INBOX".into(), "Sent".into()]),
+        cache.list_local_folders().unwrap()
     );
+
+    assert_eq!(
+        HashSet::from_iter(["INBOX".into(), "Sent".into()]),
+        cache.list_remote_folders().unwrap()
+    );
+
+    // check envelopes cache integrity
+
+    let cache = envelope::sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
+
+    let mdir_inbox_envelopes_cached = cache.list_local_envelopes("INBOX").unwrap();
+    let imap_inbox_envelopes_cached = cache.list_remote_envelopes("INBOX").unwrap();
+
+    assert_eq!(mdir_inbox_envelopes, mdir_inbox_envelopes_cached);
+    assert_eq!(imap_inbox_envelopes, imap_inbox_envelopes_cached);
+
+    let mdir_sent_envelopes_cached = cache.list_local_envelopes("Sent").unwrap();
+    let imap_sent_envelopes_cached = cache.list_remote_envelopes("Sent").unwrap();
+
+    assert_eq!(mdir_sent_envelopes, mdir_sent_envelopes_cached);
+    assert_eq!(imap_sent_envelopes, imap_sent_envelopes_cached);
+
+    // remove emails and update flags from both side, sync again and
+    // check integrity
+
+    imap.delete_emails_internal("INBOX", vec![&imap_inbox_envelopes[0].internal_id])
+        .unwrap();
+    imap.add_flags_internal(
+        "INBOX",
+        vec![&imap_inbox_envelopes[1].internal_id],
+        &Flags::from_iter([Flag::Draft]),
+    )
+    .unwrap();
+    mdir.delete_emails_internal("INBOX", vec![&mdir_inbox_envelopes[2].internal_id])
+        .unwrap();
+    mdir.add_flags_internal(
+        "INBOX",
+        vec![&mdir_inbox_envelopes[1].internal_id],
+        &Flags::from_iter([Flag::Flagged, Flag::Answered]),
+    )
+    .unwrap();
+
+    imap.sync(&account, false).unwrap();
+
+    let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
+    let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
+    assert_eq!(imap_envelopes, mdir_envelopes);
+
+    let cached_mdir_envelopes = cache.list_local_envelopes("INBOX").unwrap();
+    assert_eq!(cached_mdir_envelopes, mdir_envelopes);
+
+    let cached_imap_envelopes = cache.list_remote_envelopes("INBOX").unwrap();
+    assert_eq!(cached_imap_envelopes, imap_envelopes);
+
+    imap.close_sessions().unwrap();
 }

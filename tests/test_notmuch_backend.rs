@@ -1,7 +1,11 @@
 #[cfg(feature = "notmuch-backend")]
 use concat_with::concat_line;
 #[cfg(feature = "notmuch-backend")]
-use std::{collections::HashMap, env, fs, iter::FromIterator};
+use maildir::Maildir;
+#[cfg(feature = "notmuch-backend")]
+use notmuch::Database;
+#[cfg(feature = "notmuch-backend")]
+use std::{borrow::Cow, collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "notmuch-backend")]
 use himalaya_lib::{
@@ -12,21 +16,24 @@ use himalaya_lib::{
 #[test]
 fn test_notmuch_backend() {
     // set up maildir folders and notmuch database
-    let mdir: maildir::Maildir = env::temp_dir().join("himalaya-test-notmuch").into();
+
+    let mdir: Maildir = env::temp_dir().join("himalaya-test-notmuch").into();
     if let Err(_) = fs::remove_dir_all(mdir.path()) {}
     mdir.create_dirs().unwrap();
-    notmuch::Database::create(mdir.path()).unwrap();
+    Database::create(mdir.path()).unwrap();
 
     let account_config = AccountConfig {
         folder_aliases: HashMap::from_iter([("inbox".into(), "*".into())]),
         ..AccountConfig::default()
     };
 
-    let notmuch_config = NotmuchConfig {
-        db_path: mdir.path().to_owned(),
-    };
-
-    let notmuch = NotmuchBackend::new(&account_config, &notmuch_config).unwrap();
+    let notmuch = NotmuchBackend::new(
+        Cow::Borrowed(&account_config),
+        Cow::Owned(NotmuchConfig {
+            db_path: mdir.path().to_owned(),
+        }),
+    )
+    .unwrap();
 
     // check that a message can be added
     let email = TplBuilder::default()

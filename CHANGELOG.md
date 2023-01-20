@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#20].
 * Added function `Backend::purge_folder` that removes all emails
   inside a folder.
+* Added new `Backend` functions using the internal id:
+  * `get_envelope_internal`: gets an envelope by its internal id
+  * `add_email_internal`: adds an email and returns its internal id
+  * `get_emails_internal`: gets emails by their internal id
+  * `copy_emails_internal`: copies emails by their internal id
+  * `move_emails_internal`: copies emails by their internal id
+  * `delete_emails_internal`: copies emails by their internal id
+  * `add_flags_internal`: adds emails flags by their internal id
+  * `set_flags_internal`: set emails flags by their internal id
+  * `remove_flags_internal`: removes emails flags by their internal id
+* Added emails synchronization feature. Backends that implement the
+  `ThreadSafeBackend` trait inherit the `sync` function that
+  synchronizes all folders and emails with a local `Maildir` instance.
 
 ### Fixed
 

@@ -3,7 +3,9 @@
 //! This module provides IMAP types and conversion utilities related
 //! to the envelope.
 
+use chrono::{Local, NaiveDateTime};
 use imap;
+use log::warn;
 use rfc2047_decoder;
 
 use crate::{
@@ -25,6 +27,9 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
         .uid
         .ok_or_else(|| Error::GetUidError(raw.message))?
         .to_string();
+
+    let message_id = String::from_utf8(envelope.message_id.clone().unwrap_or_default().to_vec())
+        .map_err(|err| Error::ParseMessageIdError(err, raw.message))?;
 
     let flags = Flags::from(raw.flags());
 
@@ -74,14 +79,34 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
         format!("{}@{}", mbox, host)
     };
 
-    let date = raw
-        .internal_date()
-        .map(|date| date.naive_local().to_string());
+    let date = envelope.date.as_ref().and_then(|date_cow| {
+        let date_str = String::from_utf8_lossy(date_cow.to_vec().as_slice()).to_string();
+        let date_str = date_str.as_str();
+
+        let timestamp = match mailparse::dateparse(date_str) {
+            Ok(timestamp) => Some(timestamp),
+            Err(err) => {
+                warn!("invalid date {}, skipping it: {}", date_str, err);
+                None
+            }
+        };
+
+        let date = timestamp
+            .and_then(|timestamp| NaiveDateTime::from_timestamp_opt(timestamp, 0))
+            .and_then(|date| date.and_local_timezone(Local).earliest());
+
+        if let None = date {
+            warn!("invalid date {}, skipping it", date_str);
+        }
+
+        date
+    });
 
     Ok(Envelope {
         id,
         internal_id,
         flags,
+        message_id,
         subject,
         sender,
         date,

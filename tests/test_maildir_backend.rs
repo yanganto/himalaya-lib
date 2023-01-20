@@ -3,7 +3,7 @@ use concat_with::concat_line;
 #[cfg(feature = "maildir-backend")]
 use maildir::Maildir;
 #[cfg(feature = "maildir-backend")]
-use std::{collections::HashMap, env, fs, iter::FromIterator};
+use std::{borrow::Cow, collections::HashMap, env, fs, iter::FromIterator};
 
 #[cfg(feature = "maildir-backend")]
 use himalaya_lib::{
@@ -14,6 +14,7 @@ use himalaya_lib::{
 #[test]
 fn test_maildir_backend() {
     // set up maildir folders
+
     let mdir: Maildir = env::temp_dir().join("himalaya-test-mdir").into();
     if let Err(_) = fs::remove_dir_all(mdir.path()) {}
     mdir.create_dirs().unwrap();
@@ -27,15 +28,21 @@ fn test_maildir_backend() {
         ..AccountConfig::default()
     };
 
-    let mdir_config = MaildirConfig {
-        root_dir: mdir.path().to_owned(),
-    };
-    let mdir = MaildirBackend::new(&account_config, &mdir_config).unwrap();
+    let mdir = MaildirBackend::new(
+        Cow::Borrowed(&account_config),
+        Cow::Owned(MaildirConfig {
+            root_dir: mdir.path().to_owned(),
+        }),
+    )
+    .unwrap();
 
-    let submdir_config = MaildirConfig {
-        root_dir: mdir_sub.path().to_owned(),
-    };
-    let submdir = MaildirBackend::new(&account_config, &submdir_config).unwrap();
+    let submdir = MaildirBackend::new(
+        Cow::Borrowed(&account_config),
+        Cow::Owned(MaildirConfig {
+            root_dir: mdir_sub.path().to_owned(),
+        }),
+    )
+    .unwrap();
 
     // check that a message can be built and added
     let email = TplBuilder::default()

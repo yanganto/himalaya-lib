@@ -89,7 +89,7 @@ pub struct AccountConfig {
     /// local Maildir backend.
     pub sync: bool,
     /// Customizes the root directory where the Maildir cache is
-    /// saved. Defaults to `$XDG_DATA_HOME/<account-name>`.
+    /// saved. Defaults to `$XDG_DATA_HOME/himalaya/<account-name>`.
     pub sync_dir: Option<PathBuf>,
 }
 

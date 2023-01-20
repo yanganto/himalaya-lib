@@ -1,8 +1,13 @@
 #[cfg(feature = "imap-backend")]
 use concat_with::concat_line;
+#[cfg(feature = "imap-backend")]
+use std::borrow::Cow;
 
 #[cfg(feature = "imap-backend")]
-use himalaya_lib::{AccountConfig, Backend, CompilerBuilder, ImapBackend, ImapConfig, TplBuilder};
+use himalaya_lib::{
+    AccountConfig, Backend, CompilerBuilder, ImapBackend, ImapConfig, TplBuilder,
+    DEFAULT_INBOX_FOLDER,
+};
 
 #[cfg(feature = "imap-backend")]
 #[test]
@@ -15,24 +20,34 @@ fn test_imap_backend() {
         ..AccountConfig::default()
     };
 
-    let imap_config = ImapConfig {
-        host: "localhost".into(),
-        port: 3143,
-        ssl: Some(false),
-        starttls: Some(false),
-        insecure: Some(true),
-        login: "bob@localhost".into(),
-        passwd_cmd: "echo 'password'".into(),
-        ..ImapConfig::default()
-    };
-    let imap = ImapBackend::new(&config, &imap_config).unwrap();
+    let imap = ImapBackend::new(
+        Cow::Borrowed(&config),
+        Cow::Owned(ImapConfig {
+            host: "localhost".into(),
+            port: 3143,
+            ssl: Some(false),
+            starttls: Some(false),
+            insecure: Some(true),
+            login: "bob@localhost".into(),
+            passwd_cmd: "echo 'password'".into(),
+            ..ImapConfig::default()
+        }),
+    )
+    .unwrap();
 
     // setting up folders
-    if let Err(_) = imap.add_folder("Sent") {};
-    if let Err(_) = imap.add_folder("Отправленные") {};
-    imap.purge_folder("INBOX").unwrap();
-    imap.purge_folder("Sent").unwrap();
-    imap.purge_folder("Отправленные").unwrap();
+
+    for folder in imap.list_folders().unwrap().iter() {
+        imap.purge_folder(&folder.name).unwrap();
+
+        match folder.name.as_str() {
+            DEFAULT_INBOX_FOLDER => (),
+            folder => imap.delete_folder(folder).unwrap(),
+        }
+    }
+
+    imap.add_folder("Sent").unwrap();
+    imap.add_folder("Отправленные").unwrap();
 
     // checking that an email can be built and added
     let email =
@@ -104,6 +119,5 @@ fn test_imap_backend() {
     imap.delete_emails("Отправленные", vec![&id]).unwrap();
     assert!(imap.get_emails("Отправленные", vec![&id]).is_err());
 
-    // checking that the backend can disconnect
-    imap.disconnect().unwrap();
+    imap.close_sessions().unwrap();
 }
