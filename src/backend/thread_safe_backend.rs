@@ -1,5 +1,6 @@
 use dirs::data_dir;
-use log::{debug, warn};
+use log::{debug, info, warn};
+use proc_lock::{lock, LockPath};
 use std::{borrow::Cow, fs, io, result};
 use thiserror::Error;
 
@@ -13,6 +14,8 @@ pub enum Error {
     GetXdgDataDirError,
     #[error("cannot create sync directories")]
     CreateXdgDataDirsError(#[source] io::Error),
+    #[error("cannot lock synchronization of account {1}")]
+    SyncAccountLockError(io::Error, String),
 
     #[error(transparent)]
     MaildirError(#[from] maildir::Error),
@@ -26,7 +29,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 pub trait ThreadSafeBackend: Backend + Send + Sync {
     fn sync(&self, account: &AccountConfig, dry_run: bool) -> Result<()> {
-        debug!("starting synchronization");
+        info!("starting synchronization");
 
         if !account.sync {
             debug!(
@@ -35,6 +38,10 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
             );
             return Ok(());
         }
+
+        let lock_path = LockPath::Tmp(format!("himalaya-sync-{}.lock", self.name()));
+        let guard =
+            lock(&lock_path).map_err(|err| Error::SyncAccountLockError(err, self.name()))?;
 
         let sync_dir = match account.sync_dir.as_ref().filter(|dir| dir.is_dir()) {
             Some(dir) => dir.clone(),
@@ -64,6 +71,8 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
         for folder in &folders {
             envelope::sync_all(folder, &cache, &local, self, dry_run)?;
         }
+
+        drop(guard);
 
         Ok(())
     }

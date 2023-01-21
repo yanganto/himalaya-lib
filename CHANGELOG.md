@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path collisions, for eg `[Gmail]/Sent`). Also added a
   `MaildirBackendBuilder` to facilitate the usage of the
   `url_encoded_folders` option.
+* Added a process lock for `ThreadSafeBackend::sync`, this way only
+  one synchronization can be performed at a time (for a same account).
 
 ### Fixed
 
