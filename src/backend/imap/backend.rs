@@ -958,6 +958,11 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
+    fn sync(&self, dry_run: bool) -> backend::Result<()> {
+        ThreadSafeBackend::sync(self, &self.account_config, dry_run)
+            .map_err(|err| backend::Error::SyncError(Box::new(err), self.name()))
+    }
+
     fn as_any(&self) -> &(dyn Any + 'a) {
         self
     }

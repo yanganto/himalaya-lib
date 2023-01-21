@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Added emails synchronization feature. Backends that implement the
   `ThreadSafeBackend` trait inherit the `sync` function that
   synchronizes all folders and emails with a local `Maildir` instance.
+* Added `Backend::sync` function and link `ThreadSafeBackend::sync` to
+  it for the IMAP and the Maildir backends.
+* Added the ability to URL encode Maildir folders (in order to fix
+  path collisions, for eg `[Gmail]/Sent`). Also added a
+  `MaildirBackendBuilder` to facilitate the usage of the
+  `url_encoded_folders` option.
 
 ### Fixed
 

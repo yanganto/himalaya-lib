@@ -94,7 +94,7 @@ where
         let process_hunk = |hunk: &Hunk| {
             match hunk {
                 Hunk::CacheEnvelope(folder, internal_id, HunkKindRestricted::Local) => {
-                    let envelope = local.get_envelope_internal(&folder, &internal_id)?;
+                    let envelope = local.get_envelope_internal(folder, &internal_id)?;
                     cache.insert_local_envelope(folder, envelope)?;
                 }
                 Hunk::CacheEnvelope(folder, internal_id, HunkKindRestricted::Remote) => {
@@ -105,10 +105,10 @@ where
                     let internal_ids = vec![envelope.internal_id.as_str()];
                     let emails = match source {
                         HunkKindRestricted::Local => {
-                            local.get_emails_internal(&folder, internal_ids)
+                            local.get_emails_internal(folder, internal_ids)
                         }
                         HunkKindRestricted::Remote => {
-                            remote.get_emails_internal(&folder, internal_ids)
+                            remote.get_emails_internal(folder, internal_ids)
                         }
                     }?;
                     let emails = emails.to_vec();
@@ -119,8 +119,8 @@ where
                     match target {
                         HunkKindRestricted::Local => {
                             let internal_id =
-                                local.add_email_internal(&folder, email.raw()?, &envelope.flags)?;
-                            let envelope = local.get_envelope_internal(&folder, &internal_id)?;
+                                local.add_email_internal(folder, email.raw()?, &envelope.flags)?;
+                            let envelope = local.get_envelope_internal(folder, &internal_id)?;
                             cache.insert_local_envelope(folder, envelope)?;
                         }
                         HunkKindRestricted::Remote => {

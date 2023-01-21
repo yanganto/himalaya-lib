@@ -20,10 +20,15 @@ use crate::MaildirBackend;
 #[cfg(feature = "notmuch-backend")]
 use crate::NotmuchBackend;
 
+use super::thread_safe_backend;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("cannot build backend with an empty config")]
     BuildBackendError,
+
+    #[error("cannot sync backend {0}: not supported")]
+    SyncNotSupported(String),
 
     #[error(transparent)]
     EmailError(#[from] email::Error),
@@ -41,6 +46,8 @@ pub enum Error {
     #[cfg(feature = "notmuch-backend")]
     #[error(transparent)]
     NotmuchBackendError(#[from] backend::notmuch::Error),
+    #[error("cannot sync account {1}")]
+    SyncError(#[source] Box<thread_safe_backend::Error>, String),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -114,6 +121,10 @@ pub trait Backend {
         internal_ids: Vec<&str>,
         flags: &Flags,
     ) -> Result<()>;
+
+    fn sync(&self, _dry_run: bool) -> Result<()> {
+        Err(Error::SyncNotSupported(self.name()))
+    }
 
     // only for downcasting
     fn as_any(&'static self) -> &(dyn Any);

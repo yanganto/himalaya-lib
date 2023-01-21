@@ -37,6 +37,7 @@ shellexpand = "2.1"
 sqlite = "0.30"
 thiserror = "1.0"
 tree_magic = "0.2"
+urlencoding = "2.1"
 uuid = { version = "0.8", features = ["v4"] }
 
 # [dependencies.optional]

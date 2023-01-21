@@ -35,9 +35,14 @@ where
 {
     debug!("starting folders synchronization");
 
-    let local_folders_cached: FoldersName =
-        HashSet::from_iter(cache.list_local_folders()?.iter().cloned());
+    let local_folders_cached: FoldersName = HashSet::from_iter(
+        cache
+            .list_local_folders()?
+            .iter()
+            .map(|folder| urlencoding::encode(&folder).to_string()),
+    );
 
+    // local Maildir folders are already encoded
     let local_folders: FoldersName = HashSet::from_iter(
         local
             .list_folders()?
@@ -45,17 +50,21 @@ where
             .map(|folder| folder.name.clone()),
     );
 
-    let remote_folders_cached: FoldersName =
-        HashSet::from_iter(cache.list_remote_folders()?.iter().cloned());
+    let remote_folders_cached: FoldersName = HashSet::from_iter(
+        cache
+            .list_remote_folders()?
+            .iter()
+            .map(|folder| urlencoding::encode(&folder).to_string()),
+    );
 
     let remote_folders: FoldersName = HashSet::from_iter(
         remote
             .list_folders()?
             .iter()
-            .map(|folder| folder.name.clone()),
+            .map(|folder| urlencoding::encode(&folder.name).to_string()),
     );
 
-    let (patch, names) = build_patch(
+    let (patch, folders) = build_patch(
         local_folders_cached,
         local_folders,
         remote_folders_cached,
@@ -69,34 +78,61 @@ where
         for hunk in patch {
             match hunk {
                 Hunk::CreateFolder(folder, HunkKind::LocalCache) => {
+                    let folder = urlencoding::decode(&folder)
+                        .map(|folder| folder.to_string())
+                        .unwrap_or_else(|_| folder);
                     cache.insert_local_folder(folder)?;
                 }
-                Hunk::CreateFolder(folder, HunkKind::Local) => {
-                    local.add_folder(folder.as_str())?;
+                Hunk::CreateFolder(ref folder, HunkKind::Local) => {
+                    local.add_folder(folder)?;
                 }
                 Hunk::CreateFolder(folder, HunkKind::RemoteCache) => {
+                    let folder = urlencoding::decode(&folder)
+                        .map(|folder| folder.to_string())
+                        .unwrap_or_else(|_| folder);
                     cache.insert_remote_folder(folder)?;
                 }
                 Hunk::CreateFolder(folder, HunkKind::Remote) => {
-                    remote.add_folder(folder.as_str())?;
+                    let folder = urlencoding::decode(&folder)
+                        .map(|folder| folder.to_string())
+                        .unwrap_or_else(|_| folder);
+                    remote.add_folder(&folder)?;
                 }
                 Hunk::DeleteFolder(folder, HunkKind::LocalCache) => {
+                    let folder = urlencoding::decode(&folder)
+                        .map(|folder| folder.to_string())
+                        .unwrap_or_else(|_| folder);
                     cache.delete_local_folder(folder)?;
                 }
-                Hunk::DeleteFolder(folder, HunkKind::Local) => {
-                    local.delete_folder(folder.as_str())?;
+                Hunk::DeleteFolder(ref folder, HunkKind::Local) => {
+                    local.delete_folder(folder)?;
                 }
                 Hunk::DeleteFolder(folder, HunkKind::RemoteCache) => {
+                    let folder = urlencoding::decode(&folder)
+                        .map(|folder| folder.to_string())
+                        .unwrap_or_else(|_| folder);
                     cache.delete_remote_folder(folder)?;
                 }
                 Hunk::DeleteFolder(folder, HunkKind::Remote) => {
-                    remote.delete_folder(folder.as_str())?;
+                    let folder = urlencoding::decode(&folder)
+                        .map(|folder| folder.to_string())
+                        .unwrap_or_else(|_| folder);
+                    remote.delete_folder(&folder)?;
                 }
             }
         }
     }
 
-    Ok(names)
+    let folders = folders
+        .into_iter()
+        .map(|folder| {
+            urlencoding::decode(&folder)
+                .map(|folder| folder.to_string())
+                .unwrap_or_else(|_| folder)
+        })
+        .collect();
+
+    Ok(folders)
 }
 
 pub fn build_patch(
@@ -106,21 +142,21 @@ pub fn build_patch(
     remote: FoldersName,
 ) -> (Patch, FoldersName) {
     let mut patch: Patch = vec![];
-    let mut names: FoldersName = HashSet::new();
+    let mut folders: FoldersName = HashSet::new();
 
     // Gathers all existing folders name.
-    names.extend(local_cache.clone());
-    names.extend(local.clone());
-    names.extend(remote_cache.clone());
-    names.extend(remote.clone());
+    folders.extend(local_cache.clone());
+    folders.extend(local.clone());
+    folders.extend(remote_cache.clone());
+    folders.extend(remote.clone());
 
     // Given the matrice local_cache × local × remote_cache × remote,
     // checks every 2⁴ = 16 possibilities:
-    for name in &names {
-        let local_cache = local_cache.get(name);
-        let local = local.get(name);
-        let remote_cache = remote_cache.get(name);
-        let remote = remote.get(name);
+    for folder in &folders {
+        let local_cache = local_cache.get(folder);
+        let local = local.get(folder);
+        let remote_cache = remote_cache.get(folder);
+        let remote = remote.get(folder);
 
         match (local_cache, local, remote_cache, remote) {
             // 0000
@@ -128,87 +164,87 @@ pub fn build_patch(
 
             // 0001
             (None, None, None, Some(_)) => patch.extend([
-                Hunk::CreateFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::CreateFolder(name.clone(), HunkKind::Local),
-                Hunk::CreateFolder(name.clone(), HunkKind::RemoteCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::Local),
+                Hunk::CreateFolder(folder.clone(), HunkKind::RemoteCache),
             ]),
 
             // 0010
             (None, None, Some(_), None) => {
-                patch.push(Hunk::DeleteFolder(name.clone(), HunkKind::RemoteCache))
+                patch.push(Hunk::DeleteFolder(folder.clone(), HunkKind::RemoteCache))
             }
 
             // 0011
             (None, None, Some(_), Some(_)) => patch.extend([
-                Hunk::CreateFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::CreateFolder(name.clone(), HunkKind::Local),
+                Hunk::CreateFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::Local),
             ]),
 
             // 0100
             //
             (None, Some(_), None, None) => patch.extend([
-                Hunk::CreateFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::CreateFolder(name.clone(), HunkKind::RemoteCache),
-                Hunk::CreateFolder(name.clone(), HunkKind::Remote),
+                Hunk::CreateFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::RemoteCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::Remote),
             ]),
 
             // 0101
             (None, Some(_), None, Some(_)) => patch.extend([
-                Hunk::CreateFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::CreateFolder(name.clone(), HunkKind::RemoteCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::RemoteCache),
             ]),
 
             // 0110
             (None, Some(_), Some(_), None) => patch.extend([
-                Hunk::CreateFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::CreateFolder(name.clone(), HunkKind::Remote),
+                Hunk::CreateFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::Remote),
             ]),
 
             // 0111
             (None, Some(_), Some(_), Some(_)) => {
-                patch.push(Hunk::CreateFolder(name.clone(), HunkKind::LocalCache))
+                patch.push(Hunk::CreateFolder(folder.clone(), HunkKind::LocalCache))
             }
 
             // 1000
             (Some(_), None, None, None) => {
-                patch.push(Hunk::DeleteFolder(name.clone(), HunkKind::LocalCache))
+                patch.push(Hunk::DeleteFolder(folder.clone(), HunkKind::LocalCache))
             }
 
             // 1001
             (Some(_), None, None, Some(_)) => patch.extend([
-                Hunk::CreateFolder(name.clone(), HunkKind::Local),
-                Hunk::CreateFolder(name.clone(), HunkKind::RemoteCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::Local),
+                Hunk::CreateFolder(folder.clone(), HunkKind::RemoteCache),
             ]),
 
             // 1010
             (Some(_), None, Some(_), None) => patch.extend([
-                Hunk::DeleteFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::DeleteFolder(name.clone(), HunkKind::RemoteCache),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::RemoteCache),
             ]),
 
             // 1011
             (Some(_), None, Some(_), Some(_)) => patch.extend([
-                Hunk::DeleteFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::DeleteFolder(name.clone(), HunkKind::RemoteCache),
-                Hunk::DeleteFolder(name.clone(), HunkKind::Remote),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::RemoteCache),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::Remote),
             ]),
 
             // 1100
             (Some(_), Some(_), None, None) => patch.extend([
-                Hunk::CreateFolder(name.clone(), HunkKind::RemoteCache),
-                Hunk::CreateFolder(name.clone(), HunkKind::Remote),
+                Hunk::CreateFolder(folder.clone(), HunkKind::RemoteCache),
+                Hunk::CreateFolder(folder.clone(), HunkKind::Remote),
             ]),
 
             // 1101
             (Some(_), Some(_), None, Some(_)) => {
-                patch.push(Hunk::CreateFolder(name.clone(), HunkKind::RemoteCache))
+                patch.push(Hunk::CreateFolder(folder.clone(), HunkKind::RemoteCache))
             }
 
             // 1110
             (Some(_), Some(_), Some(_), None) => patch.extend([
-                Hunk::DeleteFolder(name.clone(), HunkKind::LocalCache),
-                Hunk::DeleteFolder(name.clone(), HunkKind::Local),
-                Hunk::DeleteFolder(name.clone(), HunkKind::RemoteCache),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::LocalCache),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::Local),
+                Hunk::DeleteFolder(folder.clone(), HunkKind::RemoteCache),
             ]),
 
             // 1111
@@ -216,7 +252,7 @@ pub fn build_patch(
         }
     }
 
-    (patch, names)
+    (patch, folders)
 }
 
 #[cfg(test)]

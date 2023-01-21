@@ -16,7 +16,7 @@ pub use self::id_mapper::IdMapper;
 #[cfg(feature = "imap-backend")]
 pub use self::imap::{ImapBackend, ImapBackendBuilder, ImapConfig};
 #[cfg(feature = "maildir-backend")]
-pub use self::maildir::{MaildirBackend, MaildirConfig};
+pub use self::maildir::{MaildirBackend, MaildirBackendBuilder, MaildirConfig};
 #[cfg(feature = "notmuch-backend")]
 pub use self::notmuch::{NotmuchBackend, NotmuchConfig};
 pub use self::thread_safe_backend::ThreadSafeBackend;

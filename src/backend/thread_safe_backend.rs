@@ -3,7 +3,7 @@ use log::{debug, warn};
 use std::{borrow::Cow, fs, io, result};
 use thiserror::Error;
 
-use crate::{envelope, folder, AccountConfig, Backend, MaildirBackend, MaildirConfig};
+use crate::{envelope, folder, AccountConfig, Backend, MaildirBackendBuilder, MaildirConfig};
 
 use super::maildir;
 
@@ -24,7 +24,6 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-// TODO: auto trait?
 pub trait ThreadSafeBackend: Backend + Send + Sync {
     fn sync(&self, account: &AccountConfig, dry_run: bool) -> Result<()> {
         debug!("starting synchronization");
@@ -49,12 +48,14 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
             }
         };
 
-        let local = MaildirBackend::new(
-            Cow::Borrowed(account),
-            Cow::Owned(MaildirConfig {
-                root_dir: sync_dir.join(&account.name),
-            }),
-        )?;
+        let local = MaildirBackendBuilder::new()
+            .url_encoded_folders(true)
+            .build(
+                Cow::Borrowed(account),
+                Cow::Owned(MaildirConfig {
+                    root_dir: sync_dir.join(&account.name),
+                }),
+            )?;
 
         let cache = folder::sync::Cache::new(Cow::Borrowed(account), &sync_dir)?;
         let folders = folder::sync_all(&cache, &local, self, dry_run)?;

@@ -90,6 +90,7 @@ pub type Result<T> = result::Result<T, Error>;
 /// Represents the maildir backend.
 pub struct MaildirBackend<'a> {
     account_config: Cow<'a, AccountConfig>,
+    url_encoded_folders: bool,
     mdir: maildir::Maildir,
 }
 
@@ -97,6 +98,7 @@ impl Clone for MaildirBackend<'_> {
     fn clone(&self) -> Self {
         Self {
             account_config: self.account_config.clone(),
+            url_encoded_folders: self.url_encoded_folders.clone(),
             mdir: self.mdir.path().to_owned().into(),
         }
     }
@@ -113,6 +115,7 @@ impl<'a> MaildirBackend<'a> {
         Ok(Self {
             account_config,
             mdir,
+            url_encoded_folders: false,
         })
     }
 
@@ -126,7 +129,11 @@ impl<'a> MaildirBackend<'a> {
 
     /// Creates a maildir instance from a string slice.
     pub fn get_mdir_from_dir(&self, dir: &str) -> Result<maildir::Maildir> {
-        let dir = self.account_config.folder_alias(dir)?;
+        let mut dir = self.account_config.folder_alias(dir)?;
+
+        if self.url_encoded_folders {
+            dir = urlencoding::encode(&dir).to_string();
+        }
 
         // If the dir points to the inbox folder, creates a maildir
         // instance from the root folder.
@@ -747,9 +754,40 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
+    fn sync(&self, dry_run: bool) -> backend::Result<()> {
+        ThreadSafeBackend::sync(self, &self.account_config, dry_run)
+            .map_err(|err| backend::Error::SyncError(Box::new(err), self.name()))
+    }
+
     fn as_any(&self) -> &(dyn Any + 'a) {
         self
     }
 }
 
 impl ThreadSafeBackend for MaildirBackend<'_> {}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MaildirBackendBuilder {
+    url_encoded_folders: bool,
+}
+
+impl MaildirBackendBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn url_encoded_folders(mut self, flag: bool) -> Self {
+        self.url_encoded_folders = flag;
+        self
+    }
+
+    pub fn build<'a>(
+        self,
+        account_config: Cow<'a, AccountConfig>,
+        backend_config: Cow<'a, MaildirConfig>,
+    ) -> Result<MaildirBackend> {
+        let mut backend = MaildirBackend::new(account_config, backend_config)?;
+        backend.url_encoded_folders = self.url_encoded_folders;
+        Ok(backend)
+    }
+}

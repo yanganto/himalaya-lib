@@ -9,8 +9,9 @@ use std::{
 };
 
 use himalaya_lib::{
-    envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackendBuilder,
-    ImapConfig, MaildirBackend, MaildirConfig, ThreadSafeBackend, TplBuilder, DEFAULT_INBOX_FOLDER,
+    envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, Folder, Folders,
+    ImapBackendBuilder, ImapConfig, MaildirBackendBuilder, MaildirConfig, TplBuilder,
+    DEFAULT_INBOX_FOLDER,
 };
 
 #[test]
@@ -60,7 +61,7 @@ fn test_sync() {
         }
     }
 
-    imap.add_folder("Sent").unwrap();
+    imap.add_folder("[Gmail]/Sent").unwrap();
 
     // add three emails to folder INBOX with delay (in order to have a
     // different date)
@@ -113,10 +114,10 @@ fn test_sync() {
 
     let imap_inbox_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
 
-    // add two more emails to folder Sent
+    // add two more emails to folder [Gmail]/Sent
 
     imap.add_email(
-        "Sent",
+        "[Gmail]/Sent",
         &TplBuilder::default()
             .message_id("<d@localhost>")
             .from("alice@localhost")
@@ -132,7 +133,7 @@ fn test_sync() {
     thread::sleep(Duration::from_secs(1));
 
     imap.add_email(
-        "Sent",
+        "[Gmail]/Sent",
         &TplBuilder::default()
             .message_id("<e@localhost>")
             .from("alice@localhost")
@@ -147,32 +148,44 @@ fn test_sync() {
 
     // init maildir backend reader
 
-    let mdir = MaildirBackend::new(
-        Cow::Borrowed(&account),
-        Cow::Owned(MaildirConfig {
-            root_dir: sync_dir.join(&account.name),
-        }),
-    )
-    .unwrap();
+    let mdir = MaildirBackendBuilder::new()
+        .url_encoded_folders(true)
+        .build(
+            Cow::Borrowed(&account),
+            Cow::Owned(MaildirConfig {
+                root_dir: sync_dir.join(&account.name),
+            }),
+        )
+        .unwrap();
 
-    let imap_sent_envelopes = imap.list_envelopes("Sent", 0, 0).unwrap();
+    let imap_sent_envelopes = imap.list_envelopes("[Gmail]/Sent", 0, 0).unwrap();
 
     // sync imap account twice in a row to see if all work as expected
     // without duplicate items
 
-    imap.sync(&account, false).unwrap();
-    imap.sync(&account, false).unwrap();
+    imap.sync(false).unwrap();
+    imap.sync(false).unwrap();
 
     // check folders integrity
 
     let imap_folders = imap.list_folders().unwrap();
-    assert_eq!(imap_folders, mdir.list_folders().unwrap());
+    let mdir_folders = Folders::from_iter(
+        mdir.list_folders()
+            .unwrap()
+            .iter()
+            .map(|folder| Folder {
+                name: urlencoding::decode(&folder.name).unwrap().to_string(),
+                ..folder.clone()
+            })
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(imap_folders, mdir_folders,);
     assert_eq!(
         imap_folders
             .iter()
             .map(|f| f.name.clone())
             .collect::<Vec<_>>(),
-        vec!["INBOX", "Sent"]
+        vec!["INBOX", "[Gmail]/Sent"]
     );
 
     // check maildir envelopes integrity
@@ -180,7 +193,7 @@ fn test_sync() {
     let mdir_inbox_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
     assert_eq!(imap_inbox_envelopes, mdir_inbox_envelopes);
 
-    let mdir_sent_envelopes = mdir.list_envelopes("Sent", 0, 0).unwrap();
+    let mdir_sent_envelopes = mdir.list_envelopes("[Gmail]/Sent", 0, 0).unwrap();
     assert_eq!(imap_sent_envelopes, mdir_sent_envelopes);
 
     // check maildir emails content integrity
@@ -194,7 +207,7 @@ fn test_sync() {
     assert_eq!("A\r\n", emails[2].parsed().unwrap().get_body().unwrap());
 
     let ids = mdir_sent_envelopes.iter().map(|e| e.id.as_str()).collect();
-    let emails = mdir.get_emails("Sent", ids).unwrap();
+    let emails = mdir.get_emails("[Gmail]/Sent", ids).unwrap();
     let emails = emails.to_vec();
     assert_eq!(2, emails.len());
     assert_eq!("E\r\n", emails[0].parsed().unwrap().get_body().unwrap());
@@ -205,12 +218,12 @@ fn test_sync() {
     let cache = folder::sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
 
     assert_eq!(
-        HashSet::from_iter(["INBOX".into(), "Sent".into()]),
+        HashSet::from_iter(["INBOX".into(), "[Gmail]/Sent".into()]),
         cache.list_local_folders().unwrap()
     );
 
     assert_eq!(
-        HashSet::from_iter(["INBOX".into(), "Sent".into()]),
+        HashSet::from_iter(["INBOX".into(), "[Gmail]/Sent".into()]),
         cache.list_remote_folders().unwrap()
     );
 
@@ -224,8 +237,8 @@ fn test_sync() {
     assert_eq!(mdir_inbox_envelopes, mdir_inbox_envelopes_cached);
     assert_eq!(imap_inbox_envelopes, imap_inbox_envelopes_cached);
 
-    let mdir_sent_envelopes_cached = cache.list_local_envelopes("Sent").unwrap();
-    let imap_sent_envelopes_cached = cache.list_remote_envelopes("Sent").unwrap();
+    let mdir_sent_envelopes_cached = cache.list_local_envelopes("[Gmail]/Sent").unwrap();
+    let imap_sent_envelopes_cached = cache.list_remote_envelopes("[Gmail]/Sent").unwrap();
 
     assert_eq!(mdir_sent_envelopes, mdir_sent_envelopes_cached);
     assert_eq!(imap_sent_envelopes, imap_sent_envelopes_cached);
@@ -250,7 +263,7 @@ fn test_sync() {
     )
     .unwrap();
 
-    imap.sync(&account, false).unwrap();
+    imap.sync(false).unwrap();
 
     let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
     let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
