@@ -3,10 +3,11 @@
 //! This module contains the representation of the user's current
 //! account configuration.
 
+use dirs::data_dir;
 use lettre::{address::AddressError, message::Mailbox};
 use log::warn;
 use shellexpand;
-use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf, result};
+use std::{collections::HashMap, env, ffi::OsStr, fs, io, path::PathBuf, result};
 use thiserror::Error;
 
 use crate::{process, EmailHooks, EmailSender, EmailTextPlainFormat};
@@ -36,6 +37,11 @@ pub enum Error {
     ParseDownloadFileNameError(PathBuf),
     #[error("cannot parse address from config")]
     ParseAddressError(#[source] AddressError),
+
+    #[error("cannot get sync directory from XDG_DATA_HOME")]
+    GetXdgDataDirError,
+    #[error("cannot create sync directories")]
+    CreateXdgDataDirsError(#[source] io::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -228,6 +234,31 @@ impl AccountConfig {
             .and_then(|sig| fs::read_to_string(sig).ok())
             .or_else(|| signature.map(ToOwned::to_owned))
             .map(|sig| format!("{}{}", delim, sig)))
+    }
+
+    pub fn sync(&self) -> bool {
+        self.sync
+            && match self.sync_dir.as_ref() {
+                Some(dir) => dir.is_dir(),
+                None => data_dir()
+                    .map(|dir| dir.join("himalaya").join(&self.name))
+                    .map(|dir| dir.is_dir())
+                    .unwrap_or_default(),
+            }
+    }
+
+    pub fn sync_dir(&self) -> Result<PathBuf> {
+        match self.sync_dir.as_ref().filter(|dir| dir.is_dir()) {
+            Some(dir) => Ok(dir.clone()),
+            None => {
+                warn!("sync dir not set or invalid, falling back to $XDG_DATA_HOME/himalaya");
+                let sync_dir = data_dir()
+                    .map(|dir| dir.join("himalaya"))
+                    .ok_or(Error::GetXdgDataDirError)?;
+                fs::create_dir_all(&sync_dir).map_err(Error::CreateXdgDataDirsError)?;
+                Ok(sync_dir)
+            }
+        }
     }
 }
 
