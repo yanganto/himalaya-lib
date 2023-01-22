@@ -8,11 +8,8 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, id_mapper, AccountConfig, BackendConfig, Emails, Envelope, Envelopes,
-    Flags, Folders,
+    Flags, Folders, ImapBackendBuilder,
 };
-
-#[cfg(feature = "imap-backend")]
-use crate::ImapBackend;
 
 #[cfg(feature = "maildir-backend")]
 use crate::MaildirBackend;
@@ -140,10 +137,11 @@ impl<'a> BackendBuilder {
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(imap_config) => Ok(Box::new(ImapBackend::new(
-                Cow::Borrowed(account_config),
-                Cow::Borrowed(imap_config),
-            )?)),
+            BackendConfig::Imap(imap_config) => Ok(Box::new(
+                ImapBackendBuilder::new()
+                    .pool_size(10)
+                    .build(Cow::Borrowed(account_config), Cow::Borrowed(imap_config))?,
+            )),
             #[cfg(feature = "maildir-backend")]
             BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
                 Cow::Borrowed(account_config),

@@ -1,4 +1,4 @@
-use log::{debug, trace, warn};
+use log::{info, trace, warn};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
@@ -49,7 +49,7 @@ where
     F: AsRef<str>,
     B: ThreadSafeBackend + ?Sized,
 {
-    debug!("synchronizing envelopes from folder: {}", folder.as_ref());
+    info!("starting envelopes sync, folder {}", folder.as_ref());
 
     let local_envelopes_cached: Envelopes = HashMap::from_iter(
         cache
@@ -58,12 +58,16 @@ where
             .map(|envelope| (envelope.hash(folder.as_ref().clone()), envelope.clone())),
     );
 
+    trace!("local envelopes cached: {:#?}", local_envelopes_cached);
+
     let local_envelopes: Envelopes = HashMap::from_iter(
         local
             .list_envelopes(folder.as_ref(), 0, 0)?
             .iter()
             .map(|envelope| (envelope.hash(folder.as_ref().clone()), envelope.clone())),
     );
+
+    trace!("local envelopes: {:#?}", local_envelopes);
 
     let remote_envelopes_cached: Envelopes = HashMap::from_iter(
         cache
@@ -72,12 +76,16 @@ where
             .map(|envelope| (envelope.hash(folder.as_ref().clone()), envelope.clone())),
     );
 
+    trace!("remote envelopes cached: {:#?}", remote_envelopes_cached);
+
     let remote_envelopes: Envelopes = HashMap::from_iter(
         remote
             .list_envelopes(folder.as_ref(), 0, 0)?
             .iter()
             .map(|envelope| (envelope.hash(folder.as_ref().clone()), envelope.clone())),
     );
+
+    trace!("remote envelopes: {:#?}", remote_envelopes);
 
     let patch = build_patch(
         folder.as_ref(),
@@ -87,10 +95,12 @@ where
         remote_envelopes,
     );
 
-    debug!("patch length: {}", patch.len());
-    trace!("patch: {:#?}", patch);
+    info!("envelopes patch length: {}", patch.len());
+    trace!("envelopes patch: {:#?}", patch);
 
-    if !dry_run {
+    if dry_run {
+        info!("dry run activated, skipping envelopes patch");
+    } else {
         let process_hunk = |hunk: &Hunk| {
             match hunk {
                 Hunk::CacheEnvelope(folder, internal_id, HunkKindRestricted::Local) => {
@@ -129,7 +139,7 @@ where
                                 email.raw()?,
                                 &envelope.flags,
                             )?;
-                            let envelope = local.get_envelope_internal(&folder, &internal_id)?;
+                            let envelope = remote.get_envelope_internal(&folder, &internal_id)?;
                             cache.insert_remote_envelope(folder, envelope)?;
                         }
                     };
@@ -173,11 +183,17 @@ where
             Result::Ok(())
         };
 
-        for (batch_num, batch) in patch.chunks(3).enumerate() {
-            debug!("processing batch {}/{}", batch_num + 1, patch.len() / 3);
+        let patch = patch.chunks(10);
+        let patch_len = patch.len();
+        for (batch_num, batch) in patch.enumerate() {
+            info!(
+                "processing envelopes patch, batch {}/{}",
+                batch_num + 1,
+                patch_len
+            );
 
             batch.par_iter().try_for_each(|hunks| {
-                trace!("processing hunks: {:#?}", hunks);
+                trace!("hunks: {:#?}", hunks);
 
                 for hunk in hunks {
                     if let Err(err) = process_hunk(hunk) {

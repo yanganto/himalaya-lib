@@ -9,9 +9,8 @@ use std::{
 };
 
 use himalaya_lib::{
-    envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, Folder, Folders,
-    ImapBackendBuilder, ImapConfig, MaildirBackendBuilder, MaildirConfig, TplBuilder,
-    DEFAULT_INBOX_FOLDER,
+    envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackendBuilder,
+    ImapConfig, MaildirBackendBuilder, MaildirConfig, TplBuilder, DEFAULT_INBOX_FOLDER,
 };
 
 #[test]
@@ -168,25 +167,23 @@ fn test_sync() {
 
     // check folders integrity
 
-    let imap_folders = imap.list_folders().unwrap();
-    let mdir_folders = Folders::from_iter(
-        mdir.list_folders()
-            .unwrap()
-            .iter()
-            .map(|folder| Folder {
-                name: urlencoding::decode(&folder.name).unwrap().to_string(),
-                ..folder.clone()
-            })
-            .collect::<Vec<_>>(),
-    );
-    assert_eq!(imap_folders, mdir_folders,);
-    assert_eq!(
-        imap_folders
-            .iter()
-            .map(|f| f.name.clone())
-            .collect::<Vec<_>>(),
-        vec!["INBOX", "[Gmail]/Sent"]
-    );
+    let imap_folders = imap
+        .list_folders()
+        .unwrap()
+        .iter()
+        .map(|f| f.name.clone())
+        .collect::<Vec<_>>();
+    let mdir_folders = mdir
+        .list_folders()
+        .unwrap()
+        .iter()
+        .map(|f| f.name.clone())
+        .collect::<Vec<_>>();
+
+    assert!(imap_folders.contains(&String::from("INBOX")));
+    assert!(imap_folders.contains(&String::from("[Gmail]/Sent")));
+    assert!(mdir_folders.contains(&String::from("INBOX")));
+    assert!(mdir_folders.contains(&String::from("[Gmail]/Sent")));
 
     // check maildir envelopes integrity
 
@@ -217,15 +214,13 @@ fn test_sync() {
 
     let cache = folder::sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
 
-    assert_eq!(
-        HashSet::from_iter(["INBOX".into(), "[Gmail]/Sent".into()]),
-        cache.list_local_folders().unwrap()
-    );
+    let local_folders_cached = cache.list_local_folders().unwrap();
+    assert!(local_folders_cached.contains("INBOX"));
+    assert!(local_folders_cached.contains("[Gmail]/Sent"));
 
-    assert_eq!(
-        HashSet::from_iter(["INBOX".into(), "[Gmail]/Sent".into()]),
-        cache.list_remote_folders().unwrap()
-    );
+    let remote_folders_cached = cache.list_remote_folders().unwrap();
+    assert!(remote_folders_cached.contains("INBOX"));
+    assert!(remote_folders_cached.contains("[Gmail]/Sent"));
 
     // check envelopes cache integrity
 

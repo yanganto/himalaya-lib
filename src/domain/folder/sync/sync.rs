@@ -1,4 +1,4 @@
-use log::{debug, trace};
+use log::{info, trace};
 use std::collections::HashSet;
 
 use crate::{Backend, MaildirBackend, ThreadSafeBackend};
@@ -33,14 +33,12 @@ pub fn sync_all<B>(
 where
     B: ThreadSafeBackend + ?Sized,
 {
-    debug!("starting folders synchronization");
+    info!("starting folders sync");
 
-    let local_folders_cached: FoldersName = HashSet::from_iter(
-        cache
-            .list_local_folders()?
-            .iter()
-            .map(|folder| urlencoding::encode(&folder).to_string()),
-    );
+    let local_folders_cached: FoldersName =
+        HashSet::from_iter(cache.list_local_folders()?.iter().cloned());
+
+    trace!("local folders cached: {:#?}", local_folders_cached);
 
     // local Maildir folders are already encoded
     let local_folders: FoldersName = HashSet::from_iter(
@@ -50,19 +48,21 @@ where
             .map(|folder| folder.name.clone()),
     );
 
-    let remote_folders_cached: FoldersName = HashSet::from_iter(
-        cache
-            .list_remote_folders()?
-            .iter()
-            .map(|folder| urlencoding::encode(&folder).to_string()),
-    );
+    trace!("local folders: {:#?}", local_folders);
+
+    let remote_folders_cached: FoldersName =
+        HashSet::from_iter(cache.list_remote_folders()?.iter().cloned());
+
+    trace!("remote folders cached: {:#?}", remote_folders_cached);
 
     let remote_folders: FoldersName = HashSet::from_iter(
         remote
             .list_folders()?
             .iter()
-            .map(|folder| urlencoding::encode(&folder.name).to_string()),
+            .map(|folder| folder.name.clone()),
     );
+
+    trace!("remote folders: {:#?}", remote_folders);
 
     let (patch, folders) = build_patch(
         local_folders_cached,
@@ -71,52 +71,43 @@ where
         remote_folders,
     );
 
-    debug!("folders sync patch length: {}", patch.len());
-    trace!("folders sync patch: {:#?}", patch);
+    info!("folders patch length: {}", patch.len());
+    trace!("folders patch: {:#?}", patch);
 
-    if !dry_run {
-        for hunk in patch {
+    if dry_run {
+        info!("dry run activated, skipping folders patch");
+    } else {
+        let patch_len = patch.len();
+        for (hunk_num, hunk) in patch.into_iter().enumerate() {
+            info!(
+                "applying folders patch, hunk {}/{}",
+                hunk_num + 1,
+                patch_len
+            );
+
             match hunk {
-                Hunk::CreateFolder(folder, HunkKind::LocalCache) => {
-                    let folder = urlencoding::decode(&folder)
-                        .map(|folder| folder.to_string())
-                        .unwrap_or_else(|_| folder);
+                Hunk::CreateFolder(ref folder, HunkKind::LocalCache) => {
                     cache.insert_local_folder(folder)?;
                 }
                 Hunk::CreateFolder(ref folder, HunkKind::Local) => {
                     local.add_folder(folder)?;
                 }
-                Hunk::CreateFolder(folder, HunkKind::RemoteCache) => {
-                    let folder = urlencoding::decode(&folder)
-                        .map(|folder| folder.to_string())
-                        .unwrap_or_else(|_| folder);
+                Hunk::CreateFolder(ref folder, HunkKind::RemoteCache) => {
                     cache.insert_remote_folder(folder)?;
                 }
-                Hunk::CreateFolder(folder, HunkKind::Remote) => {
-                    let folder = urlencoding::decode(&folder)
-                        .map(|folder| folder.to_string())
-                        .unwrap_or_else(|_| folder);
+                Hunk::CreateFolder(ref folder, HunkKind::Remote) => {
                     remote.add_folder(&folder)?;
                 }
-                Hunk::DeleteFolder(folder, HunkKind::LocalCache) => {
-                    let folder = urlencoding::decode(&folder)
-                        .map(|folder| folder.to_string())
-                        .unwrap_or_else(|_| folder);
+                Hunk::DeleteFolder(ref folder, HunkKind::LocalCache) => {
                     cache.delete_local_folder(folder)?;
                 }
                 Hunk::DeleteFolder(ref folder, HunkKind::Local) => {
                     local.delete_folder(folder)?;
                 }
-                Hunk::DeleteFolder(folder, HunkKind::RemoteCache) => {
-                    let folder = urlencoding::decode(&folder)
-                        .map(|folder| folder.to_string())
-                        .unwrap_or_else(|_| folder);
+                Hunk::DeleteFolder(ref folder, HunkKind::RemoteCache) => {
                     cache.delete_remote_folder(folder)?;
                 }
-                Hunk::DeleteFolder(folder, HunkKind::Remote) => {
-                    let folder = urlencoding::decode(&folder)
-                        .map(|folder| folder.to_string())
-                        .unwrap_or_else(|_| folder);
+                Hunk::DeleteFolder(ref folder, HunkKind::Remote) => {
                     remote.delete_folder(&folder)?;
                 }
             }
@@ -131,6 +122,8 @@ where
                 .unwrap_or_else(|_| folder)
         })
         .collect();
+
+    trace!("folders: {:#?}", folders);
 
     Ok(folders)
 }

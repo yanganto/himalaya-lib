@@ -45,39 +45,20 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
         .unwrap_or_else(|| Ok(String::default()))?;
 
     let sender = envelope
-        .sender
+        .from
         .as_ref()
         .and_then(|addrs| addrs.get(0))
-        .or_else(|| envelope.from.as_ref().and_then(|addrs| addrs.get(0)))
-        .ok_or_else(|| Error::GetSenderError(raw.message))?;
-    let sender = if let Some(ref name) = sender.name {
-        rfc2047_decoder::Decoder::new()
-            .skip_encoded_word_length(true)
-            .decode(&name.to_vec())
-            .map_err(|err| Error::DecodeSenderNameError(err, raw.message))?
-    } else {
-        let mbox = sender
-            .mailbox
-            .as_ref()
-            .ok_or_else(|| Error::GetSenderError(raw.message))
-            .and_then(|mbox| {
-                rfc2047_decoder::Decoder::new()
-                    .skip_encoded_word_length(true)
-                    .decode(&mbox.to_vec())
-                    .map_err(|err| Error::DecodeSenderNameError(err, raw.message))
-            })?;
-        let host = sender
-            .host
-            .as_ref()
-            .ok_or_else(|| Error::GetSenderError(raw.message))
-            .and_then(|host| {
-                rfc2047_decoder::Decoder::new()
-                    .skip_encoded_word_length(true)
-                    .decode(&host.to_vec())
-                    .map_err(|err| Error::DecodeSenderNameError(err, raw.message))
-            })?;
-        format!("{}@{}", mbox, host)
-    };
+        .map(|addr| {
+            format!(
+                "{}@{}",
+                String::from_utf8_lossy(&addr.mailbox.as_ref().unwrap()),
+                String::from_utf8_lossy(&addr.host.as_ref().unwrap()),
+            )
+        })
+        .map(|addr| mailparse::addrparse(&addr))
+        .ok_or_else(|| Error::GetSenderError(raw.message))?
+        .map_err(|err| Error::ParseSenderError(err, raw.message))?
+        .to_string();
 
     let date = envelope.date.as_ref().and_then(|date_cow| {
         let date_str = String::from_utf8_lossy(date_cow.to_vec().as_slice()).to_string();

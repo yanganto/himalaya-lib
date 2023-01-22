@@ -39,8 +39,13 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
                     let addrs = mailparse::addrparse_header(header)
                         .map_err(|err| Error::ParseHeaderError(err, key.to_owned()))?;
                     match addrs.first() {
-                        Some(MailAddr::Group(group)) => Ok(group.to_string()),
-                        Some(MailAddr::Single(single)) => Ok(single.to_string()),
+                        Some(MailAddr::Group(group)) => Ok(group
+                            .addrs
+                            .first()
+                            .ok_or(Error::FindSenderError)?
+                            .addr
+                            .to_string()),
+                        Some(MailAddr::Single(single)) => Ok(single.addr.to_string()),
                         None => Err(Error::FindSenderError),
                     }?
                 }

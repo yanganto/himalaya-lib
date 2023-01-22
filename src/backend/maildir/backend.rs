@@ -3,7 +3,7 @@
 //! This module contains the definition of the maildir backend and its
 //! traits implementation.
 
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use maildir::Maildir;
 use std::{
     any::Any,
@@ -128,32 +128,32 @@ impl<'a> MaildirBackend<'a> {
     }
 
     /// Creates a maildir instance from a string slice.
-    pub fn get_mdir_from_dir(&self, dir: &str) -> Result<maildir::Maildir> {
-        let mut dir = self.account_config.folder_alias(dir)?;
+    pub fn get_mdir_from_dir(&self, folder: &str) -> Result<Maildir> {
+        let mut folder = self.account_config.folder_alias(folder)?;
 
         if self.url_encoded_folders {
-            dir = urlencoding::encode(&dir).to_string();
+            folder = self.encode_folder(&folder).to_string();
         }
 
         // If the dir points to the inbox folder, creates a maildir
         // instance from the root folder.
-        if dir == DEFAULT_INBOX_FOLDER {
+        if folder == DEFAULT_INBOX_FOLDER {
             return self
                 .validate_mdir_path(self.mdir.path().to_owned())
-                .map(maildir::Maildir::from);
+                .map(Maildir::from);
         }
 
         // If the dir is a valid maildir path, creates a maildir
         // instance from it. First checks for absolute path,
-        self.validate_mdir_path((&dir).into())
+        self.validate_mdir_path((&folder).into())
             // then for relative path to `maildir-dir`,
-            .or_else(|_| self.validate_mdir_path(self.mdir.path().join(&dir)))
+            .or_else(|_| self.validate_mdir_path(self.mdir.path().join(&folder)))
             // and finally for relative path to the current directory.
             .or_else(|_| {
                 self.validate_mdir_path(
                     env::current_dir()
                         .map_err(Error::GetCurrentDirError)?
-                        .join(&dir),
+                        .join(&folder),
                 )
             })
             .or_else(|_| {
@@ -162,9 +162,25 @@ impl<'a> MaildirBackend<'a> {
                 // as described in the [spec].
                 //
                 // [spec]: http://www.courier-mta.org/imap/README.maildirquota.html
-                self.validate_mdir_path(self.mdir.path().join(format!(".{}", dir)))
+                self.validate_mdir_path(self.mdir.path().join(format!(".{}", folder)))
             })
-            .map(maildir::Maildir::from)
+            .map(Maildir::from)
+    }
+
+    pub fn encode_folder<F>(&self, folder: F) -> String
+    where
+        F: AsRef<str>,
+    {
+        urlencoding::encode(folder.as_ref()).to_string()
+    }
+
+    pub fn decode_folder<F>(&self, folder: F) -> String
+    where
+        F: AsRef<str> + ToString,
+    {
+        urlencoding::decode(folder.as_ref())
+            .map(|folder| folder.to_string())
+            .unwrap_or_else(|_| folder.to_string())
     }
 }
 
@@ -173,14 +189,18 @@ impl<'a> Backend for MaildirBackend<'a> {
         self.account_config.name.clone()
     }
 
-    fn add_folder(&self, subdir: &str) -> backend::Result<()> {
-        debug!("subdir: {:?}", subdir);
+    fn add_folder(&self, folder: &str) -> backend::Result<()> {
+        info!("adding maildir folder {}", folder);
 
-        let path = match self.account_config.folder_alias(subdir)?.as_str() {
+        let path = match folder {
             DEFAULT_INBOX_FOLDER => self.mdir.path().join("cur"),
-            dir => self.mdir.path().join(format!(".{}", dir)),
+            folder => {
+                let folder = self.encode_folder(folder);
+                self.mdir.path().join(format!(".{}", folder))
+            }
         };
-        debug!("subdir path: {:?}", path);
+
+        trace!("maildir folder path: {:?}", path);
 
         Maildir::from(path)
             .create_dirs()
@@ -194,36 +214,28 @@ impl<'a> Backend for MaildirBackend<'a> {
 
         folders.push(Folder {
             delim: String::from("/"),
-            name: self.account_config.folder_alias(DEFAULT_INBOX_FOLDER)?,
-            desc: DEFAULT_INBOX_FOLDER.into(),
+            name: self.account_config.inbox_folder_alias()?,
+            desc: self.account_config.inbox_folder_alias()?,
         });
-
-        for (name, alias) in &self.account_config.folder_aliases {
-            match name.to_lowercase().as_str() {
-                "inbox" => (),
-                name => folders.push(Folder {
-                    delim: String::from("/"),
-                    name: alias.into(),
-                    desc: name.into(),
-                }),
-            }
-        }
 
         for entry in self.mdir.list_subdirs() {
             let dir = entry.map_err(Error::DecodeSubdirError)?;
             let dirname = dir.path().file_name();
+            let name = dirname
+                .and_then(OsStr::to_str)
+                .and_then(|s| if s.len() < 2 { None } else { Some(&s[1..]) })
+                .ok_or_else(|| Error::ParseSubdirError(dir.path().to_owned()))?
+                .to_string();
+
             folders.push(Folder {
                 delim: String::from("/"),
-                name: dirname
-                    .and_then(OsStr::to_str)
-                    .and_then(|s| if s.len() < 2 { None } else { Some(&s[1..]) })
-                    .ok_or_else(|| Error::ParseSubdirError(dir.path().to_owned()))?
-                    .into(),
-                ..Folder::default()
+                name: self.decode_folder(&name),
+                desc: name,
             });
         }
 
-        trace!("folders: {:?}", folders);
+        trace!("maildir folders: {:?}", folders);
+
         Ok(folders)
     }
 

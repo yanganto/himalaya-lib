@@ -3,8 +3,10 @@
 //! This module contains the definition of the IMAP backend.
 
 use imap::extensions::idle::{stop_on_any, SetReadTimeout};
+use imap_proto::NameAttribute;
 use log::{debug, log_enabled, trace, Level};
 use native_tls::{TlsConnector, TlsStream};
+use rayon::prelude::*;
 use std::{
     any::Any,
     borrow::Cow,
@@ -28,6 +30,8 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("cannot parse sender from emali {1}")]
+    ParseSenderError(#[source] mailparse::MailParseError, u32),
     #[error("cannot find session from pool at cursor {0}")]
     FindSessionByCursorError(usize),
     #[error("cannot parse Message-ID of email {0}")]
@@ -184,6 +188,10 @@ impl Default for ImapBackendBuilder {
 }
 
 impl<'a> ImapBackendBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn pool_size(mut self, pool_size: usize) -> Self {
         self.sessions_pool_size = pool_size;
         self
@@ -194,17 +202,21 @@ impl<'a> ImapBackendBuilder {
         account_config: Cow<'a, AccountConfig>,
         imap_config: Cow<'a, ImapConfig>,
     ) -> Result<ImapBackend<'a>> {
+        let sessions_pool: Vec<_> = (0..self.sessions_pool_size).collect();
+        let passwd = imap_config.passwd()?;
+
         Ok(ImapBackend {
             account_config,
             imap_config: imap_config.clone(),
             sessions_pool_size: self.sessions_pool_size,
             sessions_pool_cursor: Mutex::new(0),
-            sessions_pool: (0..self.sessions_pool_size).try_fold(vec![], |mut pool, _| {
-                ImapBackend::create_session(Cow::Borrowed(&imap_config)).map(|session| {
-                    pool.push(Mutex::new(session));
-                    pool
+            sessions_pool: sessions_pool
+                .par_iter()
+                .flat_map(|_| {
+                    ImapBackend::create_session(Cow::Borrowed(&imap_config), &passwd)
+                        .map(|session| Mutex::new(session))
                 })
-            })?,
+                .collect(),
         })
     }
 }
@@ -218,7 +230,10 @@ pub struct ImapBackend<'a> {
 }
 
 impl<'a> ImapBackend<'a> {
-    fn create_session(config: Cow<'a, ImapConfig>) -> Result<ImapSession> {
+    fn create_session<P>(config: Cow<'a, ImapConfig>, passwd: P) -> Result<ImapSession>
+    where
+        P: AsRef<str>,
+    {
         let builder = TlsConnector::builder()
             .danger_accept_invalid_certs(config.insecure())
             .danger_accept_invalid_hostnames(config.insecure())
@@ -241,7 +256,7 @@ impl<'a> ImapBackend<'a> {
         .map_err(Error::ConnectImapServerError)?;
 
         let mut session = client
-            .login(&config.login, &config.passwd()?)
+            .login(&config.login, passwd.as_ref())
             .map_err(|res| Error::LoginImapServerError(res.0))?;
         session.debug = log_enabled!(Level::Trace);
 
@@ -409,16 +424,20 @@ impl<'a> Backend for ImapBackend<'a> {
         let folders = session
             .list(Some(""), Some("*"))
             .map_err(Error::ListMboxesError)?;
-        let folders = Folders::from_iter(folders.iter().map(|imap_mbox| {
-            Folder {
-                delim: imap_mbox.delimiter().unwrap_or_default().into(),
-                name: decode_utf7(imap_mbox.name().into()),
-                desc: imap_mbox
-                    .attributes()
-                    .iter()
-                    .map(|attr| format!("{:?}", attr))
-                    .collect::<Vec<_>>()
-                    .join(", "),
+        let folders = Folders::from_iter(folders.iter().filter_map(|folder| {
+            if folder.attributes().contains(&NameAttribute::NoSelect) {
+                None
+            } else {
+                Some(Folder {
+                    delim: folder.delimiter().unwrap_or_default().into(),
+                    name: decode_utf7(folder.name().into()),
+                    desc: folder
+                        .attributes()
+                        .iter()
+                        .map(|attr| format!("{:?}", attr))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                })
             }
         }));
 

@@ -1,5 +1,5 @@
 use dirs::data_dir;
-use log::{debug, info, warn};
+use log::{info, warn};
 use proc_lock::{lock, LockPath};
 use std::{borrow::Cow, fs, io, result};
 use thiserror::Error;
@@ -32,7 +32,7 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
         info!("starting synchronization");
 
         if !account.sync {
-            debug!(
+            info!(
                 "synchronization not enabled for account {}, exiting",
                 account.name
             );
