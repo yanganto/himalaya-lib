@@ -12,6 +12,8 @@ use himalaya_lib::{
 #[cfg(feature = "imap-backend")]
 #[test]
 fn test_imap_backend() {
+    env_logger::builder().is_test(true).init();
+
     let config = AccountConfig {
         email_reading_decrypt_cmd: Some(String::from(
             "gpg --decrypt --quiet --recipient-file ./tests/keys/bob.key",
@@ -95,7 +97,7 @@ fn test_imap_backend() {
     let envelopes = imap.list_envelopes("Sent", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
     let envelope = envelopes.first().unwrap();
-    assert_eq!("alice@localhost", envelope.sender);
+    assert_eq!("alice@localhost", envelope.from.addr);
     assert_eq!("Signed and encrypted message", envelope.subject);
 
     // checking that the email can be copied

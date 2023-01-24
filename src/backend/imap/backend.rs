@@ -31,7 +31,21 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("cannot parse sender from emali {1}")]
+    #[error("cannot parse sender from imap envelope")]
+    ParseSenderFromImapEnvelopeError,
+    #[error("cannot decode sender name from imap envelope")]
+    DecodeSenderNameFromImapEnvelopeError(rfc2047_decoder::Error),
+    #[error("cannot decode sender mailbox from imap envelope")]
+    DecodeSenderMailboxFromImapEnvelopeError(rfc2047_decoder::Error),
+    #[error("cannot decode sender host from imap envelope")]
+    DecodeSenderHostFromImapEnvelopeError(rfc2047_decoder::Error),
+
+    #[error("cannot decode date from imap envelope")]
+    DecodeDateFromImapEnvelopeError(rfc2047_decoder::Error),
+    #[error("cannot parse timestamp from imap envelope: {1}")]
+    ParseTimestampFromImapEnvelopeError(mailparse::MailParseError, String),
+
+    #[error("cannot parse sender from email {1}")]
     ParseSenderError(#[source] mailparse::MailParseError, u32),
     #[error("cannot find session from pool at cursor {0}")]
     FindSessionByCursorError(usize),
@@ -179,12 +193,14 @@ impl Write for ImapSessionStream {
 pub type ImapSession = imap::Session<ImapSessionStream>;
 
 pub struct ImapBackendBuilder {
+    cache: bool,
     sessions_pool_size: usize,
 }
 
 impl Default for ImapBackendBuilder {
     fn default() -> Self {
         Self {
+            cache: true,
             sessions_pool_size: 1,
         }
     }
@@ -200,12 +216,18 @@ impl<'a> ImapBackendBuilder {
         self
     }
 
+    pub fn cache(mut self, cache: bool) -> Self {
+        self.cache = cache;
+        self
+    }
+
     pub fn build(
         &self,
         account_config: Cow<'a, AccountConfig>,
         imap_config: Cow<'a, ImapConfig>,
     ) -> Result<ImapBackend<'a>> {
-        let backend = if account_config.sync() {
+        let passwd = imap_config.passwd()?;
+        let backend = if self.cache && account_config.sync() {
             let cache = Some(
                 MaildirBackendBuilder::new()
                     .url_encoded_folders(true)
@@ -219,15 +241,18 @@ impl<'a> ImapBackendBuilder {
 
             ImapBackend {
                 account_config,
-                imap_config,
+                imap_config: imap_config.clone(),
                 cache,
-                sessions_pool_size: 0,
+                sessions_pool_size: 1,
                 sessions_pool_cursor: Mutex::new(0),
-                sessions_pool: vec![],
+                sessions_pool: vec![ImapBackend::create_session(
+                    Cow::Borrowed(&imap_config),
+                    &passwd,
+                )
+                .map(|session| Mutex::new(session))?],
             }
         } else {
             let sessions_pool: Vec<_> = (0..self.sessions_pool_size).collect();
-            let passwd = imap_config.passwd()?;
 
             ImapBackend {
                 account_config,
@@ -384,7 +409,7 @@ impl<'a> ImapBackend<'a> {
                     let msg = envelope::imap::from_raw(fetch)?;
                     let uid = fetch.uid.ok_or_else(|| Error::GetUidError(fetch.message))?;
 
-                    let from = msg.sender.to_owned().into();
+                    let from = msg.from.addr.clone();
                     self.imap_config.run_notify_cmd(uid, &msg.subject, &from)?;
 
                     debug!("notify message: {}", uid);
@@ -583,7 +608,7 @@ impl<'a> Backend for ImapBackend<'a> {
         debug!("range: {:?}", range);
 
         let fetches = session
-            .fetch(&range, "(UID ENVELOPE FLAGS INTERNALDATE)")
+            .fetch(&range, "(UID ENVELOPE FLAGS)")
             .map_err(|err| Error::FetchMsgsByRangeError(err, range.to_owned()))?;
 
         let envelopes = envelope::imap::from_raws(fetches)?;

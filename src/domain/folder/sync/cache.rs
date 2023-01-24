@@ -1,6 +1,9 @@
-pub use sqlite::Error;
-use sqlite::{Connection, ConnectionWithFullMutex};
-use std::{borrow::Cow, path::Path};
+use rusqlite::Connection;
+pub use rusqlite::Error;
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 use crate::AccountConfig;
 
@@ -26,45 +29,46 @@ const DELETE_FOLDER: &str = "
 ";
 
 const SELECT_FOLDERS: &str = "
-    SELECT name, account
+    SELECT name
     FROM folders
     WHERE account = ?
 ";
 
 pub struct Cache<'a> {
     account_config: Cow<'a, AccountConfig>,
-    conn: ConnectionWithFullMutex,
+    db_path: PathBuf,
 }
 
 impl<'a> Cache<'a> {
     const LOCAL_SUFFIX: &str = ":cache";
 
-    pub fn new<P>(account_config: Cow<'a, AccountConfig>, sync_dir: P) -> Result<Self>
+    fn db(&self) -> Result<rusqlite::Connection> {
+        let db = Connection::open(&self.db_path)?;
+        db.execute(CREATE_FOLDERS_TABLE, [])?;
+        Ok(db)
+    }
+
+    pub fn new<P>(account_config: Cow<'a, AccountConfig>, sync_dir: P) -> Self
     where
         P: AsRef<Path>,
     {
-        let conn = Connection::open_with_full_mutex(sync_dir.as_ref().join("database.sqlite"))?;
-        conn.execute(CREATE_FOLDERS_TABLE)?;
-
-        Ok(Self {
+        Self {
             account_config,
-            conn,
-        })
+            db_path: sync_dir.as_ref().join(".database.sqlite"),
+        }
     }
 
     fn list_folders<A>(&self, account: A) -> Result<FoldersName>
     where
         A: AsRef<str>,
     {
-        Ok(FoldersName::from_iter(
-            self.conn
-                .prepare(SELECT_FOLDERS)?
-                .into_iter()
-                .bind((1, account.as_ref()))?
-                .collect::<sqlite::Result<Vec<_>>>()?
-                .iter()
-                .map(|row| row.read::<&str, _>("name").into()),
-        ))
+        let db = self.db()?;
+        let mut stmt = db.prepare(SELECT_FOLDERS)?;
+        let folders: Vec<String> = stmt
+            .query_map([account.as_ref()], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+
+        Ok(FoldersName::from_iter(folders))
     }
 
     pub fn list_local_folders(&self) -> Result<FoldersName> {
@@ -80,10 +84,8 @@ impl<'a> Cache<'a> {
         A: AsRef<str>,
         F: AsRef<str>,
     {
-        let mut statement = self.conn.prepare(INSERT_FOLDER)?;
-        statement.bind((1, account.as_ref()))?;
-        statement.bind((2, folder.as_ref()))?;
-        statement.next()?;
+        self.db()?
+            .execute(INSERT_FOLDER, [account.as_ref(), folder.as_ref()])?;
         Ok(())
     }
 
@@ -109,10 +111,8 @@ impl<'a> Cache<'a> {
         A: AsRef<str>,
         F: AsRef<str>,
     {
-        let mut statement = self.conn.prepare(DELETE_FOLDER)?;
-        statement.bind((1, account.as_ref()))?;
-        statement.bind((2, folder.as_ref()))?;
-        statement.next()?;
+        self.db()?
+            .execute(DELETE_FOLDER, [account.as_ref(), folder.as_ref()])?;
         Ok(())
     }
 

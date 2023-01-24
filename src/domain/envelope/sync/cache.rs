@@ -1,24 +1,27 @@
 use chrono::{DateTime, Local};
 use log::warn;
-use sqlite::{Connection, ConnectionWithFullMutex};
-use std::{borrow::Cow, path::Path};
+use rusqlite::Connection;
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
-use crate::{AccountConfig, Envelope, Envelopes};
+use crate::{envelope::Mailbox, AccountConfig, Envelope, Envelopes};
 
 use super::Result;
 
 const CREATE_ENVELOPES_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS envelopes (
-        id          TEXT NOT NULL,
-        internal_id TEXT NOT NULL,
-        hash        TEXT NOT NULL,
-        account     TEXT NOT NULL,
-        folder      TEXT NOT NULL,
-        flag        TEXT NOT NULL,
-        message_id  TEXT NOT NULL,
-        sender      TEXT NOT NULL,
-        subject     TEXT NOT NULL,
-        date        DATETIME,
+        id          TEXT     NOT NULL,
+        internal_id TEXT     NOT NULL,
+        hash        TEXT     NOT NULL,
+        account     TEXT     NOT NULL,
+        folder      TEXT     NOT NULL,
+        flag        TEXT     NOT NULL,
+        message_id  TEXT     NOT NULL,
+        sender      TEXT     NOT NULL,
+        subject     TEXT     NOT NULL,
+        date        DATETIME NOT NULL,
         UNIQUE(internal_id, hash, account, folder, flag)
     )
 ";
@@ -46,23 +49,26 @@ const SELECT_ENVELOPES: &str = "
 
 pub struct Cache<'a> {
     account_config: Cow<'a, AccountConfig>,
-    conn: ConnectionWithFullMutex,
+    db_path: PathBuf,
 }
 
 impl<'a> Cache<'a> {
     const LOCAL_SUFFIX: &str = ":cache";
 
-    pub fn new<P>(account_config: Cow<'a, AccountConfig>, sync_dir: P) -> Result<Self>
+    fn db(&self) -> Result<rusqlite::Connection> {
+        let db = Connection::open(&self.db_path)?;
+        db.execute(CREATE_ENVELOPES_TABLE, [])?;
+        Ok(db)
+    }
+
+    pub fn new<P>(account_config: Cow<'a, AccountConfig>, sync_dir: P) -> Self
     where
         P: AsRef<Path>,
     {
-        let conn = Connection::open_with_full_mutex(sync_dir.as_ref().join("database.sqlite"))?;
-        conn.execute(CREATE_ENVELOPES_TABLE)?;
-
-        Ok(Self {
+        Self {
             account_config,
-            conn,
-        })
+            db_path: sync_dir.as_ref().join(".database.sqlite"),
+        }
     }
 
     fn list_envelopes<A, F>(&self, account: A, folder: F) -> Result<Envelopes>
@@ -70,33 +76,32 @@ impl<'a> Cache<'a> {
         A: AsRef<str>,
         F: AsRef<str>,
     {
-        Ok(Envelopes::from_iter(
-            self.conn
-                .prepare(SELECT_ENVELOPES)?
-                .into_iter()
-                .bind((1, account.as_ref()))?
-                .bind((2, folder.as_ref()))?
-                .collect::<sqlite::Result<Vec<_>>>()?
-                .iter()
-                .map(|row| Envelope {
-                    id: row.read::<&str, _>("id").into(),
-                    internal_id: row.read::<&str, _>("internal_id").into(),
-                    flags: row.read::<&str, _>("flags").into(),
-                    message_id: row.read::<&str, _>("message_id").into(),
-                    sender: row.read::<&str, _>("sender").into(),
-                    subject: row.read::<&str, _>("subject").into(),
+        let db = self.db()?;
+        let mut stmt = db.prepare(SELECT_ENVELOPES)?;
+        let envelopes: Vec<Envelope> = stmt
+            .query_map([account.as_ref(), folder.as_ref()], |row| {
+                Ok(Envelope {
+                    id: row.get(0)?,
+                    internal_id: row.get(1)?,
+                    flags: row.get::<usize, String>(5)?.as_str().into(),
+                    message_id: row.get(6)?,
+                    from: Mailbox::new_nameless(row.get::<usize, String>(7)?),
+                    subject: row.get(8)?,
                     date: {
-                        let date_str = row.read::<&str, _>("date");
-                        match DateTime::parse_from_rfc3339(date_str) {
-                            Ok(date) => Some(date.with_timezone(&Local)),
+                        let date: String = row.get(9)?;
+                        match DateTime::parse_from_rfc3339(&date) {
+                            Ok(date) => date.with_timezone(&Local),
                             Err(err) => {
-                                warn!("invalid date {}, skipping it: {}", date_str, err);
-                                None
+                                warn!("invalid date {}, skipping it: {}", date, err);
+                                DateTime::default()
                             }
                         }
                     },
-                }),
-        ))
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+
+        Ok(Envelopes::from_iter(envelopes))
     }
 
     pub fn list_local_envelopes<F>(&self, folder: F) -> Result<Envelopes>
@@ -118,27 +123,22 @@ impl<'a> Cache<'a> {
         A: AsRef<str>,
         F: AsRef<str>,
     {
-        let mut statement = self.conn.prepare(INSERT_ENVELOPE)?;
-
         for flag in envelope.flags.iter() {
-            statement.reset()?;
-            statement.bind((1, envelope.id.as_str()))?;
-            statement.bind((2, envelope.internal_id.as_str()))?;
-            statement.bind((3, envelope.hash(&folder).as_str()))?;
-            statement.bind((4, account.as_ref()))?;
-            statement.bind((5, folder.as_ref()))?;
-            statement.bind((6, flag.to_string().as_str()))?;
-            statement.bind((7, envelope.message_id.as_str()))?;
-            statement.bind((8, envelope.sender.as_str()))?;
-            statement.bind((9, envelope.subject.as_str()))?;
-            statement.bind((
-                10,
-                match envelope.date {
-                    Some(date) => date.to_rfc3339().into(),
-                    None => sqlite::Value::Null,
-                },
-            ))?;
-            statement.next()?;
+            self.db()?.execute(
+                INSERT_ENVELOPE,
+                [
+                    envelope.id.as_str(),
+                    envelope.internal_id.as_str(),
+                    envelope.hash(folder.as_ref()).as_str(),
+                    account.as_ref(),
+                    folder.as_ref(),
+                    flag.to_string().as_str(),
+                    envelope.message_id.as_str(),
+                    envelope.from.addr.as_str(),
+                    envelope.subject.as_str(),
+                    envelope.date.to_rfc3339().as_str(),
+                ],
+            )?;
         }
 
         Ok(())
@@ -168,11 +168,10 @@ impl<'a> Cache<'a> {
         F: AsRef<str>,
         I: AsRef<str>,
     {
-        let mut statement = self.conn.prepare(DELETE_ENVELOPE)?;
-        statement.bind((1, account.as_ref()))?;
-        statement.bind((2, folder.as_ref()))?;
-        statement.bind((3, internal_id.as_ref()))?;
-        statement.next()?;
+        self.db()?.execute(
+            DELETE_ENVELOPE,
+            [account.as_ref(), folder.as_ref(), internal_id.as_ref()],
+        )?;
         Ok(())
     }
 

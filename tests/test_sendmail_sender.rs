@@ -9,6 +9,8 @@ use himalaya_lib::{Backend, ImapBackend, ImapConfig};
 #[cfg(feature = "imap-backend")]
 #[test]
 fn test_sendmail_sender() {
+    env_logger::builder().is_test(true).init();
+
     let account_config = AccountConfig::default();
     let sendmail_config = SendmailConfig {
         cmd: [
@@ -55,6 +57,6 @@ fn test_sendmail_sender() {
     let envelopes = imap.list_envelopes("INBOX", 10, 0).unwrap();
     assert_eq!(1, envelopes.len());
     let envelope = envelopes.first().unwrap();
-    assert_eq!("alice@localhost", envelope.sender);
+    assert_eq!("alice@localhost", envelope.from.addr);
     assert_eq!("Plain message!", envelope.subject);
 }

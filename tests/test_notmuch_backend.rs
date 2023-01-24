@@ -15,6 +15,8 @@ use himalaya_lib::{
 #[cfg(feature = "notmuch-backend")]
 #[test]
 fn test_notmuch_backend() {
+    env_logger::builder().is_test(true).init();
+
     // set up maildir folders and notmuch database
 
     let mdir: Maildir = env::temp_dir().join("himalaya-test-notmuch").into();

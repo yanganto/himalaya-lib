@@ -46,6 +46,7 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
 
         let local = MaildirBackendBuilder::new()
             .url_encoded_folders(true)
+            .db_path(sync_dir.join(&account.name).join(".database.sqlite"))
             .build(
                 Cow::Borrowed(account),
                 Cow::Owned(MaildirConfig {
@@ -53,10 +54,10 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
                 }),
             )?;
 
-        let cache = folder::sync::Cache::new(Cow::Borrowed(account), &sync_dir)?;
+        let cache = folder::sync::Cache::new(Cow::Borrowed(account), &sync_dir);
         let folders = folder::sync_all(&cache, &local, self, dry_run)?;
 
-        let cache = envelope::sync::Cache::new(Cow::Borrowed(account), &sync_dir)?;
+        let cache = envelope::sync::Cache::new(Cow::Borrowed(account), &sync_dir);
         for folder in &folders {
             envelope::sync_all(folder, &cache, &local, self, dry_run)?;
         }

@@ -3,85 +3,89 @@
 //! This module provides IMAP types and conversion utilities related
 //! to the envelope.
 
-use chrono::{Local, NaiveDateTime};
-use imap;
-use log::warn;
+use std::borrow::Cow;
+
+use chrono::{DateTime, Local, NaiveDateTime};
+use imap::{self, types::Fetch};
 use rfc2047_decoder;
 
 use crate::{
     backend::imap::{Error, Result},
+    envelope::Mailbox,
     Envelope, Flags,
 };
 
-/// Represents the raw envelope returned by the `imap` crate.
-pub type RawEnvelope<'a> = imap::types::Fetch<'a>;
+pub fn from_raw(fetch: &Fetch) -> Result<Envelope> {
+    let decode = |input: &Cow<[u8]>| {
+        rfc2047_decoder::Decoder::new()
+            .skip_encoded_word_length(true)
+            .decode(input)
+    };
 
-pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
-    let envelope = raw
+    let envelope = fetch
         .envelope()
-        .ok_or_else(|| Error::GetEnvelopeError(raw.message.to_string()))?;
+        .ok_or_else(|| Error::GetEnvelopeError(fetch.message.to_string()))?;
 
-    let id = raw.message.to_string();
+    let id = fetch.message.to_string();
 
-    let internal_id = raw
+    let internal_id = fetch
         .uid
-        .ok_or_else(|| Error::GetUidError(raw.message))?
+        .ok_or_else(|| Error::GetUidError(fetch.message))?
         .to_string();
 
     let message_id = String::from_utf8(envelope.message_id.clone().unwrap_or_default().to_vec())
-        .map_err(|err| Error::ParseMessageIdError(err, raw.message))?;
+        .map_err(|err| Error::ParseMessageIdError(err, fetch.message))?;
 
-    let flags = Flags::from(raw.flags());
+    let flags = Flags::from(fetch.flags());
 
     let subject = envelope
         .subject
         .as_ref()
-        .map(|subj| {
-            rfc2047_decoder::Decoder::new()
-                .skip_encoded_word_length(true)
-                .decode(subj)
-                .map_err(|err| Error::DecodeSubjectError(err, raw.message))
-        })
+        .map(|subject| decode(subject).map_err(|err| Error::DecodeSubjectError(err, fetch.message)))
         .unwrap_or_else(|| Ok(String::default()))?;
 
-    let sender = envelope
+    let from = envelope
         .from
         .as_ref()
         .and_then(|addrs| addrs.get(0))
         .map(|addr| {
-            format!(
-                "{}@{}",
-                String::from_utf8_lossy(&addr.mailbox.as_ref().unwrap()),
-                String::from_utf8_lossy(&addr.host.as_ref().unwrap()),
-            )
-        })
-        .map(|addr| mailparse::addrparse(&addr))
-        .ok_or_else(|| Error::GetSenderError(raw.message))?
-        .map_err(|err| Error::ParseSenderError(err, raw.message))?
-        .to_string();
+            match (
+                addr.name.as_ref(),
+                addr.mailbox.as_ref(),
+                addr.host.as_ref(),
+            ) {
+                (name, Some(mbox), Some(host)) => {
+                    let mbox =
+                        decode(mbox).map_err(Error::DecodeSenderMailboxFromImapEnvelopeError)?;
+                    let host =
+                        decode(host).map_err(Error::DecodeSenderHostFromImapEnvelopeError)?;
 
-    let date = envelope.date.as_ref().and_then(|date_cow| {
-        let date_str = String::from_utf8_lossy(date_cow.to_vec().as_slice()).to_string();
-        let date_str = date_str.as_str();
-
-        let timestamp = match mailparse::dateparse(date_str) {
-            Ok(timestamp) => Some(timestamp),
-            Err(err) => {
-                warn!("invalid date {}, skipping it: {}", date_str, err);
-                None
+                    match name {
+                        None => Ok(Mailbox::new_nameless([mbox, host].join("@"))),
+                        Some(name) => {
+                            let name = decode(name)
+                                .map_err(Error::DecodeSenderNameFromImapEnvelopeError)?;
+                            Ok(Mailbox::new(Some(name), [mbox, host].join("@")))
+                        }
+                    }
+                }
+                _ => Err(Error::ParseSenderFromImapEnvelopeError),
             }
-        };
+        })
+        .ok_or_else(|| Error::GetSenderError(fetch.message))??;
 
-        let date = timestamp
-            .and_then(|timestamp| NaiveDateTime::from_timestamp_opt(timestamp, 0))
+    let date = envelope.date.as_ref().map(|date| {
+        let date = decode(date).map_err(Error::DecodeDateFromImapEnvelopeError)?;
+        let timestamp = mailparse::dateparse(&date)
+            .map_err(|err| Error::ParseTimestampFromImapEnvelopeError(err, date.to_string()))?;
+        let date = NaiveDateTime::from_timestamp_opt(timestamp, 0)
             .and_then(|date| date.and_local_timezone(Local).earliest());
-
-        if let None = date {
-            warn!("invalid date {}, skipping it", date_str);
-        }
-
-        date
+        Result::Ok(date)
     });
+    let date = match date {
+        Some(date) => date?.unwrap_or_default(),
+        None => DateTime::default(),
+    };
 
     Ok(Envelope {
         id,
@@ -89,7 +93,7 @@ pub fn from_raw(raw: &RawEnvelope) -> Result<Envelope> {
         flags,
         message_id,
         subject,
-        sender,
+        from,
         date,
     })
 }

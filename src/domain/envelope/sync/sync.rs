@@ -335,10 +335,8 @@ where
             // never conflict, but we implement this case for the sake
             // of exhaustiveness.
             (None, Some(local), None, Some(remote)) => {
-                match (local.date.as_ref(), remote.date.as_ref()) {
-                    // The date exists only on the local side, so we
-                    // keep the local side and remove the remote side.
-                    (Some(_), None) => patch.push(vec![
+                if local.date > remote.date {
+                    patch.push(vec![
                         Hunk::RemoveEmail(
                             folder.to_string(),
                             remote.internal_id.clone(),
@@ -355,34 +353,9 @@ where
                             local.internal_id.clone(),
                             HunkKindRestricted::Local,
                         ),
-                    ]),
-
-                    // The date exists in both sides and the local
-                    // date is greater than the remote date, so we
-                    // keep the local side.
-                    (Some(date_left), Some(date_right)) if date_left > date_right => {
-                        patch.push(vec![
-                            Hunk::RemoveEmail(
-                                folder.to_string(),
-                                remote.internal_id.clone(),
-                                HunkKind::Remote,
-                            ),
-                            Hunk::CopyEmail(
-                                folder.to_string(),
-                                local.clone(),
-                                HunkKindRestricted::Local,
-                                HunkKindRestricted::Remote,
-                            ),
-                            Hunk::CacheEnvelope(
-                                folder.to_string(),
-                                local.internal_id.clone(),
-                                HunkKindRestricted::Local,
-                            ),
-                        ])
-                    }
-
-                    // For all other cases we keep the remote side.
-                    _ => patch.push(vec![
+                    ])
+                } else {
+                    patch.push(vec![
                         Hunk::RemoveEmail(
                             folder.to_string(),
                             local.internal_id.clone(),
@@ -399,7 +372,7 @@ where
                             remote.internal_id.clone(),
                             HunkKindRestricted::Remote,
                         ),
-                    ]),
+                    ])
                 }
             }
 
@@ -932,7 +905,7 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "local-id-1".into(),
                     flags: "seen".into(),
-                    date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                    date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                     ..Envelope::default()
                 },
             ),
@@ -941,7 +914,7 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "local-id-2".into(),
                     flags: "seen".into(),
-                    date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                    date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                     ..Envelope::default()
                 },
             ),
@@ -950,7 +923,6 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "local-id-3".into(),
                     flags: "seen".into(),
-                    date: None,
                     ..Envelope::default()
                 },
             ),
@@ -959,7 +931,6 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "local-id-4".into(),
                     flags: "seen".into(),
-                    date: None,
                     ..Envelope::default()
                 },
             ),
@@ -968,7 +939,7 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "local-id-5".into(),
                     flags: "seen".into(),
-                    date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                    date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                     ..Envelope::default()
                 },
             ),
@@ -980,7 +951,6 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "remote-id-1".into(),
                     flags: "seen".into(),
-                    date: None,
                     ..Envelope::default()
                 },
             ),
@@ -989,7 +959,7 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "remote-id-2".into(),
                     flags: "seen".into(),
-                    date: Some("2021-01-01T00:00:00-00:00".parse().unwrap()),
+                    date: "2021-01-01T00:00:00-00:00".parse().unwrap(),
                     ..Envelope::default()
                 },
             ),
@@ -998,7 +968,6 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "remote-id-3".into(),
                     flags: "seen".into(),
-                    date: None,
                     ..Envelope::default()
                 },
             ),
@@ -1007,7 +976,7 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "remote-id-4".into(),
                     flags: "seen".into(),
-                    date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                    date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                     ..Envelope::default()
                 },
             ),
@@ -1016,7 +985,7 @@ mod envelopes_sync {
                 Envelope {
                     internal_id: "remote-id-5".into(),
                     flags: "seen".into(),
-                    date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                    date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                     ..Envelope::default()
                 },
             ),
@@ -1043,7 +1012,7 @@ mod envelopes_sync {
             Envelope {
                 internal_id: "local-id-1".into(),
                 flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                 ..Envelope::default()
             },
             HunkKindRestricted::Local,
@@ -1064,7 +1033,7 @@ mod envelopes_sync {
             Envelope {
                 internal_id: "local-id-2".into(),
                 flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                 ..Envelope::default()
             },
             HunkKindRestricted::Local,
@@ -1105,7 +1074,7 @@ mod envelopes_sync {
             Envelope {
                 internal_id: "remote-id-4".into(),
                 flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                 ..Envelope::default()
             },
             HunkKindRestricted::Remote,
@@ -1126,7 +1095,7 @@ mod envelopes_sync {
             Envelope {
                 internal_id: "remote-id-5".into(),
                 flags: "seen".into(),
-                date: Some("2022-01-01T00:00:00-00:00".parse().unwrap()),
+                date: "2022-01-01T00:00:00-00:00".parse().unwrap(),
                 ..Envelope::default()
             },
             HunkKindRestricted::Remote,

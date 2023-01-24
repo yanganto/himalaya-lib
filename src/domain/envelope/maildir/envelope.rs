@@ -1,10 +1,11 @@
 use chrono::{Local, NaiveDateTime};
-use log::{trace, warn};
+use log::trace;
 use mailparse::MailAddr;
 
 use crate::{
     backend::maildir::{Error, Result},
     domain::flag::maildir::flags,
+    envelope::Mailbox,
     Envelope,
 };
 
@@ -15,7 +16,6 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
     let mut envelope = Envelope::default();
 
     envelope.internal_id = entry.id().to_owned();
-    envelope.id = format!("{:x}", md5::compute(&envelope.internal_id));
     envelope.flags = flags::from_raw(&entry);
 
     let parsed_mail = entry.parsed().map_err(Error::ParseMsgError)?;
@@ -35,46 +35,32 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
                 envelope.subject = val.into();
             }
             "from" => {
-                envelope.sender = {
+                envelope.from = {
                     let addrs = mailparse::addrparse_header(header)
                         .map_err(|err| Error::ParseHeaderError(err, key.to_owned()))?;
                     match addrs.first() {
-                        Some(MailAddr::Group(group)) => Ok(group
-                            .addrs
-                            .first()
-                            .ok_or(Error::FindSenderError)?
-                            .addr
-                            .to_string()),
-                        Some(MailAddr::Single(single)) => Ok(single.addr.to_string()),
+                        Some(MailAddr::Single(single)) => Ok(Mailbox::new(
+                            single.display_name.clone(),
+                            single.addr.clone(),
+                        )),
+                        // TODO
+                        Some(MailAddr::Group(_)) => Err(Error::FindSenderError),
                         None => Err(Error::FindSenderError),
                     }?
                 }
             }
             "date" => {
-                let timestamp = match mailparse::dateparse(&val) {
-                    Ok(timestamp) => Some(timestamp),
-                    Err(err) => {
-                        warn!("invalid date {}, skipping it: {}", val, err);
-                        None
-                    }
-                };
-
-                let date = timestamp
-                    .and_then(|timestamp| NaiveDateTime::from_timestamp_opt(timestamp, 0))
+                let timestamp = mailparse::dateparse(&val)
+                    .map_err(|err| Error::ParseTimestampFromMaildirEnvelopeError(err, val))?;
+                let date = NaiveDateTime::from_timestamp_opt(timestamp, 0)
                     .and_then(|date| date.and_local_timezone(Local).earliest());
-
-                if let None = date {
-                    warn!("invalid date {}, skipping it", val);
-                }
-
-                envelope.date = date
+                envelope.date = date.unwrap_or_default()
             }
             _ => (),
         }
     }
-    trace!("<< parse headers");
 
-    trace!("envelope: {:?}", envelope);
-    trace!("<< build envelope from maildir parsed mail");
+    trace!("maildir envelope: {:?}", envelope);
+
     Ok(envelope)
 }

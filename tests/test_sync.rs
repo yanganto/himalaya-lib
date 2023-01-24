@@ -1,12 +1,6 @@
 use env_logger;
-use std::{
-    borrow::Cow,
-    collections::HashSet,
-    env::temp_dir,
-    fs::{create_dir_all, remove_dir_all},
-    thread,
-    time::Duration,
-};
+use std::{borrow::Cow, thread, time::Duration};
+use tempfile::tempdir;
 
 use himalaya_lib::{
     envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackendBuilder,
@@ -19,23 +13,20 @@ fn test_sync() {
 
     // set up account
 
-    let sync_dir = temp_dir().join("himalaya-sync");
-    if sync_dir.is_dir() {
-        remove_dir_all(&sync_dir).unwrap();
-    }
-    create_dir_all(&sync_dir).unwrap();
+    let sync_dir = tempdir().unwrap();
 
     let account = AccountConfig {
         name: "account".into(),
         sync: true,
-        sync_dir: Some(sync_dir.clone()),
+        sync_dir: Some(sync_dir.path().to_owned()),
         ..AccountConfig::default()
     };
 
     // set up imap backend
 
-    let imap = ImapBackendBuilder::default()
-        .pool_size(10)
+    let imap = ImapBackendBuilder::new()
+        .pool_size(3)
+        .cache(false)
         .build(
             Cow::Borrowed(&account),
             Cow::Owned(ImapConfig {
@@ -145,19 +136,20 @@ fn test_sync() {
     )
     .unwrap();
 
-    // init maildir backend reader
+    let imap_sent_envelopes = imap.list_envelopes("[Gmail]/Sent", 0, 0).unwrap();
+
+    // set up maildir reader
 
     let mdir = MaildirBackendBuilder::new()
         .url_encoded_folders(true)
+        .db_path(sync_dir.path().join(&account.name).join(".database.sqlite"))
         .build(
             Cow::Borrowed(&account),
             Cow::Owned(MaildirConfig {
-                root_dir: sync_dir.join(&account.name),
+                root_dir: sync_dir.path().join(&account.name),
             }),
         )
         .unwrap();
-
-    let imap_sent_envelopes = imap.list_envelopes("[Gmail]/Sent", 0, 0).unwrap();
 
     // sync imap account twice in a row to see if all work as expected
     // without duplicate items
@@ -212,7 +204,7 @@ fn test_sync() {
 
     // check folders cache integrity
 
-    let cache = folder::sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
+    let cache = folder::sync::Cache::new(Cow::Borrowed(&account), &sync_dir);
 
     let local_folders_cached = cache.list_local_folders().unwrap();
     assert!(local_folders_cached.contains("INBOX"));
@@ -224,7 +216,7 @@ fn test_sync() {
 
     // check envelopes cache integrity
 
-    let cache = envelope::sync::Cache::new(Cow::Borrowed(&account), &sync_dir).unwrap();
+    let cache = envelope::sync::Cache::new(Cow::Borrowed(&account), &sync_dir);
 
     let mdir_inbox_envelopes_cached = cache.list_local_envelopes("INBOX").unwrap();
     let imap_inbox_envelopes_cached = cache.list_remote_envelopes("INBOX").unwrap();
@@ -258,6 +250,7 @@ fn test_sync() {
     )
     .unwrap();
 
+    println!("==============");
     imap.sync(false).unwrap();
 
     let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();

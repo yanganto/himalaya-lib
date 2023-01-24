@@ -3,7 +3,7 @@
 //! This module contains the definition of the maildir backend and its
 //! traits implementation.
 
-use log::{debug, info, trace, warn};
+use log::{info, trace, warn};
 use maildir::Maildir;
 use std::{
     any::Any,
@@ -20,12 +20,24 @@ use crate::{
     account, backend, email,
     envelope::maildir::{envelope, envelopes},
     flag::maildir::flags,
-    id_mapper, AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders,
-    IdMapper, MaildirConfig, ThreadSafeBackend, DEFAULT_INBOX_FOLDER,
+    AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders, IdMapper,
+    MaildirConfig, ThreadSafeBackend, DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot open maildir database at {1}")]
+    OpenDatabaseError(#[source] rusqlite::Error, PathBuf),
+    #[error("cannot init maildir folders structure at {1}")]
+    InitFoldersStructureError(#[source] io::Error, PathBuf),
+    #[error("cannot delete folder at {1}")]
+    DeleteFolderError(#[source] io::Error, PathBuf),
+    #[error(transparent)]
+    IdMapperError(#[from] backend::id_mapper::Error),
+
+    #[error("cannot parse timestamp from maildir envelope: {1}")]
+    ParseTimestampFromMaildirEnvelopeError(mailparse::MailParseError, String),
+
     #[error("cannot parse header date as timestamp")]
     ParseDateHeaderError,
     #[error("cannot get envelope by short hash {0}")]
@@ -55,32 +67,26 @@ pub enum Error {
     #[error("cannot create maildir subdirectory {1}")]
     CreateSubdirError(#[source] io::Error, String),
     #[error("cannot decode maildir subdirectory")]
-    DecodeSubdirError(#[source] io::Error),
-    #[error("cannot delete subdirectories at {1}")]
-    DeleteAllDirError(#[source] io::Error, path::PathBuf),
+    GetSubdirEntryError(#[source] io::Error),
     #[error("cannot get current directory")]
     GetCurrentDirError(#[source] io::Error),
     #[error("cannot store maildir message with flags")]
     StoreWithFlagsError(#[source] maildir::MaildirError),
-    #[error("cannot init maildir directories")]
-    InitDirsError(#[source] io::Error),
     #[error("cannot copy maildir message")]
-    CopyMsgError(#[source] io::Error),
+    CopyEmailError(#[source] io::Error),
     #[error("cannot move maildir message")]
     MoveMsgError(#[source] io::Error),
     #[error("cannot delete maildir message")]
-    DelMsgError(#[source] io::Error),
+    DeleteEmailError(#[source] io::Error),
     #[error("cannot add maildir flags")]
     AddFlagsError(#[source] io::Error),
     #[error("cannot set maildir flags")]
     SetFlagsError(#[source] io::Error),
     #[error("cannot remove maildir flags")]
-    DelFlagsError(#[source] io::Error),
+    RemoveFlagsError(#[source] io::Error),
 
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
-    #[error(transparent)]
-    IdMapperError(#[from] id_mapper::Error),
     #[error(transparent)]
     EmailError(#[from] email::Error),
 }
@@ -92,16 +98,7 @@ pub struct MaildirBackend<'a> {
     account_config: Cow<'a, AccountConfig>,
     url_encoded_folders: bool,
     mdir: maildir::Maildir,
-}
-
-impl Clone for MaildirBackend<'_> {
-    fn clone(&self) -> Self {
-        Self {
-            account_config: self.account_config.clone(),
-            url_encoded_folders: self.url_encoded_folders.clone(),
-            mdir: self.mdir.path().to_owned().into(),
-        }
-    }
+    db_path: PathBuf,
 }
 
 impl<'a> MaildirBackend<'a> {
@@ -109,14 +106,7 @@ impl<'a> MaildirBackend<'a> {
         account_config: Cow<'a, AccountConfig>,
         backend_config: Cow<'a, MaildirConfig>,
     ) -> Result<Self> {
-        let mdir = Maildir::from(backend_config.root_dir.clone());
-        mdir.create_dirs().map_err(Error::InitDirsError)?;
-
-        Ok(Self {
-            account_config,
-            mdir,
-            url_encoded_folders: false,
-        })
+        MaildirBackendBuilder::new().build(account_config, backend_config)
     }
 
     fn validate_mdir_path(&self, mdir_path: PathBuf) -> Result<PathBuf> {
@@ -169,18 +159,38 @@ impl<'a> MaildirBackend<'a> {
 
     pub fn encode_folder<F>(&self, folder: F) -> String
     where
-        F: AsRef<str>,
+        F: AsRef<str> + ToString,
     {
-        urlencoding::encode(folder.as_ref()).to_string()
+        if self.url_encoded_folders {
+            urlencoding::encode(folder.as_ref()).to_string()
+        } else {
+            folder.to_string()
+        }
     }
 
     pub fn decode_folder<F>(&self, folder: F) -> String
     where
         F: AsRef<str> + ToString,
     {
-        urlencoding::decode(folder.as_ref())
-            .map(|folder| folder.to_string())
-            .unwrap_or_else(|_| folder.to_string())
+        if self.url_encoded_folders {
+            urlencoding::decode(folder.as_ref())
+                .map(|folder| folder.to_string())
+                .unwrap_or_else(|_| folder.to_string())
+        } else {
+            folder.to_string()
+        }
+    }
+
+    pub fn id_mapper<F>(&self, folder: F) -> Result<IdMapper>
+    where
+        F: AsRef<str>,
+    {
+        let db = rusqlite::Connection::open(&self.db_path)
+            .map_err(|err| Error::OpenDatabaseError(err, self.db_path.clone()))?;
+
+        let id_mapper = IdMapper::new(db, &self.account_config.name, folder.as_ref())?;
+
+        Ok(id_mapper)
     }
 }
 
@@ -192,7 +202,7 @@ impl<'a> Backend for MaildirBackend<'a> {
     fn add_folder(&self, folder: &str) -> backend::Result<()> {
         info!("adding maildir folder {}", folder);
 
-        let path = match folder {
+        let path = match self.account_config.folder_alias(folder)?.as_str() {
             DEFAULT_INBOX_FOLDER => self.mdir.path().join("cur"),
             folder => {
                 let folder = self.encode_folder(folder);
@@ -202,24 +212,26 @@ impl<'a> Backend for MaildirBackend<'a> {
 
         trace!("maildir folder path: {:?}", path);
 
-        Maildir::from(path)
+        Maildir::from(path.clone())
             .create_dirs()
-            .map_err(Error::InitDirsError)?;
+            .map_err(|err| Error::InitFoldersStructureError(err, path.clone()))?;
 
         Ok(())
     }
 
     fn list_folders(&self) -> backend::Result<Folders> {
+        info!("listing maildir folders");
+
         let mut folders = Folders::default();
 
         folders.push(Folder {
             delim: String::from("/"),
             name: self.account_config.inbox_folder_alias()?,
-            desc: self.account_config.inbox_folder_alias()?,
+            desc: DEFAULT_INBOX_FOLDER.into(),
         });
 
         for entry in self.mdir.list_subdirs() {
-            let dir = entry.map_err(Error::DecodeSubdirError)?;
+            let dir = entry.map_err(Error::GetSubdirEntryError)?;
             let dirname = dir.path().file_name();
             let name = dirname
                 .and_then(OsStr::to_str)
@@ -234,126 +246,123 @@ impl<'a> Backend for MaildirBackend<'a> {
             });
         }
 
-        trace!("maildir folders: {:?}", folders);
+        trace!("maildir folders: {:#?}", folders);
 
         Ok(folders)
     }
 
-    fn purge_folder(&self, dir: &str) -> backend::Result<()> {
-        debug!("dir: {}", dir);
+    fn purge_folder(&self, folder: &str) -> backend::Result<()> {
+        info!("purging maildir folder {}", folder);
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let ids: Vec<maildir::MailEntry> = mdir.list_cur().filter_map(io::Result::ok).collect();
-        let ids: Vec<&str> = ids.iter().map(|entry| entry.id()).collect();
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let entries = mdir
+            .list_cur()
+            .map(|entry| entry.map_err(Error::GetSubdirEntryError))
+            .collect::<Result<Vec<_>>>()?;
+        let ids = entries.iter().map(|entry| entry.id()).collect();
 
-        self.delete_emails(dir, ids)?;
+        trace!("ids: {:#?}", ids);
+
+        self.delete_emails(folder, ids)?;
 
         Ok(())
     }
 
-    fn delete_folder(&self, dir: &str) -> backend::Result<()> {
-        debug!("dir: {:?}", dir);
+    fn delete_folder(&self, folder: &str) -> backend::Result<()> {
+        info!("deleting maildir folder {}", folder);
 
-        let path = self.mdir.path().join(format!(".{}", dir));
-        debug!("dir path: {:?}", path);
+        let path = match self.account_config.folder_alias(folder)?.as_str() {
+            DEFAULT_INBOX_FOLDER => self.mdir.path().join("cur"),
+            folder => {
+                let folder = self.encode_folder(folder);
+                self.mdir.path().join(format!(".{}", folder))
+            }
+        };
 
-        fs::remove_dir_all(&path).map_err(|err| Error::DeleteAllDirError(err, path.to_owned()))?;
+        trace!("maildir folder path: {:?}", path);
+
+        fs::remove_dir_all(&path).map_err(|err| Error::DeleteFolderError(err, path))?;
+
         Ok(())
     }
 
-    fn get_envelope(&self, dir: &str, short_hash: &str) -> backend::Result<Envelope> {
-        debug!("dir: {}", dir);
-        debug!("short hash: {}", short_hash);
+    fn get_envelope(&self, folder: &str, id: &str) -> backend::Result<Envelope> {
+        info!(
+            "getting maildir envelope by id {} from folder {}",
+            id, folder
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id_mapper = IdMapper::new(mdir.path())?;
-        let id = id_mapper.find(short_hash)?;
-        debug!("id: {}", id);
-
-        let envelope = envelope::from_raw(
-            mdir.find(&id)
-                .ok_or_else(|| Error::GetEnvelopeError(short_hash.to_owned()))?,
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let internal_id = self.id_mapper(folder)?.get_internal_id(id)?;
+        let mut envelope = envelope::from_raw(
+            mdir.find(&internal_id)
+                .ok_or_else(|| Error::GetEnvelopeError(id.to_owned()))?,
         )?;
+        envelope.id = id.to_string();
 
         Ok(envelope)
     }
 
-    fn get_envelope_internal(&self, dir: &str, internal_id: &str) -> backend::Result<Envelope> {
-        debug!("dir: {}", dir);
-        debug!("internal id: {}", internal_id);
+    fn get_envelope_internal(&self, folder: &str, internal_id: &str) -> backend::Result<Envelope> {
+        info!(
+            "getting maildir envelope by internal id {} from folder {}",
+            internal_id, folder
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-
-        let envelope = envelope::from_raw(
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let mut envelope = envelope::from_raw(
             mdir.find(internal_id)
                 .ok_or_else(|| Error::GetEnvelopeError(internal_id.to_owned()))?,
         )?;
+        envelope.id = self.id_mapper(folder)?.get_id(internal_id)?;
 
         Ok(envelope)
     }
 
     fn list_envelopes(
         &self,
-        dir: &str,
+        folder: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        debug!("dir: {}", dir);
-        debug!("page size: {}", page_size);
-        debug!("page: {}", page);
+        info!("listing maildir envelopes of folder {}", folder);
+        trace!("page size: {}", page_size);
+        trace!("page: {}", page);
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-
-        // Reads envelopes from the "cur" folder of the selected
-        // maildir.
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let id_mapper = self.id_mapper(folder)?;
         let mut envelopes = envelopes::from_raws(mdir.list_cur())?;
-        debug!("envelopes len: {:?}", envelopes.len());
-        trace!("envelopes: {:?}", envelopes);
 
-        // Calculates pagination boundaries.
         let page_begin = page * page_size;
-        debug!("page begin: {}", page_begin);
+        trace!("page begin: {}", page_begin);
         if page_begin > envelopes.len() {
             return Err(Error::GetEnvelopesOutOfBoundsError(page_begin + 1))?;
         }
+
         let page_end = envelopes.len().min(if page_size == 0 {
             envelopes.len()
         } else {
             page_begin + page_size
         });
-        debug!("page end: {}", page_end);
+        trace!("page end: {}", page_end);
 
-        // Sorts envelopes by most recent date.
         envelopes.sort_by(|a, b| b.date.partial_cmp(&a.date).unwrap());
-
-        // Applies pagination boundaries.
-        *envelopes = envelopes[page_begin..page_end].to_owned();
-
-        // Appends envelopes hash to the id mapper cache file and
-        // calculates the new short hash length. The short hash length
-        // represents the minimum hash length possible to avoid
-        // conflicts.
-        let short_hash_len = {
-            let mut mapper = IdMapper::new(mdir.path())?;
-            let entries = envelopes
-                .iter()
-                .map(|env| (env.id.to_owned(), env.internal_id.to_owned()))
-                .collect();
-            mapper.append(entries)?
-        };
-        debug!("short hash length: {:?}", short_hash_len);
-
-        // Shorten envelopes hash.
-        envelopes
-            .iter_mut()
-            .for_each(|env| env.id = env.id[0..short_hash_len].to_owned());
+        *envelopes = envelopes[page_begin..page_end]
+            .iter()
+            .map(|envelope| {
+                Ok(Envelope {
+                    id: id_mapper.get_id(&envelope.internal_id)?,
+                    ..envelope.clone()
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(envelopes)
     }
 
     fn search_envelopes(
         &self,
-        _dir: &str,
+        _folder: &str,
         _query: &str,
         _sort: &str,
         _page_size: usize,
@@ -362,88 +371,75 @@ impl<'a> Backend for MaildirBackend<'a> {
         Err(Error::SearchEnvelopesUnimplementedError)?
     }
 
-    fn add_email(&self, dir: &str, email: &[u8], flags: &Flags) -> backend::Result<String> {
-        debug!("dir: {}", dir);
-        debug!("flags: {:?}", flags);
+    fn add_email(&self, folder: &str, email: &[u8], flags: &Flags) -> backend::Result<String> {
+        info!(
+            "adding email to folder {folder} with flags {flags}",
+            flags = flags.to_string()
+        );
 
         let mut flags = flags.clone();
         flags.insert(Flag::Seen);
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id = mdir
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let internal_id = mdir
             .store_cur_with_flags(email, &flags::to_normalized_string(&flags))
             .map_err(Error::StoreWithFlagsError)?;
-        debug!("id: {:?}", id);
-        let hash = format!("{:x}", md5::compute(&id));
-        debug!("hash: {:?}", hash);
+        let id = self.id_mapper(folder)?.insert(internal_id)?;
 
-        // Appends hash entry to the id mapper cache file.
-        let mut mapper = IdMapper::new(mdir.path())?;
-        mapper.append(vec![(hash.clone(), id.clone())])?;
-
-        Ok(hash)
+        Ok(id)
     }
 
     fn add_email_internal(
         &self,
-        dir: &str,
+        folder: &str,
         email: &[u8],
         flags: &Flags,
     ) -> backend::Result<String> {
-        debug!("dir: {}", dir);
-        debug!("flags: {:?}", flags);
+        info!(
+            "adding email to folder {folder} with flags {flags}",
+            flags = flags.to_string()
+        );
 
         let mut flags = flags.clone();
         flags.insert(Flag::Seen);
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id = mdir
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let internal_id = mdir
             .store_cur_with_flags(email, &flags::to_normalized_string(&flags))
             .map_err(Error::StoreWithFlagsError)?;
-        debug!("id: {:?}", id);
-        let hash = format!("{:x}", md5::compute(&id));
-        debug!("hash: {:?}", hash);
+        self.id_mapper(folder)?.insert(&internal_id)?;
 
-        // Appends hash entry to the id mapper cache file.
-        let mut mapper = IdMapper::new(mdir.path())?;
-        mapper.append(vec![(hash.clone(), id.clone())])?;
-
-        Ok(id.clone())
+        Ok(internal_id)
     }
 
-    fn get_emails(&self, dir: &str, short_hashes: Vec<&str>) -> backend::Result<Emails> {
-        debug!("dir: {:?}", dir);
-        debug!("short hashes: {:?}", short_hashes);
+    fn get_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
+        info!(
+            "getting maildir emails by ids {ids} from folder {folder}",
+            ids = ids.join(", "),
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id_mapper = IdMapper::new(mdir.path())?;
-        let ids = short_hashes
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let id_mapper = self.id_mapper(folder)?;
+        let internal_ids: Vec<String> = ids
             .iter()
-            .map(|short_hash| id_mapper.find(short_hash))
-            .collect::<id_mapper::Result<Vec<_>>>()?;
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        debug!("ids: {:?}", ids);
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        let internal_ids: Vec<&str> = internal_ids.iter().map(String::as_str).collect();
+        trace!("internal ids: {:#?}", internal_ids);
 
-        let matching_ids = |entry: io::Result<maildir::MailEntry>| match entry {
-            Ok(entry) => {
-                if let Some(pos) = ids.iter().position(|id| *id == entry.id()) {
-                    Some((pos, entry))
-                } else {
+        let mut emails: Vec<(usize, maildir::MailEntry)> = mdir
+            .list_cur()
+            .filter_map(|entry| match entry {
+                Ok(entry) => internal_ids
+                    .iter()
+                    .position(|id| *id == entry.id())
+                    .map(|pos| (pos, entry)),
+                Err(err) => {
+                    warn!("skipping invalid maildir entry: {}", err);
                     None
                 }
-            }
-            Err(err) => {
-                warn!("skipping invalid maildir entry: {}", err);
-                None
-            }
-        };
-
-        let mut emails = mdir
-            .list_cur()
-            .filter_map(&matching_ids)
-            .chain(mdir.list_new().filter_map(&matching_ids))
-            .collect::<Vec<(usize, maildir::MailEntry)>>();
-
+            })
+            .collect();
         emails.sort_by_key(|(pos, _)| *pos);
 
         let emails: Emails = emails
@@ -455,26 +451,37 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(emails)
     }
 
-    fn get_emails_internal(&self, dir: &str, internal_ids: Vec<&str>) -> backend::Result<Emails> {
-        debug!("dir: {:?}", dir);
-        debug!("internal ids: {:?}", internal_ids);
+    fn get_emails_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<Emails> {
+        info!(
+            "getting maildir emails by internal ids {ids} from folder {folder}",
+            ids = internal_ids.join(", "),
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
+        let mdir = self.get_mdir_from_dir(folder)?;
 
-        let matching_internal_ids = |entry: io::Result<maildir::MailEntry>| match entry {
-            Ok(entry) if internal_ids.contains(&entry.id()) => Some(entry),
-            Ok(_) => None,
-            Err(err) => {
-                warn!("skipping invalid maildir entry: {}", err);
-                None
-            }
-        };
-
-        let emails: Emails = mdir
+        let mut emails: Vec<(usize, maildir::MailEntry)> = mdir
             .list_cur()
-            .filter_map(&matching_internal_ids)
-            .chain(mdir.list_new().filter_map(&matching_internal_ids))
-            .collect::<Vec<maildir::MailEntry>>()
+            .filter_map(|entry| match entry {
+                Ok(entry) => internal_ids
+                    .iter()
+                    .position(|id| *id == entry.id())
+                    .map(|pos| (pos, entry)),
+                Err(err) => {
+                    warn!("skipping invalid maildir entry: {}", err);
+                    None
+                }
+            })
+            .collect();
+        emails.sort_by_key(|(pos, _)| *pos);
+
+        let emails: Emails = emails
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>()
             .try_into()?;
 
         Ok(emails)
@@ -482,286 +489,281 @@ impl<'a> Backend for MaildirBackend<'a> {
 
     fn copy_emails(
         &self,
-        from_dir: &str,
-        to_dir: &str,
-        short_hashes: Vec<&str>,
+        from_folder: &str,
+        to_folder: &str,
+        ids: Vec<&str>,
     ) -> backend::Result<()> {
-        debug!("from dir: {:?}", from_dir);
-        debug!("to dir: {:?}", to_dir);
-        debug!("short hashes: {:?}", short_hashes);
+        info!(
+            "copying ids {ids} from folder {from_folder} to folder {to_folder}",
+            ids = ids.join(", "),
+        );
 
-        let from_mdir = self.get_mdir_from_dir(from_dir)?;
-        let to_mdir = self.get_mdir_from_dir(to_dir)?;
-        let id_mapper = IdMapper::new(from_mdir.path())?;
-        let ids = short_hashes
+        let from_mdir = self.get_mdir_from_dir(from_folder)?;
+        let to_mdir = self.get_mdir_from_dir(to_folder)?;
+        let id_mapper = self.id_mapper(from_folder)?;
+        let internal_ids: Vec<String> = ids
             .iter()
-            .map(|short_hash| id_mapper.find(short_hash))
-            .collect::<id_mapper::Result<Vec<_>>>()?;
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        debug!("ids: {:?}", ids);
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        let internal_ids: Vec<&str> = internal_ids.iter().map(String::as_str).collect();
+        trace!("internal ids: {:#?}", internal_ids);
 
-        let mut id_mapper = IdMapper::new(to_mdir.path())?;
-        for id in ids {
+        internal_ids.iter().try_for_each(|internal_id| {
             from_mdir
-                .copy_to(&id, &to_mdir)
-                .map_err(Error::CopyMsgError)?;
-
-            // Appends hash entry to the id mapper cache file.
-            let hash = format!("{:x}", md5::compute(&id));
-            id_mapper.append(vec![(hash.clone(), id.to_owned())])?;
-        }
+                .copy_to(&internal_id, &to_mdir)
+                .map_err(Error::CopyEmailError)
+        })?;
 
         Ok(())
     }
 
     fn copy_emails_internal(
         &self,
-        from_dir: &str,
-        to_dir: &str,
+        from_folder: &str,
+        to_folder: &str,
         internal_ids: Vec<&str>,
     ) -> backend::Result<()> {
-        debug!("from dir: {:?}", from_dir);
-        debug!("to dir: {:?}", to_dir);
-        debug!("internal ids: {:?}", internal_ids);
+        info!(
+            "copying internal ids {ids} from folder {from_folder} to folder {to_folder}",
+            ids = internal_ids.join(", "),
+        );
 
-        let from_mdir = self.get_mdir_from_dir(from_dir)?;
-        let to_mdir = self.get_mdir_from_dir(to_dir)?;
-        let mut id_mapper = IdMapper::new(to_mdir.path())?;
+        let from_mdir = self.get_mdir_from_dir(from_folder)?;
+        let to_mdir = self.get_mdir_from_dir(to_folder)?;
 
-        for internal_id in internal_ids {
+        internal_ids.iter().try_for_each(|internal_id| {
             from_mdir
                 .copy_to(&internal_id, &to_mdir)
-                .map_err(Error::CopyMsgError)?;
-
-            // Appends hash entry to the id mapper cache file.
-            let hash = format!("{:x}", md5::compute(&internal_id));
-            id_mapper.append(vec![(hash.clone(), internal_id.to_owned())])?;
-        }
+                .map_err(Error::CopyEmailError)
+        })?;
 
         Ok(())
     }
 
     fn move_emails(
         &self,
-        from_dir: &str,
-        to_dir: &str,
-        short_hashes: Vec<&str>,
+        from_folder: &str,
+        to_folder: &str,
+        ids: Vec<&str>,
     ) -> backend::Result<()> {
-        debug!("from dir: {:?}", from_dir);
-        debug!("to dir: {:?}", to_dir);
-        debug!("short hashes: {:?}", short_hashes);
+        info!(
+            "moving ids {ids} from folder {from_folder} to folder {to_folder}",
+            ids = ids.join(", "),
+        );
 
-        let from_mdir = self.get_mdir_from_dir(from_dir)?;
-        let to_mdir = self.get_mdir_from_dir(to_dir)?;
-        let id_mapper = IdMapper::new(from_mdir.path())?;
-        let ids = short_hashes
+        let from_mdir = self.get_mdir_from_dir(from_folder)?;
+        let to_mdir = self.get_mdir_from_dir(to_folder)?;
+        let id_mapper = self.id_mapper(from_folder)?;
+        let internal_ids: Vec<String> = ids
             .iter()
-            .map(|short_hash| id_mapper.find(short_hash))
-            .collect::<id_mapper::Result<Vec<_>>>()?;
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        debug!("ids: {:?}", ids);
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        let internal_ids: Vec<&str> = internal_ids.iter().map(String::as_str).collect();
+        trace!("internal ids: {:#?}", internal_ids);
 
-        let mut id_mapper = IdMapper::new(to_mdir.path())?;
-        for id in ids {
+        internal_ids.iter().try_for_each(|internal_id| {
             from_mdir
-                .move_to(&id, &to_mdir)
-                .map_err(Error::MoveMsgError)?;
-
-            // Appends hash entry to the id mapper cache file.
-            let hash = format!("{:x}", md5::compute(&id));
-            id_mapper.append(vec![(hash.clone(), id.to_owned())])?;
-        }
+                .move_to(&internal_id, &to_mdir)
+                .map_err(Error::CopyEmailError)
+        })?;
 
         Ok(())
     }
 
     fn move_emails_internal(
         &self,
-        from_dir: &str,
-        to_dir: &str,
+        from_folder: &str,
+        to_folder: &str,
         internal_ids: Vec<&str>,
     ) -> backend::Result<()> {
-        debug!("from dir: {:?}", from_dir);
-        debug!("to dir: {:?}", to_dir);
-        debug!("internal ids: {:?}", internal_ids);
+        info!(
+            "moving internal ids {ids} from folder {from_folder} to folder {to_folder}",
+            ids = internal_ids.join(", "),
+        );
 
-        let from_mdir = self.get_mdir_from_dir(from_dir)?;
-        let to_mdir = self.get_mdir_from_dir(to_dir)?;
-        let mut id_mapper = IdMapper::new(to_mdir.path())?;
+        let from_mdir = self.get_mdir_from_dir(from_folder)?;
+        let to_mdir = self.get_mdir_from_dir(to_folder)?;
 
-        for internal_id in internal_ids {
+        internal_ids.iter().try_for_each(|internal_id| {
             from_mdir
                 .move_to(&internal_id, &to_mdir)
-                .map_err(Error::MoveMsgError)?;
-
-            // Appends hash entry to the id mapper cache file.
-            let hash = format!("{:x}", md5::compute(&internal_id));
-            id_mapper.append(vec![(hash.clone(), internal_id.to_owned())])?;
-        }
+                .map_err(Error::CopyEmailError)
+        })?;
 
         Ok(())
     }
 
-    fn delete_emails(&self, dir: &str, short_hashes: Vec<&str>) -> backend::Result<()> {
-        debug!("dir: {:?}", dir);
-        debug!("short hashes: {:?}", short_hashes);
+    fn delete_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<()> {
+        info!(
+            "deleting ids {ids} from folder {folder}",
+            ids = ids.join(", "),
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id_mapper = IdMapper::new(mdir.path())?;
-        let ids = short_hashes
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let id_mapper = self.id_mapper(folder)?;
+        let internal_ids: Vec<String> = ids
             .iter()
-            .map(|short_hash| id_mapper.find(short_hash))
-            .collect::<id_mapper::Result<Vec<_>>>()?;
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        debug!("ids: {:?}", ids);
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        let internal_ids: Vec<&str> = internal_ids.iter().map(String::as_str).collect();
+        trace!("internal ids: {:#?}", internal_ids);
 
-        for id in ids {
-            mdir.delete(&id).map_err(Error::DelMsgError)?;
-        }
-
-        Ok(())
-    }
-
-    fn delete_emails_internal(&self, dir: &str, internal_ids: Vec<&str>) -> backend::Result<()> {
-        debug!("dir: {:?}", dir);
-        debug!("internal ids: {:?}", internal_ids);
-
-        let mdir = self.get_mdir_from_dir(dir)?;
-
-        for internal_id in internal_ids {
-            mdir.delete(&internal_id).map_err(Error::DelMsgError)?;
-        }
+        internal_ids.iter().try_for_each(|internal_id| {
+            mdir.delete(&internal_id).map_err(Error::DeleteEmailError)
+        })?;
 
         Ok(())
     }
 
-    fn add_flags(&self, dir: &str, short_hashes: Vec<&str>, flags: &Flags) -> backend::Result<()> {
-        debug!("dir: {}", dir);
-        debug!("short hashes: {:?}", short_hashes);
-        debug!("flags: {:?}", flags);
+    fn delete_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> backend::Result<()> {
+        info!(
+            "deleting internal ids {ids} from folder {folder}",
+            ids = internal_ids.join(", "),
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id_mapper = IdMapper::new(mdir.path())?;
-        let ids = short_hashes
+        let mdir = self.get_mdir_from_dir(folder)?;
+
+        internal_ids.iter().try_for_each(|internal_id| {
+            mdir.delete(&internal_id).map_err(Error::DeleteEmailError)
+        })?;
+
+        Ok(())
+    }
+
+    fn add_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        info!(
+            "adding flags {flags} to ids {ids} from folder {folder}",
+            flags = flags.to_string(),
+            ids = ids.join(", ")
+        );
+
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let id_mapper = self.id_mapper(folder)?;
+        let internal_ids: Vec<String> = ids
             .iter()
-            .map(|short_hash| id_mapper.find(short_hash))
-            .collect::<id_mapper::Result<Vec<_>>>()?;
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        debug!("ids: {:?}", ids);
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        let internal_ids: Vec<&str> = internal_ids.iter().map(String::as_str).collect();
+        trace!("internal ids: {:#?}", internal_ids);
 
-        for id in ids {
-            mdir.add_flags(&id, &flags::to_normalized_string(&flags))
-                .map_err(Error::AddFlagsError)?;
-        }
+        internal_ids.iter().try_for_each(|internal_id| {
+            mdir.add_flags(&internal_id, &flags::to_normalized_string(&flags))
+                .map_err(Error::AddFlagsError)
+        })?;
 
         Ok(())
     }
 
     fn add_flags_internal(
         &self,
-        dir: &str,
+        folder: &str,
         internal_ids: Vec<&str>,
         flags: &Flags,
     ) -> backend::Result<()> {
-        debug!("dir: {}", dir);
-        debug!("internal ids: {:?}", internal_ids);
-        debug!("flags: {:?}", flags);
+        info!(
+            "adding flags {flags} to internal ids {ids} from folder {folder}",
+            flags = flags.to_string(),
+            ids = internal_ids.join(", ")
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
+        let mdir = self.get_mdir_from_dir(folder)?;
 
-        for internal_id in internal_ids {
+        internal_ids.iter().try_for_each(|internal_id| {
             mdir.add_flags(&internal_id, &flags::to_normalized_string(&flags))
-                .map_err(Error::AddFlagsError)?;
-        }
+                .map_err(Error::AddFlagsError)
+        })?;
 
         Ok(())
     }
 
-    fn set_flags(&self, dir: &str, short_hashes: Vec<&str>, flags: &Flags) -> backend::Result<()> {
-        debug!("dir: {}", dir);
-        debug!("short hashes: {:?}", short_hashes);
-        debug!("flags: {:?}", flags);
+    fn set_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        info!(
+            "setting flags {flags} to ids {ids} from folder {folder}",
+            flags = flags.to_string(),
+            ids = ids.join(", ")
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id_mapper = IdMapper::new(mdir.path())?;
-        let ids = short_hashes
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let id_mapper = self.id_mapper(folder)?;
+        let internal_ids: Vec<String> = ids
             .iter()
-            .map(|short_hash| id_mapper.find(short_hash))
-            .collect::<id_mapper::Result<Vec<_>>>()?;
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        debug!("ids: {:?}", ids);
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        let internal_ids: Vec<&str> = internal_ids.iter().map(String::as_str).collect();
+        trace!("internal ids: {:#?}", internal_ids);
 
-        for id in ids {
-            mdir.set_flags(&id, &flags::to_normalized_string(&flags))
-                .map_err(Error::SetFlagsError)?;
-        }
+        internal_ids.iter().try_for_each(|internal_id| {
+            mdir.set_flags(&internal_id, &flags::to_normalized_string(&flags))
+                .map_err(Error::SetFlagsError)
+        })?;
 
         Ok(())
     }
 
     fn set_flags_internal(
         &self,
-        dir: &str,
+        folder: &str,
         internal_ids: Vec<&str>,
         flags: &Flags,
     ) -> backend::Result<()> {
-        debug!("dir: {}", dir);
-        debug!("internal ids: {:?}", internal_ids);
-        debug!("flags: {:?}", flags);
+        info!(
+            "setting flags {flags} to internal ids {ids} from folder {folder}",
+            flags = flags.to_string(),
+            ids = internal_ids.join(", ")
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
+        let mdir = self.get_mdir_from_dir(folder)?;
 
-        for internal_id in internal_ids {
-            mdir.set_flags(internal_id, &flags::to_normalized_string(&flags))
-                .map_err(Error::SetFlagsError)?;
-        }
+        internal_ids.iter().try_for_each(|internal_id| {
+            mdir.set_flags(&internal_id, &flags::to_normalized_string(&flags))
+                .map_err(Error::SetFlagsError)
+        })?;
 
         Ok(())
     }
 
-    fn remove_flags(
-        &self,
-        dir: &str,
-        short_hashes: Vec<&str>,
-        flags: &Flags,
-    ) -> backend::Result<()> {
-        debug!("dir: {}", dir);
-        debug!("short hashes: {:?}", short_hashes);
-        debug!("flags: {:?}", flags);
+    fn remove_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        info!(
+            "removing flags {flags} to ids {ids} from folder {folder}",
+            flags = flags.to_string(),
+            ids = ids.join(", ")
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
-        let id_mapper = IdMapper::new(mdir.path())?;
-        let ids = short_hashes
+        let mdir = self.get_mdir_from_dir(folder)?;
+        let id_mapper = self.id_mapper(folder)?;
+        let internal_ids: Vec<String> = ids
             .iter()
-            .map(|short_hash| id_mapper.find(short_hash))
-            .collect::<id_mapper::Result<Vec<_>>>()?;
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        debug!("ids: {:?}", ids);
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        let internal_ids: Vec<&str> = internal_ids.iter().map(String::as_str).collect();
+        trace!("internal ids: {:#?}", internal_ids);
 
-        for id in ids {
-            mdir.remove_flags(&id, &flags::to_normalized_string(&flags))
-                .map_err(Error::DelFlagsError)?;
-        }
+        internal_ids.iter().try_for_each(|internal_id| {
+            mdir.remove_flags(&internal_id, &flags::to_normalized_string(&flags))
+                .map_err(Error::RemoveFlagsError)
+        })?;
 
         Ok(())
     }
 
     fn remove_flags_internal(
         &self,
-        dir: &str,
+        folder: &str,
         internal_ids: Vec<&str>,
         flags: &Flags,
     ) -> backend::Result<()> {
-        debug!("dir: {}", dir);
-        debug!("internal ids: {:?}", internal_ids);
-        debug!("flags: {:?}", flags);
+        info!(
+            "removing flags {flags} to internal ids {ids} from folder {folder}",
+            flags = flags.to_string(),
+            ids = internal_ids.join(", ")
+        );
 
-        let mdir = self.get_mdir_from_dir(dir)?;
+        let mdir = self.get_mdir_from_dir(folder)?;
 
-        for internal_id in internal_ids {
+        internal_ids.iter().try_for_each(|internal_id| {
             mdir.remove_flags(&internal_id, &flags::to_normalized_string(&flags))
-                .map_err(Error::DelFlagsError)?;
-        }
+                .map_err(Error::RemoveFlagsError)
+        })?;
 
         Ok(())
     }
@@ -781,6 +783,7 @@ impl ThreadSafeBackend for MaildirBackend<'_> {}
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MaildirBackendBuilder {
     url_encoded_folders: bool,
+    db_path: Option<PathBuf>,
 }
 
 impl MaildirBackendBuilder {
@@ -793,13 +796,33 @@ impl MaildirBackendBuilder {
         self
     }
 
+    pub fn db_path<P>(mut self, path: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        self.db_path = Some(path.into());
+        self
+    }
+
     pub fn build<'a>(
         self,
         account_config: Cow<'a, AccountConfig>,
         backend_config: Cow<'a, MaildirConfig>,
     ) -> Result<MaildirBackend> {
-        let mut backend = MaildirBackend::new(account_config, backend_config)?;
-        backend.url_encoded_folders = self.url_encoded_folders;
-        Ok(backend)
+        let path = &backend_config.root_dir;
+        let mdir = Maildir::from(path.clone());
+        let db_path = self
+            .db_path
+            .unwrap_or_else(|| mdir.path().join(".database.sqlite"));
+
+        mdir.create_dirs()
+            .map_err(|err| Error::InitFoldersStructureError(err, path.clone()))?;
+
+        Ok(MaildirBackend {
+            account_config,
+            url_encoded_folders: self.url_encoded_folders,
+            mdir,
+            db_path,
+        })
     }
 }

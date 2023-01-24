@@ -241,8 +241,7 @@ impl AccountConfig {
             && match self.sync_dir.as_ref() {
                 Some(dir) => dir.is_dir(),
                 None => data_dir()
-                    .map(|dir| dir.join("himalaya").join(&self.name))
-                    .map(|dir| dir.is_dir())
+                    .map(|dir| dir.join("himalaya").join(&self.name).is_dir())
                     .unwrap_or_default(),
             }
     }
