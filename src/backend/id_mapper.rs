@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::result;
 use thiserror::Error;
 
@@ -87,10 +87,7 @@ impl IdMapper {
     where
         I: AsRef<str> + ToString,
     {
-        info!(
-            "getting id from internal id {} using id mapper",
-            internal_id.as_ref()
-        );
+        info!("getting id from internal id {}", internal_id.as_ref());
 
         let mut stmt = self.db.prepare(&format!(
             "SELECT id FROM {} WHERE internal_id = ?",
@@ -131,7 +128,7 @@ impl IdMapper {
             .first()
             .ok_or_else(|| Error::GetInternalIdFromId(id.to_string()))?
             .to_string();
-        debug!("interal id: {internal_id}");
+        trace!("interal id: {internal_id}");
 
         Ok(internal_id)
     }

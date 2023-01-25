@@ -14,21 +14,20 @@ const CREATE_ENVELOPES_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS envelopes (
         id          TEXT     NOT NULL,
         internal_id TEXT     NOT NULL,
-        hash        TEXT     NOT NULL,
+        message_id  TEXT     NOT NULL,
         account     TEXT     NOT NULL,
         folder      TEXT     NOT NULL,
         flag        TEXT     NOT NULL,
-        message_id  TEXT     NOT NULL,
         sender      TEXT     NOT NULL,
         subject     TEXT     NOT NULL,
         date        DATETIME NOT NULL,
-        UNIQUE(internal_id, hash, account, folder, flag)
+        UNIQUE(internal_id, message_id, account, folder, flag)
     )
 ";
 
 const INSERT_ENVELOPE: &str = "
     INSERT INTO envelopes
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ";
 
 const DELETE_ENVELOPE: &str = "
@@ -39,11 +38,11 @@ const DELETE_ENVELOPE: &str = "
 ";
 
 const SELECT_ENVELOPES: &str = "
-    SELECT id, internal_id, hash, account, folder, GROUP_CONCAT(flag, ' ') AS flags, message_id, sender, subject, date
+    SELECT id, internal_id, message_id, account, folder, GROUP_CONCAT(flag, ' ') AS flags, sender, subject, date
     FROM envelopes
     WHERE account = ?
     AND folder = ?
-    GROUP BY hash
+    GROUP BY message_id
     ORDER BY date DESC
 ";
 
@@ -83,12 +82,12 @@ impl<'a> Cache<'a> {
                 Ok(Envelope {
                     id: row.get(0)?,
                     internal_id: row.get(1)?,
+                    message_id: row.get(2)?,
                     flags: row.get::<usize, String>(5)?.as_str().into(),
-                    message_id: row.get(6)?,
-                    from: Mailbox::new_nameless(row.get::<usize, String>(7)?),
-                    subject: row.get(8)?,
+                    from: Mailbox::new_nameless(row.get::<usize, String>(6)?),
+                    subject: row.get(7)?,
                     date: {
-                        let date: String = row.get(9)?;
+                        let date: String = row.get(8)?;
                         match DateTime::parse_from_rfc3339(&date) {
                             Ok(date) => date.with_timezone(&Local),
                             Err(err) => {
@@ -126,18 +125,17 @@ impl<'a> Cache<'a> {
         for flag in envelope.flags.iter() {
             self.db()?.execute(
                 INSERT_ENVELOPE,
-                [
-                    envelope.id.as_str(),
-                    envelope.internal_id.as_str(),
-                    envelope.hash(folder.as_ref()).as_str(),
+                (
+                    &envelope.id,
+                    &envelope.internal_id,
+                    &envelope.message_id,
                     account.as_ref(),
                     folder.as_ref(),
-                    flag.to_string().as_str(),
-                    envelope.message_id.as_str(),
-                    envelope.from.addr.as_str(),
-                    envelope.subject.as_str(),
-                    envelope.date.to_rfc3339().as_str(),
-                ],
+                    flag.to_string(),
+                    &envelope.from.addr,
+                    &envelope.subject,
+                    envelope.date.to_rfc3339(),
+                ),
             )?;
         }
 

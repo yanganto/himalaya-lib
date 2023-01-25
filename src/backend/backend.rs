@@ -58,7 +58,9 @@ pub trait Backend {
     fn delete_folder(&self, folder: &str) -> Result<()>;
 
     fn get_envelope(&self, folder: &str, id: &str) -> Result<Envelope>;
-    fn get_envelope_internal(&self, folder: &str, internal_id: &str) -> Result<Envelope>;
+    fn get_envelope_internal(&self, folder: &str, internal_id: &str) -> Result<Envelope> {
+        self.get_envelope(folder, internal_id)
+    }
 
     fn list_envelopes(&self, folder: &str, page_size: usize, page: usize) -> Result<Envelopes>;
     fn search_envelopes(
@@ -71,10 +73,14 @@ pub trait Backend {
     ) -> Result<Envelopes>;
 
     fn add_email(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String>;
-    fn add_email_internal(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String>;
+    fn add_email_internal(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String> {
+        self.add_email(folder, email, flags)
+    }
 
     fn get_emails(&self, folder: &str, ids: Vec<&str>) -> Result<Emails>;
-    fn get_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> Result<Emails>;
+    fn get_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> Result<Emails> {
+        self.get_emails(folder, internal_ids)
+    }
 
     fn copy_emails(&self, from_folder: &str, to_folder: &str, ids: Vec<&str>) -> Result<()>;
     fn copy_emails_internal(
@@ -82,7 +88,9 @@ pub trait Backend {
         from_folder: &str,
         to_folder: &str,
         internal_ids: Vec<&str>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        self.copy_emails(from_folder, to_folder, internal_ids)
+    }
 
     fn move_emails(&self, from_folder: &str, to_folder: &str, ids: Vec<&str>) -> Result<()>;
     fn move_emails_internal(
@@ -90,10 +98,14 @@ pub trait Backend {
         from_folder: &str,
         to_folder: &str,
         internal_ids: Vec<&str>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        self.move_emails(from_folder, to_folder, internal_ids)
+    }
 
     fn delete_emails(&self, folder: &str, ids: Vec<&str>) -> Result<()>;
-    fn delete_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> Result<()>;
+    fn delete_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> Result<()> {
+        self.delete_emails(folder, internal_ids)
+    }
 
     fn add_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
     fn add_flags_internal(
@@ -101,7 +113,9 @@ pub trait Backend {
         folder: &str,
         internal_ids: Vec<&str>,
         flags: &Flags,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        self.add_flags(folder, internal_ids, flags)
+    }
 
     fn set_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
     fn set_flags_internal(
@@ -109,7 +123,9 @@ pub trait Backend {
         folder: &str,
         internal_ids: Vec<&str>,
         flags: &Flags,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        self.set_flags(folder, internal_ids, flags)
+    }
 
     fn remove_flags(&self, folder: &str, ids: Vec<&str>, flags: &Flags) -> Result<()>;
     fn remove_flags_internal(
@@ -117,21 +133,41 @@ pub trait Backend {
         folder: &str,
         internal_ids: Vec<&str>,
         flags: &Flags,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        self.remove_flags(folder, internal_ids, flags)
+    }
 
     fn sync(&self, _dry_run: bool) -> Result<()> {
         Err(Error::SyncNotSupported(self.name()))
     }
 
-    // only for downcasting
+    // INFO: for downcasting purpose
     fn as_any(&'static self) -> &(dyn Any);
 }
 
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct BackendBuilder;
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BackendBuilder {
+    sessions_pool_size: usize,
+    disable_cache: bool,
+}
 
 impl<'a> BackendBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn sessions_pool_size(mut self, pool_size: usize) -> Self {
+        self.sessions_pool_size = pool_size;
+        self
+    }
+
+    pub fn disable_cache(mut self, disable_cache: bool) -> Self {
+        self.disable_cache = disable_cache;
+        self
+    }
+
     pub fn build(
+        &self,
         account_config: &'a AccountConfig,
         backend_config: &'a BackendConfig,
     ) -> Result<Box<dyn Backend + 'a>> {
@@ -139,7 +175,8 @@ impl<'a> BackendBuilder {
             #[cfg(feature = "imap-backend")]
             BackendConfig::Imap(imap_config) => Ok(Box::new(
                 ImapBackendBuilder::new()
-                    .pool_size(10)
+                    .pool_size(self.sessions_pool_size)
+                    .disable_cache(self.disable_cache)
                     .build(Cow::Borrowed(account_config), Cow::Borrowed(imap_config))?,
             )),
             #[cfg(feature = "maildir-backend")]

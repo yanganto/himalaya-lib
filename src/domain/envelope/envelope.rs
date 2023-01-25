@@ -50,10 +50,10 @@ pub struct Envelope {
     pub id: String,
     /// Represents the internal identifier.
     pub internal_id: String,
-    /// Represents the flags.
-    pub flags: Flags,
     /// Represents the Message-ID header.
     pub message_id: String,
+    /// Represents the flags.
+    pub flags: Flags,
     /// Represents the first sender.
     pub from: Mailbox,
     /// Represents the Subject header.
@@ -63,28 +63,17 @@ pub struct Envelope {
     pub date: DateTime<Local>,
 }
 
-impl PartialEq for Envelope {
-    fn eq(&self, other: &Self) -> bool {
-        self.flags == other.flags
-            && self.message_id == other.message_id
-            && self.from == other.from
-            && self.subject == other.subject
-            && self.date == other.date
+impl Envelope {
+    pub fn clone_without_custom_flags(&self) -> Self {
+        Self {
+            flags: self.flags.clone_without_customs(),
+            ..self.clone()
+        }
     }
 }
 
-impl Envelope {
-    /// Builds the envelope hash using the given folder name, the
-    /// Message-ID, the Subject, the sender address and the internal
-    /// date.
-    pub fn hash<F: ToString>(&self, folder: F) -> String {
-        let hash = md5::compute(
-            folder.to_string()
-                + &self.message_id
-                + &self.subject
-                + &self.from.addr
-                + &self.date.to_rfc3339(),
-        );
-        format!("{:x}", hash)
+impl PartialEq for Envelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.message_id == other.message_id
     }
 }

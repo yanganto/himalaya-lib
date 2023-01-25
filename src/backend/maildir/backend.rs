@@ -96,7 +96,6 @@ pub type Result<T> = result::Result<T, Error>;
 /// Represents the maildir backend.
 pub struct MaildirBackend<'a> {
     account_config: Cow<'a, AccountConfig>,
-    url_encoded_folders: bool,
     mdir: maildir::Maildir,
     db_path: PathBuf,
 }
@@ -119,11 +118,8 @@ impl<'a> MaildirBackend<'a> {
 
     /// Creates a maildir instance from a string slice.
     pub fn get_mdir_from_dir(&self, folder: &str) -> Result<Maildir> {
-        let mut folder = self.account_config.folder_alias(folder)?;
-
-        if self.url_encoded_folders {
-            folder = self.encode_folder(&folder).to_string();
-        }
+        let folder = self.account_config.folder_alias(folder)?;
+        let folder = self.encode_folder(&folder).to_string();
 
         // If the dir points to the inbox folder, creates a maildir
         // instance from the root folder.
@@ -161,24 +157,16 @@ impl<'a> MaildirBackend<'a> {
     where
         F: AsRef<str> + ToString,
     {
-        if self.url_encoded_folders {
-            urlencoding::encode(folder.as_ref()).to_string()
-        } else {
-            folder.to_string()
-        }
+        urlencoding::encode(folder.as_ref()).to_string()
     }
 
     pub fn decode_folder<F>(&self, folder: F) -> String
     where
         F: AsRef<str> + ToString,
     {
-        if self.url_encoded_folders {
-            urlencoding::decode(folder.as_ref())
-                .map(|folder| folder.to_string())
-                .unwrap_or_else(|_| folder.to_string())
-        } else {
-            folder.to_string()
-        }
+        urlencoding::decode(folder.as_ref())
+            .map(|folder| folder.to_string())
+            .unwrap_or_else(|_| folder.to_string())
     }
 
     pub fn id_mapper<F>(&self, folder: F) -> Result<IdMapper>
@@ -773,7 +761,7 @@ impl<'a> Backend for MaildirBackend<'a> {
             .map_err(|err| backend::Error::SyncError(Box::new(err), self.name()))
     }
 
-    fn as_any(&self) -> &(dyn Any + 'a) {
+    fn as_any(&'static self) -> &(dyn Any) {
         self
     }
 }
@@ -782,18 +770,12 @@ impl ThreadSafeBackend for MaildirBackend<'_> {}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MaildirBackendBuilder {
-    url_encoded_folders: bool,
     db_path: Option<PathBuf>,
 }
 
 impl MaildirBackendBuilder {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn url_encoded_folders(mut self, flag: bool) -> Self {
-        self.url_encoded_folders = flag;
-        self
     }
 
     pub fn db_path<P>(mut self, path: P) -> Self
@@ -820,7 +802,6 @@ impl MaildirBackendBuilder {
 
         Ok(MaildirBackend {
             account_config,
-            url_encoded_folders: self.url_encoded_folders,
             mdir,
             db_path,
         })

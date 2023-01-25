@@ -29,7 +29,7 @@ pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
 
         match key.to_lowercase().as_str() {
             "message-id" => {
-                envelope.message_id = val.into();
+                envelope.message_id = val.trim().into();
             }
             "subject" => {
                 envelope.subject = val.into();

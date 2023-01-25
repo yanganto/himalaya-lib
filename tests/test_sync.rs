@@ -26,7 +26,7 @@ fn test_sync() {
 
     let imap = ImapBackendBuilder::new()
         .pool_size(3)
-        .cache(false)
+        .disable_cache(true)
         .build(
             Cow::Borrowed(&account),
             Cow::Owned(ImapConfig {
@@ -66,7 +66,7 @@ fn test_sync() {
             .text_plain_part("A")
             .compile(CompilerBuilder::default())
             .unwrap(),
-        &Flags::default(),
+        &Flags::from_iter([Flag::Seen]),
     )
     .unwrap();
 
@@ -82,7 +82,7 @@ fn test_sync() {
             .text_plain_part("B")
             .compile(CompilerBuilder::default())
             .unwrap(),
-        &Flags::from_iter([Flag::Flagged]),
+        &Flags::from_iter([Flag::Flagged, Flag::Custom("custom".into())]),
     )
     .unwrap();
 
@@ -141,7 +141,6 @@ fn test_sync() {
     // set up maildir reader
 
     let mdir = MaildirBackendBuilder::new()
-        .url_encoded_folders(true)
         .db_path(sync_dir.path().join(&account.name).join(".database.sqlite"))
         .build(
             Cow::Borrowed(&account),
@@ -250,7 +249,6 @@ fn test_sync() {
     )
     .unwrap();
 
-    println!("==============");
     imap.sync(false).unwrap();
 
     let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();

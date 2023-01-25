@@ -20,13 +20,15 @@ fn test_maildir_backend() {
 
     // set up maildir folders
 
-    let mdir: Maildir = tempdir().unwrap().path().join("himalaya-test-mdir").into();
+    let mdir: Maildir = tempdir().unwrap().path().to_owned().into();
     if let Err(_) = fs::remove_dir_all(mdir.path()) {}
     mdir.create_dirs().unwrap();
 
     let mdir_sub: Maildir = mdir.path().join(".Subdir").into();
     if let Err(_) = fs::remove_dir_all(mdir_sub.path()) {}
     mdir_sub.create_dirs().unwrap();
+
+    let db_path = mdir.path().join(".database.sqlite");
 
     let account_config = AccountConfig {
         name: "account".into(),
@@ -35,7 +37,7 @@ fn test_maildir_backend() {
     };
 
     let mdir = MaildirBackendBuilder::new()
-        .db_path(mdir.path().join(".database.sqlite"))
+        .db_path(db_path.clone())
         .build(
             Cow::Borrowed(&account_config),
             Cow::Owned(MaildirConfig {
@@ -45,7 +47,7 @@ fn test_maildir_backend() {
         .unwrap();
 
     let submdir = MaildirBackendBuilder::new()
-        .db_path(mdir_sub.path().join(".database.sqlite"))
+        .db_path(db_path.clone())
         .build(
             Cow::Borrowed(&account_config),
             Cow::Owned(MaildirConfig {

@@ -8,6 +8,17 @@ use crate::Flag;
 pub struct Flags(pub HashSet<Flag>);
 
 impl Flags {
+    pub fn clone_without_customs(&self) -> Self {
+        Self::from_iter(
+            self.iter()
+                .filter(|f| match f {
+                    Flag::Custom(_) => false,
+                    _ => true,
+                })
+                .cloned(),
+        )
+    }
+
     /// Builds a symbols string.
     pub fn to_symbols_string(&self) -> String {
         let mut flags = String::new();

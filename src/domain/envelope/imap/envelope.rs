@@ -3,11 +3,11 @@
 //! This module provides IMAP types and conversion utilities related
 //! to the envelope.
 
-use std::borrow::Cow;
-
 use chrono::{DateTime, Local, NaiveDateTime};
 use imap::{self, types::Fetch};
+use log::trace;
 use rfc2047_decoder;
+use std::borrow::Cow;
 
 use crate::{
     backend::imap::{Error, Result},
@@ -22,26 +22,28 @@ pub fn from_raw(fetch: &Fetch) -> Result<Envelope> {
             .decode(input)
     };
 
-    let envelope = fetch
-        .envelope()
-        .ok_or_else(|| Error::GetEnvelopeError(fetch.message.to_string()))?;
-
-    let id = fetch.message.to_string();
-
-    let internal_id = fetch
+    let id = fetch
         .uid
         .ok_or_else(|| Error::GetUidError(fetch.message))?
         .to_string();
 
+    let envelope = fetch
+        .envelope()
+        .ok_or_else(|| Error::GetEnvelopeError(id.clone()))?;
+
+    let internal_id = id.clone();
+
     let message_id = String::from_utf8(envelope.message_id.clone().unwrap_or_default().to_vec())
-        .map_err(|err| Error::ParseMessageIdError(err, fetch.message))?;
+        .map_err(|err| Error::ParseMessageIdError(err, id.clone()))?
+        .trim()
+        .to_owned();
 
     let flags = Flags::from(fetch.flags());
 
     let subject = envelope
         .subject
         .as_ref()
-        .map(|subject| decode(subject).map_err(|err| Error::DecodeSubjectError(err, fetch.message)))
+        .map(|subject| decode(subject).map_err(|err| Error::DecodeSubjectError(err, id.clone())))
         .unwrap_or_else(|| Ok(String::default()))?;
 
     let from = envelope
@@ -72,7 +74,7 @@ pub fn from_raw(fetch: &Fetch) -> Result<Envelope> {
                 _ => Err(Error::ParseSenderFromImapEnvelopeError),
             }
         })
-        .ok_or_else(|| Error::GetSenderError(fetch.message))??;
+        .ok_or_else(|| Error::GetSenderError(id.clone()))??;
 
     let date = envelope.date.as_ref().map(|date| {
         let date = decode(date).map_err(Error::DecodeDateFromImapEnvelopeError)?;
@@ -87,13 +89,17 @@ pub fn from_raw(fetch: &Fetch) -> Result<Envelope> {
         None => DateTime::default(),
     };
 
-    Ok(Envelope {
+    let envelope = Envelope {
         id,
         internal_id,
-        flags,
         message_id,
+        flags,
         subject,
         from,
         date,
-    })
+    };
+
+    trace!("imap envelope: {:?}", envelope);
+
+    Ok(envelope)
 }

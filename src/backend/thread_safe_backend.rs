@@ -45,7 +45,6 @@ pub trait ThreadSafeBackend: Backend + Send + Sync {
         let sync_dir = account.sync_dir()?;
 
         let local = MaildirBackendBuilder::new()
-            .url_encoded_folders(true)
             .db_path(sync_dir.join(&account.name).join(".database.sqlite"))
             .build(
                 Cow::Borrowed(account),

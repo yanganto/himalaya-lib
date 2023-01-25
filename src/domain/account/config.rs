@@ -246,6 +246,15 @@ impl AccountConfig {
             }
     }
 
+    pub fn sync_dir_exists(&self) -> bool {
+        match self.sync_dir.as_ref() {
+            Some(dir) => dir.is_dir(),
+            None => data_dir()
+                .map(|dir| dir.join("himalaya").join(&self.name).is_dir())
+                .unwrap_or_default(),
+        }
+    }
+
     pub fn sync_dir(&self) -> Result<PathBuf> {
         match self.sync_dir.as_ref().filter(|dir| dir.is_dir()) {
             Some(dir) => Ok(dir.clone()),
