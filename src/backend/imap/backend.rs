@@ -205,7 +205,7 @@ impl<'a> ImapBackendBuilder {
         imap_config: Cow<'a, ImapConfig>,
     ) -> Result<ImapBackend<'a>> {
         let passwd = imap_config.passwd()?;
-        let sessions_pool: Vec<_> = (0..self.sessions_pool_size).collect();
+        let sessions_pool: Vec<_> = (0..=self.sessions_pool_size).collect();
         let backend = ImapBackend {
             account_config,
             imap_config: imap_config.clone(),
@@ -533,10 +533,9 @@ impl<'a> Backend for ImapBackend<'a> {
         }
 
         let range = if page_size > 0 {
-            let cursor = page * page_size;
-            let end = 1.max(folder_size - cursor.min(folder_size));
-            let begin = end - end.min(page_size);
-            (begin..=end).fold(String::new(), |range, seq| {
+            let begin = folder_size.min(page * page_size + 1);
+            let end = begin + folder_size.min(page_size);
+            (begin..end).fold(String::new(), |range, seq| {
                 if range.is_empty() {
                     seq.to_string()
                 } else {
@@ -601,16 +600,19 @@ impl<'a> Backend for ImapBackend<'a> {
                 .map(|seq| seq.to_string())
                 .collect()
         };
-        println!("uids: {:?}", uids);
         trace!("uids: {uids:?}");
 
         if uids.is_empty() {
             return Ok(Envelopes::default());
         }
 
-        let begin = page * page_size;
-        let end = begin + (page_size - 1);
-        let uid_range = uids[begin..=end.min(uids.len())].join(",");
+        let uid_range = if page_size > 0 {
+            let begin = uids.len().min(page * page_size + 1);
+            let end = begin + uids.len().min(page_size);
+            uids[begin..end].join(",")
+        } else {
+            uids.join(",")
+        };
         trace!("page: {page}");
         trace!("page size: {page_size}");
         trace!("uid range: {uid_range}");

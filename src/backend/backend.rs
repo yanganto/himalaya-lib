@@ -178,11 +178,13 @@ impl<'a> BackendBuilder {
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(imap_config) if self.disable_cache => Ok(Box::new(
-                ImapBackendBuilder::new()
-                    .pool_size(self.sessions_pool_size)
-                    .build(Cow::Borrowed(account_config), Cow::Borrowed(imap_config))?,
-            )),
+            BackendConfig::Imap(imap_config) if !account_config.sync || self.disable_cache => {
+                Ok(Box::new(
+                    ImapBackendBuilder::new()
+                        .pool_size(self.sessions_pool_size)
+                        .build(Cow::Borrowed(account_config), Cow::Borrowed(imap_config))?,
+                ))
+            }
             #[cfg(feature = "imap-backend")]
             BackendConfig::Imap(_) => Ok(Box::new(MaildirBackend::new(
                 Cow::Borrowed(account_config),

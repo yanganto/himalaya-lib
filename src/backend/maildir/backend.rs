@@ -20,7 +20,7 @@ use crate::{
     account, backend, email,
     envelope::maildir::{envelope, envelopes},
     flag::maildir::flags,
-    AccountConfig, Backend, Emails, Envelope, Envelopes, Flags, Folder, Folders, IdMapper,
+    AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders, IdMapper,
     MaildirConfig, ThreadSafeBackend, DEFAULT_INBOX_FOLDER,
 };
 
@@ -395,16 +395,8 @@ impl<'a> Backend for MaildirBackend<'a> {
     }
 
     fn preview_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
-        self.get_emails(folder, ids)
-    }
-
-    fn preview_emails_internal(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
-        self.get_emails_internal(folder, ids)
-    }
-
-    fn get_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
         info!(
-            "getting maildir emails by ids {ids} from folder {folder}",
+            "previewing maildir emails by ids {ids} from folder {folder}",
             ids = ids.join(", "),
         );
 
@@ -441,13 +433,13 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(emails)
     }
 
-    fn get_emails_internal(
+    fn preview_emails_internal(
         &self,
         folder: &str,
         internal_ids: Vec<&str>,
     ) -> backend::Result<Emails> {
         info!(
-            "getting maildir emails by internal ids {ids} from folder {folder}",
+            "previewing maildir emails by internal ids {ids} from folder {folder}",
             ids = internal_ids.join(", "),
         );
 
@@ -473,6 +465,34 @@ impl<'a> Backend for MaildirBackend<'a> {
             .map(|(_, entry)| entry)
             .collect::<Vec<_>>()
             .try_into()?;
+
+        Ok(emails)
+    }
+
+    fn get_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
+        info!(
+            "getting maildir emails by ids {ids} from folder {folder}",
+            ids = ids.join(", "),
+        );
+
+        let emails = self.preview_emails(folder, ids.clone())?;
+        self.add_flags(folder, ids, &Flags::from_iter([Flag::Seen]))?;
+
+        Ok(emails)
+    }
+
+    fn get_emails_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<Emails> {
+        info!(
+            "getting maildir emails by internal ids {ids} from folder {folder}",
+            ids = internal_ids.join(", "),
+        );
+
+        let emails = self.preview_emails_internal(folder, internal_ids.clone())?;
+        self.add_flags_internal(folder, internal_ids, &Flags::from_iter([Flag::Seen]))?;
 
         Ok(emails)
     }
