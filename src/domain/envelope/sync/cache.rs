@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local};
 use log::warn;
-use rusqlite::Connection;
+use rusqlite::{types::Value, Connection};
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
@@ -17,7 +17,7 @@ const CREATE_ENVELOPES_TABLE: &str = "
         message_id  TEXT     NOT NULL,
         account     TEXT     NOT NULL,
         folder      TEXT     NOT NULL,
-        flag        TEXT     NOT NULL,
+        flag        TEXT     DEFAULT NULL,
         sender      TEXT     NOT NULL,
         subject     TEXT     NOT NULL,
         date        DATETIME NOT NULL,
@@ -83,7 +83,11 @@ impl<'a> Cache<'a> {
                     id: row.get(0)?,
                     internal_id: row.get(1)?,
                     message_id: row.get(2)?,
-                    flags: row.get::<usize, String>(5)?.as_str().into(),
+                    flags: row
+                        .get::<usize, Option<String>>(5)?
+                        .unwrap_or_default()
+                        .as_str()
+                        .into(),
                     from: Mailbox::new_nameless(row.get::<usize, String>(6)?),
                     subject: row.get(7)?,
                     date: {
@@ -122,7 +126,7 @@ impl<'a> Cache<'a> {
         A: AsRef<str>,
         F: AsRef<str>,
     {
-        for flag in envelope.flags.iter() {
+        if envelope.flags.is_empty() {
             self.db()?.execute(
                 INSERT_ENVELOPE,
                 (
@@ -131,12 +135,29 @@ impl<'a> Cache<'a> {
                     &envelope.message_id,
                     account.as_ref(),
                     folder.as_ref(),
-                    flag.to_string(),
+                    Value::Null,
                     &envelope.from.addr,
                     &envelope.subject,
                     envelope.date.to_rfc3339(),
                 ),
             )?;
+        } else {
+            for flag in envelope.flags.iter() {
+                self.db()?.execute(
+                    INSERT_ENVELOPE,
+                    (
+                        &envelope.id,
+                        &envelope.internal_id,
+                        &envelope.message_id,
+                        account.as_ref(),
+                        folder.as_ref(),
+                        flag.to_string(),
+                        &envelope.from.addr,
+                        &envelope.subject,
+                        envelope.date.to_rfc3339(),
+                    ),
+                )?;
+            }
         }
 
         Ok(())

@@ -110,10 +110,7 @@ impl IdMapper {
     where
         I: AsRef<str> + ToString,
     {
-        info!(
-            "getting internal id from id {} using id mapper",
-            id.as_ref()
-        );
+        info!("getting internal id from id {}", id.as_ref());
 
         let mut stmt = self.db.prepare(&format!(
             "SELECT internal_id FROM {} WHERE id = ?",

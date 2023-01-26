@@ -252,9 +252,6 @@ impl<'a> Backend for NotmuchBackend<'a> {
     }
 
     fn add_email(&self, _: &str, email: &[u8], flags: &Flags) -> backend::Result<String> {
-        let mut flags = flags.clone();
-        flags.insert(Flag::Seen);
-
         // TODO: find a way to move this to the Backend::connect method.
         let mdir = MaildirBackend::new(
             Cow::Borrowed(&self.account_config),

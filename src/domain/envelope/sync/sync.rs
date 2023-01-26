@@ -125,10 +125,10 @@ where
                     let internal_ids = vec![envelope.internal_id.as_str()];
                     let emails = match source {
                         HunkKindRestricted::Local => {
-                            local.get_emails_internal(folder, internal_ids)
+                            local.preview_emails_internal(folder, internal_ids)
                         }
                         HunkKindRestricted::Remote => {
-                            remote.get_emails_internal(folder, internal_ids)
+                            remote.preview_emails_internal(folder, internal_ids)
                         }
                     }?;
                     let emails = emails.to_vec();

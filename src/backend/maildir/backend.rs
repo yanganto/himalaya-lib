@@ -20,7 +20,7 @@ use crate::{
     account, backend, email,
     envelope::maildir::{envelope, envelopes},
     flag::maildir::flags,
-    AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders, IdMapper,
+    AccountConfig, Backend, Emails, Envelope, Envelopes, Flags, Folder, Folders, IdMapper,
     MaildirConfig, ThreadSafeBackend, DEFAULT_INBOX_FOLDER,
 };
 
@@ -365,9 +365,6 @@ impl<'a> Backend for MaildirBackend<'a> {
             flags = flags.to_string()
         );
 
-        let mut flags = flags.clone();
-        flags.insert(Flag::Seen);
-
         let mdir = self.get_mdir_from_dir(folder)?;
         let internal_id = mdir
             .store_cur_with_flags(email, &flags::to_normalized_string(&flags))
@@ -388,9 +385,6 @@ impl<'a> Backend for MaildirBackend<'a> {
             flags = flags.to_string()
         );
 
-        let mut flags = flags.clone();
-        flags.insert(Flag::Seen);
-
         let mdir = self.get_mdir_from_dir(folder)?;
         let internal_id = mdir
             .store_cur_with_flags(email, &flags::to_normalized_string(&flags))
@@ -398,6 +392,14 @@ impl<'a> Backend for MaildirBackend<'a> {
         self.id_mapper(folder)?.insert(&internal_id)?;
 
         Ok(internal_id)
+    }
+
+    fn preview_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
+        self.get_emails(folder, ids)
+    }
+
+    fn preview_emails_internal(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
+        self.get_emails_internal(folder, ids)
     }
 
     fn get_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {

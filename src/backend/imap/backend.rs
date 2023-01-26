@@ -24,8 +24,7 @@ use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7
 
 use crate::{
     account, backend, email, envelope, process, AccountConfig, Backend, Emails, Envelope,
-    Envelopes, Flag, Flags, Folder, Folders, ImapConfig, MaildirBackend, MaildirBackendBuilder,
-    MaildirConfig, ThreadSafeBackend,
+    Envelopes, Flag, Flags, Folder, Folders, ImapConfig, ThreadSafeBackend,
 };
 
 #[derive(Error, Debug)]
@@ -179,14 +178,12 @@ impl Write for ImapSessionStream {
 pub type ImapSession = imap::Session<ImapSessionStream>;
 
 pub struct ImapBackendBuilder {
-    disable_cache: bool,
     sessions_pool_size: usize,
 }
 
 impl Default for ImapBackendBuilder {
     fn default() -> Self {
         Self {
-            disable_cache: false,
             sessions_pool_size: 1,
         }
     }
@@ -202,54 +199,22 @@ impl<'a> ImapBackendBuilder {
         self
     }
 
-    pub fn disable_cache(mut self, cache: bool) -> Self {
-        self.disable_cache = cache;
-        self
-    }
-
     pub fn build(
         &self,
         account_config: Cow<'a, AccountConfig>,
         imap_config: Cow<'a, ImapConfig>,
     ) -> Result<ImapBackend<'a>> {
         let passwd = imap_config.passwd()?;
-        let backend = if !self.disable_cache && account_config.sync() {
-            let cache = Some(MaildirBackendBuilder::new().build(
-                account_config.clone(),
-                Cow::Owned(MaildirConfig {
-                    root_dir: account_config.sync_dir()?.join(&account_config.name),
-                }),
-            )?);
-
-            ImapBackend {
-                account_config,
-                imap_config: imap_config.clone(),
-                cache,
-                sessions_pool_size: 1,
-                sessions_pool_cursor: Mutex::new(0),
-                sessions_pool: vec![ImapBackend::create_session(
-                    Cow::Borrowed(&imap_config),
-                    &passwd,
-                )
-                .map(|session| Mutex::new(session))?],
-            }
-        } else {
-            let sessions_pool: Vec<_> = (0..self.sessions_pool_size).collect();
-
-            ImapBackend {
-                account_config,
-                imap_config: imap_config.clone(),
-                cache: None,
-                sessions_pool_size: self.sessions_pool_size.max(1),
-                sessions_pool_cursor: Mutex::new(0),
-                sessions_pool: sessions_pool
-                    .par_iter()
-                    .flat_map(|_| {
-                        ImapBackend::create_session(Cow::Borrowed(&imap_config), &passwd)
-                            .map(|session| Mutex::new(session))
-                    })
-                    .collect(),
-            }
+        let sessions_pool: Vec<_> = (0..self.sessions_pool_size).collect();
+        let backend = ImapBackend {
+            account_config,
+            imap_config: imap_config.clone(),
+            sessions_pool_size: self.sessions_pool_size.max(1),
+            sessions_pool_cursor: Mutex::new(0),
+            sessions_pool: sessions_pool
+                .par_iter()
+                .flat_map(|_| ImapBackend::create_session(&imap_config, &passwd).map(Mutex::new))
+                .collect(),
         };
 
         Ok(backend)
@@ -259,7 +224,6 @@ impl<'a> ImapBackendBuilder {
 pub struct ImapBackend<'a> {
     account_config: Cow<'a, AccountConfig>,
     imap_config: Cow<'a, ImapConfig>,
-    cache: Option<MaildirBackend<'a>>,
     sessions_pool_size: usize,
     sessions_pool_cursor: Mutex<usize>,
     sessions_pool: Vec<Mutex<ImapSession>>,
@@ -273,7 +237,7 @@ impl<'a> ImapBackend<'a> {
         ImapBackendBuilder::default().build(account_config, imap_config)
     }
 
-    fn create_session<P>(config: Cow<'a, ImapConfig>, passwd: P) -> Result<ImapSession>
+    fn create_session<P>(config: &'a ImapConfig, passwd: P) -> Result<ImapSession>
     where
         P: AsRef<str>,
     {
@@ -669,9 +633,6 @@ impl<'a> Backend for ImapBackend<'a> {
         let folder_encoded = encode_utf7(folder.to_owned());
         trace!("utf7 encoded folder: {folder_encoded}");
 
-        let mut flags = flags.clone();
-        flags.insert(Flag::Seen);
-
         let mut session = self.session()?;
         let appended = session
             .append(&folder, email)
@@ -701,6 +662,24 @@ impl<'a> Backend for ImapBackend<'a> {
         trace!("uid: {uid}");
 
         Ok(uid.to_string())
+    }
+
+    fn preview_emails(&self, folder: &str, uids: Vec<&str>) -> backend::Result<Emails> {
+        let uids = uids.join(",");
+        info!("previewing imap emails {uids} from folder {folder}");
+
+        let folder_encoded = encode_utf7(folder.to_owned());
+        trace!("utf7 encoded folder: {folder_encoded}");
+
+        let mut session = self.session()?;
+        session
+            .select(&folder_encoded)
+            .map_err(|err| Error::SelectFolderError(err, folder.to_owned()))?;
+        let fetches = session
+            .uid_fetch(&uids, "BODY.PEEK[]")
+            .map_err(|err| Error::FetchEmailsByUidRangeError(err, uids))?;
+
+        Ok(Emails::try_from(fetches)?)
     }
 
     fn get_emails(&self, folder: &str, uids: Vec<&str>) -> backend::Result<Emails> {
@@ -848,14 +827,8 @@ impl<'a> Backend for ImapBackend<'a> {
     }
 
     fn sync(&self, dry_run: bool) -> backend::Result<()> {
-        match self.cache {
-            Some(_) => {
-                info!("imap sync cannot be performed when cache is on, exiting");
-                Ok(())
-            }
-            None => ThreadSafeBackend::sync(self, &self.account_config, dry_run)
-                .map_err(|err| backend::Error::SyncError(Box::new(err), self.name())),
-        }
+        ThreadSafeBackend::sync(self, &self.account_config, dry_run)
+            .map_err(|err| backend::Error::SyncError(Box::new(err), self.name()))
     }
 
     fn as_any(&'static self) -> &(dyn Any) {

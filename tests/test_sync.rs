@@ -26,7 +26,6 @@ fn test_sync() {
 
     let imap = ImapBackendBuilder::new()
         .pool_size(3)
-        .disable_cache(true)
         .build(
             Cow::Borrowed(&account),
             Cow::Owned(ImapConfig {
@@ -82,7 +81,7 @@ fn test_sync() {
             .text_plain_part("B")
             .compile(CompilerBuilder::default())
             .unwrap(),
-        &Flags::from_iter([Flag::Flagged, Flag::Custom("custom".into())]),
+        &Flags::from_iter([Flag::Seen, Flag::Flagged, Flag::Custom("custom".into())]),
     )
     .unwrap();
 

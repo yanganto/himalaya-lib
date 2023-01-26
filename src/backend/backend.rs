@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, id_mapper, AccountConfig, BackendConfig, Emails, Envelope, Envelopes,
-    Flags, Folders, ImapBackendBuilder,
+    Flags, Folders, ImapBackendBuilder, MaildirConfig,
 };
 
 #[cfg(feature = "maildir-backend")]
@@ -75,6 +75,11 @@ pub trait Backend {
     fn add_email(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String>;
     fn add_email_internal(&self, folder: &str, email: &[u8], flags: &Flags) -> Result<String> {
         self.add_email(folder, email, flags)
+    }
+
+    fn preview_emails(&self, folder: &str, ids: Vec<&str>) -> Result<Emails>;
+    fn preview_emails_internal(&self, folder: &str, internal_ids: Vec<&str>) -> Result<Emails> {
+        self.preview_emails(folder, internal_ids)
     }
 
     fn get_emails(&self, folder: &str, ids: Vec<&str>) -> Result<Emails>;
@@ -173,12 +178,18 @@ impl<'a> BackendBuilder {
     ) -> Result<Box<dyn Backend + 'a>> {
         match backend_config {
             #[cfg(feature = "imap-backend")]
-            BackendConfig::Imap(imap_config) => Ok(Box::new(
+            BackendConfig::Imap(imap_config) if self.disable_cache => Ok(Box::new(
                 ImapBackendBuilder::new()
                     .pool_size(self.sessions_pool_size)
-                    .disable_cache(self.disable_cache)
                     .build(Cow::Borrowed(account_config), Cow::Borrowed(imap_config))?,
             )),
+            #[cfg(feature = "imap-backend")]
+            BackendConfig::Imap(_) => Ok(Box::new(MaildirBackend::new(
+                Cow::Borrowed(account_config),
+                Cow::Owned(MaildirConfig {
+                    root_dir: account_config.sync_dir()?.join(&account_config.name),
+                }),
+            )?)),
             #[cfg(feature = "maildir-backend")]
             BackendConfig::Maildir(maildir_config) => Ok(Box::new(MaildirBackend::new(
                 Cow::Borrowed(account_config),
