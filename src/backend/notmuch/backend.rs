@@ -12,6 +12,8 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot get default notmuch database path")]
+    GetDefaultDatabasePathError(#[source] notmuch::Error),
     #[error("cannot store notmuch email")]
     StoreWithFlagsError(maildir::MaildirError),
     #[error("cannot find notmuch email")]
@@ -41,8 +43,10 @@ pub enum Error {
     FindSenderError,
     #[error("cannot parse notmuch message senders {1}")]
     ParseSendersError(#[source] AddressError, String),
-    #[error("cannot open notmuch database")]
-    OpenDbError(#[source] notmuch::Error),
+    #[error("cannot open default notmuch database")]
+    OpenDefaultNotmuchDatabaseError(#[source] notmuch::Error),
+    #[error("cannot open notmuch database at {1}")]
+    OpenNotmuchDatabaseError(#[source] notmuch::Error, PathBuf),
     #[error("cannot close notmuch database")]
     CloseDatabaseError(#[source] notmuch::Error),
     #[error("cannot build notmuch query")]
@@ -104,6 +108,18 @@ impl<'a> NotmuchBackend<'a> {
         NotmuchBackendBuilder::new().build(account_config, backend_config)
     }
 
+    pub fn get_default_db_path() -> Result<PathBuf> {
+        Ok(notmuch::Database::open_with_config(
+            None as Option<PathBuf>,
+            notmuch::DatabaseMode::ReadWrite,
+            None as Option<PathBuf>,
+            None,
+        )
+        .map_err(Error::OpenDefaultNotmuchDatabaseError)?
+        .path()
+        .to_owned())
+    }
+
     pub fn with_db<T, F>(&self, f: F) -> Result<T>
     where
         F: Fn(&notmuch::Database) -> Result<T>,
@@ -114,7 +130,7 @@ impl<'a> NotmuchBackend<'a> {
             None as Option<PathBuf>,
             None,
         )
-        .map_err(Error::OpenDbError)?;
+        .map_err(|err| Error::OpenNotmuchDatabaseError(err, self.backend_config.db_path.clone()))?;
         let res = f(&db)?;
         db.close().map_err(Error::CloseDatabaseError)?;
         Ok(res)
