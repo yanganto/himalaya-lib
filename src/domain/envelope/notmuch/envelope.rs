@@ -4,12 +4,12 @@
 //! related to the envelope
 
 use chrono::{Local, NaiveDateTime};
-use lettre::message::Mailboxes;
-use log::{info, trace, warn};
+use log::{info, trace};
 use notmuch;
 
 use crate::{
     backend::notmuch::{Error, Result},
+    envelope::Mailbox,
     Envelope, Flag,
 };
 
@@ -20,7 +20,6 @@ pub fn from_raw(raw: RawEnvelope) -> Result<Envelope> {
     info!("begin: try building envelope from notmuch parsed mail");
 
     let internal_id = raw.id().to_string();
-    let id = format!("{:x}", md5::compute(&internal_id));
     let subject = raw
         .header("subject")
         .map_err(|err| Error::ParseMsgHeaderError(err, String::from("subject")))?
@@ -31,52 +30,44 @@ pub fn from_raw(raw: RawEnvelope) -> Result<Envelope> {
         .map_err(|err| Error::ParseMsgHeaderError(err, String::from("message-id")))?
         .unwrap_or_default()
         .to_string();
-    let sender = raw
-        .header("from")
-        .map_err(|err| Error::ParseMsgHeaderError(err, String::from("from")))?
-        .ok_or_else(|| Error::FindMsgHeaderError(String::from("from")))?
-        .to_string();
-    let sender: Mailboxes = sender
-        .parse()
-        .map_err(|err| Error::ParseSendersError(err, sender.to_owned()))?;
-    let sender = sender
-        .into_single()
-        .ok_or_else(|| Error::FindSenderError)?
-        .to_string();
+    let from = {
+        let from = raw
+            .header("from")
+            .map_err(|err| Error::ParseMsgHeaderError(err, String::from("from")))?
+            .ok_or_else(|| Error::FindMsgHeaderError(String::from("from")))?
+            .to_string();
+        let addrs =
+            mailparse::addrparse(&from).map_err(|err| Error::ParseSenderError(err, from))?;
+        match addrs.first() {
+            Some(mailparse::MailAddr::Single(single)) => Ok(Mailbox::new(
+                single.display_name.clone(),
+                single.addr.clone(),
+            )),
+            // TODO
+            Some(mailparse::MailAddr::Group(_)) => Err(Error::FindSenderError),
+            None => Err(Error::FindSenderError),
+        }?
+    };
     let date = {
-        let date_string = raw
+        let date = raw
             .header("date")
             .map_err(|err| Error::ParseMsgHeaderError(err, String::from("date")))?
-            .ok_or_else(|| Error::FindMsgHeaderError(String::from("date")))?
+            .ok_or_else(|| Error::FindMsgHeaderError(String::from("from")))?
             .to_string();
-        let date_str = date_string.as_str();
-
-        let timestamp = match mailparse::dateparse(date_str) {
-            Ok(timestamp) => Some(timestamp),
-            Err(err) => {
-                warn!("invalid date {}, skipping it: {}", date_str, err);
-                None
-            }
-        };
-
-        let date = timestamp
-            .and_then(|timestamp| NaiveDateTime::from_timestamp_opt(timestamp, 0))
+        let timestamp = mailparse::dateparse(&date)
+            .map_err(|err| Error::ParseTimestampFromEnvelopeError(err, date))?;
+        let date = NaiveDateTime::from_timestamp_opt(timestamp, 0)
             .and_then(|date| date.and_local_timezone(Local).earliest());
-
-        if let None = date {
-            warn!("invalid date {}, skipping it", date_str);
-        }
-
-        date
+        date.unwrap_or_default()
     };
 
     let envelope = Envelope {
-        id,
+        id: String::new(),
         internal_id,
         flags: raw.tags().map(Flag::from).collect(),
         message_id,
         subject,
-        sender,
+        from,
         date,
     };
     trace!("envelope: {:?}", envelope);

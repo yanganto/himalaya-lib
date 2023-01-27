@@ -153,6 +153,27 @@ impl<'a> MaildirBackend<'a> {
             .map(Maildir::from)
     }
 
+    pub fn get_email_path<F, I>(&self, folder: F, id: I) -> Result<PathBuf>
+    where
+        F: AsRef<str> + ToString,
+        I: AsRef<str> + ToString,
+    {
+        let internal_id = self.id_mapper(folder.as_ref())?.get_internal_id(id)?;
+        self.get_email_path_internal(internal_id)
+    }
+
+    pub fn get_email_path_internal<I>(&self, internal_id: I) -> Result<PathBuf>
+    where
+        I: AsRef<str> + ToString,
+    {
+        Ok(self
+            .mdir
+            .find(internal_id.as_ref())
+            .ok_or_else(|| Error::GetEnvelopeError(internal_id.to_string()))?
+            .path()
+            .to_owned())
+    }
+
     pub fn encode_folder<F>(&self, folder: F) -> String
     where
         F: AsRef<str> + ToString,

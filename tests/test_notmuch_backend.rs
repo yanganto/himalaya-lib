@@ -25,6 +25,7 @@ fn test_notmuch_backend() {
     Database::create(mdir.path()).unwrap();
 
     let account_config = AccountConfig {
+        name: "account".into(),
         folder_aliases: HashMap::from_iter([("inbox".into(), "*".into())]),
         ..AccountConfig::default()
     };
@@ -46,10 +47,10 @@ fn test_notmuch_backend() {
         .compile(CompilerBuilder::default())
         .unwrap();
     let flags = Flags::from_iter([Flag::custom("inbox"), Flag::Seen]);
-    let hash = notmuch.add_email("", &email, &flags).unwrap();
+    let id = notmuch.add_email("", &email, &flags).unwrap();
 
     // check that the added message exists
-    let emails = notmuch.get_emails("", vec![&hash]).unwrap();
+    let emails = notmuch.get_emails("", vec![&id]).unwrap();
     assert_eq!(
         concat_line!(
             "From: alice@localhost",
@@ -71,7 +72,7 @@ fn test_notmuch_backend() {
     let envelopes = notmuch.list_envelopes("inbox", 10, 0).unwrap();
     let envelope = envelopes.first().unwrap();
     assert_eq!(1, envelopes.len());
-    assert_eq!("alice@localhost", envelope.sender);
+    assert_eq!("alice@localhost", envelope.from.addr);
     assert_eq!("Plain message!", envelope.subject);
 
     // check that a flag can be added to the message
@@ -107,6 +108,6 @@ fn test_notmuch_backend() {
     assert!(!envelope.flags.contains(&Flag::Answered));
 
     // check that the message can be deleted
-    notmuch.delete_emails("", vec![&hash]).unwrap();
-    assert!(notmuch.get_emails("inbox", vec![&hash]).is_err());
+    notmuch.delete_emails("", vec![&id]).unwrap();
+    assert!(notmuch.get_emails("inbox", vec![&id]).is_err());
 }
