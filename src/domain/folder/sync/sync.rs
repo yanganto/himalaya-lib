@@ -1,7 +1,7 @@
 use log::{info, trace};
 use std::collections::HashSet;
 
-use crate::{Backend, MaildirBackend, ThreadSafeBackend};
+use crate::{Backend, MaildirBackend};
 
 use super::{Cache, Result};
 
@@ -31,7 +31,7 @@ pub fn sync_all<B>(
     dry_run: bool,
 ) -> Result<FoldersName>
 where
-    B: ThreadSafeBackend + ?Sized,
+    B: Backend + ?Sized,
 {
     info!("starting folders sync");
 

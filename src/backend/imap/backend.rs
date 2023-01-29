@@ -24,7 +24,7 @@ use utf7_imap::{decode_utf7_imap as decode_utf7, encode_utf7_imap as encode_utf7
 
 use crate::{
     account, backend, email, envelope, process, AccountConfig, Backend, Emails, Envelope,
-    Envelopes, Flag, Flags, Folder, Folders, ImapConfig, ThreadSafeBackend,
+    Envelopes, Flag, Flags, Folder, Folders, ImapConfig,
 };
 
 #[derive(Error, Debug)]
@@ -400,6 +400,10 @@ impl<'a> ImapBackend<'a> {
 
             debug!("end loop");
         }
+    }
+
+    pub fn sync(&self, dry_run: bool) -> backend::Result<()> {
+        Backend::sync(self, &self.account_config, dry_run)
     }
 }
 
@@ -828,14 +832,7 @@ impl<'a> Backend for ImapBackend<'a> {
         Ok(())
     }
 
-    fn sync(&self, dry_run: bool) -> backend::Result<()> {
-        ThreadSafeBackend::sync(self, &self.account_config, dry_run)
-            .map_err(|err| backend::Error::SyncError(Box::new(err), self.name()))
-    }
-
     fn as_any(&'static self) -> &(dyn Any) {
         self
     }
 }
-
-impl ThreadSafeBackend for ImapBackend<'_> {}

@@ -1,7 +1,6 @@
 mod backend;
 mod config;
 pub mod id_mapper;
-mod thread_safe_backend;
 
 #[cfg(feature = "imap-backend")]
 pub mod imap;
@@ -19,4 +18,3 @@ pub use self::imap::{ImapBackend, ImapBackendBuilder, ImapConfig};
 pub use self::maildir::{MaildirBackend, MaildirBackendBuilder, MaildirConfig};
 #[cfg(feature = "notmuch-backend")]
 pub use self::notmuch::{NotmuchBackend, NotmuchConfig};
-pub use self::thread_safe_backend::ThreadSafeBackend;

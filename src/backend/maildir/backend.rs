@@ -21,7 +21,7 @@ use crate::{
     envelope::maildir::{envelope, envelopes},
     flag::maildir::flags,
     AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders, IdMapper,
-    MaildirConfig, ThreadSafeBackend, DEFAULT_INBOX_FOLDER,
+    MaildirConfig, DEFAULT_INBOX_FOLDER,
 };
 
 #[derive(Debug, Error)]
@@ -200,6 +200,10 @@ impl<'a> MaildirBackend<'a> {
         let id_mapper = IdMapper::new(db, &self.account_config.name, folder.as_ref())?;
 
         Ok(id_mapper)
+    }
+
+    pub fn sync(&self, dry_run: bool) -> backend::Result<()> {
+        Backend::sync(self, &self.account_config, dry_run)
     }
 }
 
@@ -799,17 +803,10 @@ impl<'a> Backend for MaildirBackend<'a> {
         Ok(())
     }
 
-    fn sync(&self, dry_run: bool) -> backend::Result<()> {
-        ThreadSafeBackend::sync(self, &self.account_config, dry_run)
-            .map_err(|err| backend::Error::SyncError(Box::new(err), self.name()))
-    }
-
     fn as_any(&'static self) -> &(dyn Any) {
         self
     }
 }
-
-impl ThreadSafeBackend for MaildirBackend<'_> {}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MaildirBackendBuilder {

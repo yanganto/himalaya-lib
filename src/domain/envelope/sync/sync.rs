@@ -2,7 +2,7 @@ use log::{debug, info, trace, warn};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::{flag, Backend, Envelope, MaildirBackend, ThreadSafeBackend};
+use crate::{flag, Backend, Envelope, MaildirBackend};
 
 use super::{Cache, Error, Result};
 
@@ -47,7 +47,7 @@ pub fn sync_all<F, B>(
 ) -> Result<()>
 where
     F: AsRef<str>,
-    B: ThreadSafeBackend + ?Sized,
+    B: Backend + ?Sized,
 {
     info!("starting envelopes sync, folder {}", folder.as_ref());
 
