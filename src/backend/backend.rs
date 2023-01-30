@@ -143,6 +143,10 @@ pub trait Backend: Sync + Send {
         self.remove_flags(folder, internal_ids, flags)
     }
 
+    fn close(&self) -> Result<()> {
+        Ok(())
+    }
+
     // INFO: for downcasting purpose
     fn as_any(&'static self) -> &(dyn Any);
 }

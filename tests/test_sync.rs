@@ -262,5 +262,5 @@ fn test_sync() {
     let cached_imap_envelopes = cache.list_remote_envelopes("INBOX").unwrap();
     assert_eq!(cached_imap_envelopes, imap_envelopes);
 
-    if let Err(_) = imap.close_sessions() {};
+    if let Err(_) = imap.close() {};
 }

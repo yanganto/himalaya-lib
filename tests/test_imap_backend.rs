@@ -121,5 +121,5 @@ fn test_imap_backend() {
     imap.delete_emails("Отправленные", vec![&id]).unwrap();
     assert!(imap.get_emails("Отправленные", vec![&id]).is_err());
 
-    if let Err(_) = imap.close_sessions() {};
+    if let Err(_) = imap.close() {};
 }

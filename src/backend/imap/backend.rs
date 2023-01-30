@@ -287,17 +287,6 @@ impl<'a> ImapBackend<'a> {
             .map_err(|err| Error::LockSessionError(err.to_string()))
     }
 
-    pub fn close_sessions(&self) -> Result<()> {
-        for session in &self.sessions_pool {
-            let mut session = session
-                .lock()
-                .map_err(|err| Error::LockSessionError(err.to_string()))?;
-            session.close().map_err(Error::CloseImapSessionError)?;
-        }
-
-        Ok(())
-    }
-
     fn search_new_msgs(&self, session: &mut ImapSession, query: &str) -> Result<Vec<u32>> {
         let uids: Vec<u32> = session
             .uid_search(query)
@@ -824,6 +813,17 @@ impl<'a> Backend for ImapBackend<'a> {
         session
             .expunge()
             .map_err(|err| Error::ExpungeFolderError(err, folder.to_owned()))?;
+
+        Ok(())
+    }
+
+    fn close(&self) -> backend::Result<()> {
+        self.sessions_pool.par_iter().try_for_each(|session| {
+            let mut session = session
+                .lock()
+                .map_err(|err| Error::LockSessionError(err.to_string()))?;
+            session.logout().map_err(Error::CloseImapSessionError)
+        })?;
 
         Ok(())
     }
