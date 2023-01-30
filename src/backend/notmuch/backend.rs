@@ -6,8 +6,8 @@ use thiserror::Error;
 use crate::{
     account, backend, email,
     envelope::notmuch::{envelope, envelopes},
-    id_mapper, AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders,
-    IdMapper, NotmuchConfig,
+    id_mapper, AccountConfig, Backend, BackendSyncBuilder, Emails, Envelope, Envelopes, Flag,
+    Flags, Folder, Folders, IdMapper, NotmuchConfig,
 };
 
 #[derive(Debug, Error)]
@@ -180,8 +180,8 @@ impl<'a> NotmuchBackend<'a> {
         Ok(envelopes)
     }
 
-    pub fn sync(&self, dry_run: bool) -> backend::Result<()> {
-        Backend::sync(self, &self.account_config, dry_run)
+    pub fn sync_builder(&'a self) -> BackendSyncBuilder<'a, Self> {
+        BackendSyncBuilder::new(self, &self.account_config)
     }
 }
 

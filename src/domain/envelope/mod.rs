@@ -10,4 +10,4 @@ pub mod sync;
 
 pub use self::envelope::*;
 pub use self::envelopes::*;
-pub use self::sync::sync_all;
+pub use self::sync::SyncBuilder;

@@ -1,10 +1,7 @@
 use chrono::{DateTime, Local};
 use log::warn;
 use rusqlite::{types::Value, Connection};
-use std::{
-    borrow::Cow,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
 use crate::{envelope::Mailbox, AccountConfig, Envelope, Envelopes};
 
@@ -47,7 +44,7 @@ const SELECT_ENVELOPES: &str = "
 ";
 
 pub struct Cache<'a> {
-    account_config: Cow<'a, AccountConfig>,
+    account_config: &'a AccountConfig,
     db_path: PathBuf,
 }
 
@@ -60,14 +57,11 @@ impl<'a> Cache<'a> {
         Ok(db)
     }
 
-    pub fn new<P>(account_config: Cow<'a, AccountConfig>, sync_dir: P) -> Self
-    where
-        P: AsRef<Path>,
-    {
-        Self {
+    pub fn new(account_config: &'a AccountConfig) -> Result<Self> {
+        Ok(Self {
             account_config,
-            db_path: sync_dir.as_ref().join(".database.sqlite"),
-        }
+            db_path: account_config.sync_dir()?.join(".database.sqlite"),
+        })
     }
 
     fn list_envelopes<A, F>(&self, account: A, folder: F) -> Result<Envelopes>

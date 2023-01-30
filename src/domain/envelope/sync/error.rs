@@ -2,7 +2,7 @@ use rusqlite;
 use std::result;
 use thiserror::Error;
 
-use crate::{backend, email};
+use crate::{account, backend, email};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -10,11 +10,13 @@ pub enum Error {
     FindEmailError(String),
 
     #[error(transparent)]
-    BackendError(#[from] backend::Error),
+    ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     CacheError(#[from] rusqlite::Error),
     #[error(transparent)]
     EmailError(#[from] email::Error),
+    #[error(transparent)]
+    BackendError(#[from] Box<backend::Error>),
 }
 
 pub type Result<T> = result::Result<T, Error>;

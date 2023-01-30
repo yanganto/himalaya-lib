@@ -33,9 +33,9 @@ pub enum Error {
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
     #[error(transparent)]
-    SyncFoldersError(#[from] Box<folder::sync::Error>),
+    SyncFoldersError(#[from] folder::sync::Error),
     #[error(transparent)]
-    SyncEnvelopesError(#[from] Box<envelope::sync::Error>),
+    SyncEnvelopesError(#[from] envelope::sync::Error),
 
     #[cfg(feature = "imap-backend")]
     #[error(transparent)]
@@ -143,47 +143,105 @@ pub trait Backend: Sync + Send {
         self.remove_flags(folder, internal_ids, flags)
     }
 
-    fn sync(&self, account: &AccountConfig, dry_run: bool) -> Result<()> {
+    // INFO: for downcasting purpose
+    fn as_any(&'static self) -> &(dyn Any);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BackendSyncProgressEvent {
+    GetLocalCachedFolders,
+    GetLocalFolders,
+    GetRemoteCachedFolders,
+    GetRemoteFolders,
+    BuildFoldersPatch,
+    ProcessFoldersPatch(usize),
+    ProcessFolderHunk(String),
+
+    StartEnvelopesSync(String, usize, usize),
+    GetLocalCachedEnvelopes,
+    GetLocalEnvelopes,
+    GetRemoteCachedEnvelopes,
+    GetRemoteEnvelopes,
+    BuildEnvelopesPatch,
+    ProcessEnvelopesPatch(usize),
+    ProcessEnvelopeHunk(String),
+}
+
+pub struct BackendSyncBuilder<'a> {
+    account_config: &'a AccountConfig,
+    on_progress: Box<dyn Fn(BackendSyncProgressEvent) -> Result<()> + Sync + Send + 'a>,
+    dry_run: bool,
+}
+
+impl<'a> BackendSyncBuilder<'a> {
+    pub fn new(account_config: &'a AccountConfig) -> Self {
+        Self {
+            account_config,
+            on_progress: Box::new(|_| Ok(())),
+            dry_run: false,
+        }
+    }
+
+    pub fn on_progress<F>(mut self, f: F) -> Self
+    where
+        F: Fn(BackendSyncProgressEvent) -> Result<()> + Sync + Send + 'a,
+    {
+        self.on_progress = Box::new(f);
+        self
+    }
+
+    pub fn dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    pub fn sync(&self, remote: &dyn Backend) -> Result<()> {
         info!("starting synchronization");
 
-        if !account.sync {
-            info!(
-                "synchronization not enabled for account {}, exiting",
-                account.name
-            );
+        let name = &self.account_config.name;
+        if !self.account_config.sync {
+            info!("synchronization not enabled for account {}, exiting", name);
             return Ok(());
         }
 
-        let lock_path = LockPath::Tmp(format!("himalaya-sync-{}.lock", self.name()));
+        let sync_dir = self.account_config.sync_dir()?;
+        let lock_path = LockPath::Tmp(format!("himalaya-sync-{}.lock", name));
         let guard =
-            lock(&lock_path).map_err(|err| Error::SyncAccountLockError(err, self.name()))?;
+            lock(&lock_path).map_err(|err| Error::SyncAccountLockError(err, name.to_owned()))?;
 
-        let sync_dir = account.sync_dir()?;
+        let progress = &self.on_progress;
 
         let local = MaildirBackendBuilder::new()
-            .db_path(sync_dir.join(&account.name).join(".database.sqlite"))
+            .db_path(sync_dir.join(name).join(".database.sqlite"))
             .build(
-                Cow::Borrowed(account),
+                Cow::Borrowed(self.account_config),
                 Cow::Owned(MaildirConfig {
-                    root_dir: sync_dir.join(&account.name),
+                    root_dir: sync_dir.join(name),
                 }),
             )?;
 
-        let cache = folder::sync::Cache::new(Cow::Borrowed(account), &sync_dir);
-        let folders = folder::sync_all(&cache, &local, self, dry_run).map_err(Box::new)?;
+        let folders = folder::SyncBuilder::new(self.account_config)
+            .on_progress(|data| Ok(progress(data).map_err(Box::new)?))
+            .dry_run(self.dry_run)
+            .sync(&local, remote)?;
 
-        let cache = envelope::sync::Cache::new(Cow::Borrowed(account), &sync_dir);
-        for folder in &folders {
-            envelope::sync_all(folder, &cache, &local, self, dry_run).map_err(Box::new)?;
+        let envelopes = envelope::SyncBuilder::new(self.account_config)
+            .on_progress(|data| Ok(progress(data).map_err(Box::new)?))
+            .dry_run(self.dry_run);
+
+        for (folder_num, folder) in folders.iter().enumerate() {
+            progress(BackendSyncProgressEvent::StartEnvelopesSync(
+                folder.clone(),
+                folder_num + 1,
+                folders.len(),
+            ))?;
+            envelopes.sync(folder, &local, remote)?;
         }
 
         drop(guard);
 
         Ok(())
     }
-
-    // INFO: for downcasting purpose
-    fn as_any(&'static self) -> &(dyn Any);
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

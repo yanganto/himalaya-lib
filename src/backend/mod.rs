@@ -9,7 +9,9 @@ pub mod maildir;
 #[cfg(feature = "notmuch-backend")]
 pub mod notmuch;
 
-pub use self::backend::{Backend, BackendBuilder, Error, Result};
+pub use self::backend::{
+    Backend, BackendBuilder, BackendSyncBuilder, BackendSyncProgressEvent, Error, Result,
+};
 pub use self::config::BackendConfig;
 pub use self::id_mapper::IdMapper;
 #[cfg(feature = "imap-backend")]

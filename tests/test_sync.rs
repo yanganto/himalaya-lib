@@ -3,8 +3,9 @@ use std::{borrow::Cow, thread, time::Duration};
 use tempfile::tempdir;
 
 use himalaya_lib::{
-    envelope, folder, AccountConfig, Backend, CompilerBuilder, Flag, Flags, ImapBackendBuilder,
-    ImapConfig, MaildirBackendBuilder, MaildirConfig, TplBuilder, DEFAULT_INBOX_FOLDER,
+    envelope, folder, AccountConfig, Backend, BackendSyncBuilder, CompilerBuilder, Flag, Flags,
+    ImapBackendBuilder, ImapConfig, MaildirBackendBuilder, MaildirConfig, TplBuilder,
+    DEFAULT_INBOX_FOLDER,
 };
 
 #[test]
@@ -152,8 +153,9 @@ fn test_sync() {
     // sync imap account twice in a row to see if all work as expected
     // without duplicate items
 
-    imap.sync(false).unwrap();
-    imap.sync(false).unwrap();
+    let sync_builder = BackendSyncBuilder::new(&account);
+    sync_builder.sync(&imap).unwrap();
+    sync_builder.sync(&imap).unwrap();
 
     // check folders integrity
 
@@ -202,7 +204,7 @@ fn test_sync() {
 
     // check folders cache integrity
 
-    let cache = folder::sync::Cache::new(Cow::Borrowed(&account), &sync_dir);
+    let cache = folder::sync::Cache::new(&account).unwrap();
 
     let local_folders_cached = cache.list_local_folders().unwrap();
     assert!(local_folders_cached.contains("INBOX"));
@@ -214,7 +216,7 @@ fn test_sync() {
 
     // check envelopes cache integrity
 
-    let cache = envelope::sync::Cache::new(Cow::Borrowed(&account), &sync_dir);
+    let cache = envelope::sync::Cache::new(&account).unwrap();
 
     let mdir_inbox_envelopes_cached = cache.list_local_envelopes("INBOX").unwrap();
     let imap_inbox_envelopes_cached = cache.list_remote_envelopes("INBOX").unwrap();
@@ -248,7 +250,7 @@ fn test_sync() {
     )
     .unwrap();
 
-    imap.sync(false).unwrap();
+    sync_builder.sync(&imap).unwrap();
 
     let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
     let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();

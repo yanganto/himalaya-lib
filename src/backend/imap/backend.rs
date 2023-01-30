@@ -401,10 +401,6 @@ impl<'a> ImapBackend<'a> {
             debug!("end loop");
         }
     }
-
-    pub fn sync(&self, dry_run: bool) -> backend::Result<()> {
-        Backend::sync(self, &self.account_config, dry_run)
-    }
 }
 
 impl<'a> Backend for ImapBackend<'a> {
