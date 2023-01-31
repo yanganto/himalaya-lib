@@ -5,10 +5,10 @@ use crate::{AccountConfig, Backend, BackendSyncProgressEvent, MaildirBackend};
 
 use super::{Cache, Result};
 
-pub(super) type FoldersName = HashSet<FolderName>;
-type FolderName = String;
-type Patch = Vec<Hunk>;
-type Target = HunkKind;
+pub type FoldersName = HashSet<FolderName>;
+pub type FolderName = String;
+pub type Patch = Vec<Hunk>;
+pub type Target = HunkKind;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HunkKind {
@@ -38,8 +38,8 @@ pub enum Hunk {
 impl fmt::Display for Hunk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CreateFolder(name, target) => write!(f, "Adding folder {name} to {target}…"),
-            Self::DeleteFolder(name, target) => write!(f, "Removing folder {name} from {target}…"),
+            Self::CreateFolder(name, target) => write!(f, "Adding folder {name} to {target}"),
+            Self::DeleteFolder(name, target) => write!(f, "Removing folder {name} from {target}"),
         }
     }
 }
@@ -72,7 +72,11 @@ impl<'a> SyncBuilder<'a> {
         self
     }
 
-    pub fn sync(&self, local: &MaildirBackend, remote: &dyn Backend) -> Result<FoldersName> {
+    pub fn sync(
+        &self,
+        local: &MaildirBackend,
+        remote: &dyn Backend,
+    ) -> Result<(Patch, FoldersName)> {
         info!("starting folders sync");
 
         let progress = &self.on_progress;
@@ -134,7 +138,7 @@ impl<'a> SyncBuilder<'a> {
         } else {
             let patch_len = patch.len();
 
-            for (hunk_num, hunk) in patch.into_iter().enumerate() {
+            for (hunk_num, hunk) in patch.iter().enumerate() {
                 debug!(
                     "applying folders patch, hunk {}/{}",
                     hunk_num + 1,
@@ -187,7 +191,7 @@ impl<'a> SyncBuilder<'a> {
 
         trace!("folders: {:#?}", folders);
 
-        Ok(folders)
+        Ok((patch, folders))
     }
 }
 

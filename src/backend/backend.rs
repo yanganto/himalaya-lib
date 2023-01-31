@@ -25,7 +25,8 @@ pub enum Error {
     BuildBackendError,
     #[error("cannot lock synchronization for account {1}")]
     SyncAccountLockError(io::Error, String),
-
+    #[error("synchronization not enabled for account {0}")]
+    SyncNotEnabled(String),
     #[error(transparent)]
     EmailError(#[from] email::Error),
     #[error(transparent)]
@@ -199,21 +200,21 @@ impl<'a> BackendSyncBuilder<'a> {
         self
     }
 
-    pub fn sync(&self, remote: &dyn Backend) -> Result<()> {
-        info!("starting synchronization");
-
+    pub fn sync(
+        &self,
+        remote: &dyn Backend,
+    ) -> Result<(folder::sync::Patch, envelope::sync::Patch)> {
         let name = &self.account_config.name;
         if !self.account_config.sync {
-            info!("synchronization not enabled for account {}, exiting", name);
-            return Ok(());
+            return Err(Error::SyncNotEnabled(name.clone()));
         }
 
+        info!("starting synchronization");
+        let progress = &self.on_progress;
         let sync_dir = self.account_config.sync_dir()?;
         let lock_path = LockPath::Tmp(format!("himalaya-sync-{}.lock", name));
         let guard =
             lock(&lock_path).map_err(|err| Error::SyncAccountLockError(err, name.to_owned()))?;
-
-        let progress = &self.on_progress;
 
         let local = MaildirBackendBuilder::new()
             .db_path(sync_dir.join(name).join(".database.sqlite"))
@@ -224,11 +225,12 @@ impl<'a> BackendSyncBuilder<'a> {
                 }),
             )?;
 
-        let folders = folder::SyncBuilder::new(self.account_config)
+        let (folders_patch, folders) = folder::SyncBuilder::new(self.account_config)
             .on_progress(|data| Ok(progress(data).map_err(Box::new)?))
             .dry_run(self.dry_run)
             .sync(&local, remote)?;
 
+        let mut envelopes_patch: envelope::sync::Patch = vec![];
         let envelopes = envelope::SyncBuilder::new(self.account_config)
             .on_progress(|data| Ok(progress(data).map_err(Box::new)?))
             .dry_run(self.dry_run);
@@ -239,12 +241,12 @@ impl<'a> BackendSyncBuilder<'a> {
                 folder_num + 1,
                 folders.len(),
             ))?;
-            envelopes.sync(folder, &local, remote)?;
+            envelopes_patch.extend(envelopes.sync(folder, &local, remote)?);
         }
 
         drop(guard);
 
-        Ok(())
+        Ok((folders_patch, envelopes_patch))
     }
 }
 

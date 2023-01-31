@@ -63,22 +63,22 @@ impl fmt::Display for Hunk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CacheEnvelope(folder, id, source) => {
-                write!(f, "Adding envelope {id} to {source} cache folder {folder}…",)
+                write!(f, "Adding envelope {id} to {source} cache folder {folder}",)
             }
             Self::CopyEmail(folder, envelope, source, target) => {
                 write!(
                     f,
-                    "Copying {source} envelope {id} to {target} folder {folder}…",
+                    "Copying {source} envelope {id} to {target} folder {folder}",
                     id = envelope.id,
                 )
             }
             Self::RemoveEmail(folder, id, target) => {
-                write!(f, "Removing envelope {id} from {target} folder {folder}…")
+                write!(f, "Removing envelope {id} from {target} folder {folder}")
             }
             Self::SetFlags(folder, envelope, target) => {
                 write!(
                     f,
-                    "Setting flags {flags} to {target} envelope from folder {folder}…",
+                    "Setting flags {flags} to {target} envelope from folder {folder}",
                     flags = envelope.flags.to_string(),
                 )
             }
@@ -86,7 +86,7 @@ impl fmt::Display for Hunk {
     }
 }
 
-type Patch = Vec<Vec<Hunk>>;
+pub type Patch = Vec<Vec<Hunk>>;
 
 pub struct SyncBuilder<'a> {
     account_config: &'a AccountConfig,
@@ -116,7 +116,7 @@ impl<'a> SyncBuilder<'a> {
         self
     }
 
-    pub fn sync<F>(&self, folder: F, local: &MaildirBackend, remote: &dyn Backend) -> Result<()>
+    pub fn sync<F>(&self, folder: F, local: &MaildirBackend, remote: &dyn Backend) -> Result<Patch>
     where
         F: ToString,
     {
@@ -142,7 +142,13 @@ impl<'a> SyncBuilder<'a> {
         let local_envelopes: Envelopes = HashMap::from_iter(
             local
                 .list_envelopes(&folder, 0, 0)
-                .map_err(Box::new)?
+                .or_else(|err| {
+                    if self.dry_run {
+                        Ok(Default::default())
+                    } else {
+                        Err(Box::new(err))
+                    }
+                })?
                 .iter()
                 .map(|envelope| {
                     (
@@ -170,7 +176,13 @@ impl<'a> SyncBuilder<'a> {
         let remote_envelopes: Envelopes = HashMap::from_iter(
             remote
                 .list_envelopes(&folder, 0, 0)
-                .map_err(Box::new)?
+                .or_else(|err| {
+                    if self.dry_run {
+                        Ok(Default::default())
+                    } else {
+                        Err(Box::new(err))
+                    }
+                })?
                 .iter()
                 .map(|envelope| {
                     (
@@ -307,10 +319,10 @@ impl<'a> SyncBuilder<'a> {
                 Result::Ok(())
             };
 
-            let patch = patch.chunks(10);
-            let patch_chunks_len = patch.len();
+            let patch_chunks = patch.chunks(10);
+            let patch_chunks_len = patch_chunks.len();
 
-            for (batch_num, batch) in patch.enumerate() {
+            for (batch_num, batch) in patch_chunks.enumerate() {
                 debug!(
                     "processing envelopes patch, batch {}/{}",
                     batch_num + 1,
@@ -340,7 +352,7 @@ impl<'a> SyncBuilder<'a> {
             }
         }
 
-        Ok(())
+        Ok(patch)
     }
 }
 
