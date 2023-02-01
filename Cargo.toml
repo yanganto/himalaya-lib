@@ -17,6 +17,7 @@ default = ["imap-backend", "maildir-backend", "smtp-sender"]
 concat-with = "0.2"
 env_logger = "0.10"
 tempfile = "3.3"
+criterion = "0.4"
 
 [dependencies]
 ammonia = "3.2"

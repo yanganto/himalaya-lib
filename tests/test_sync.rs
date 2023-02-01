@@ -26,7 +26,7 @@ fn test_sync() {
     // set up imap backend
 
     let imap = ImapBackendBuilder::new()
-        .pool_size(3)
+        .pool_size(1)
         .build(
             Cow::Borrowed(&account),
             Cow::Owned(ImapConfig {
@@ -262,5 +262,5 @@ fn test_sync() {
     let cached_imap_envelopes = cache.list_remote_envelopes("INBOX").unwrap();
     assert_eq!(cached_imap_envelopes, imap_envelopes);
 
-    if let Err(_) = imap.close() {};
+    imap.close().unwrap();
 }

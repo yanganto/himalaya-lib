@@ -319,37 +319,27 @@ impl<'a> SyncBuilder<'a> {
                 Result::Ok(())
             };
 
-            let patch_chunks = patch.chunks(10);
-            let patch_chunks_len = patch_chunks.len();
+            patch.par_iter().try_for_each(|hunks| {
+                for hunk in hunks {
+                    trace!("processing hunk: {hunk:#?}");
 
-            for (batch_num, batch) in patch_chunks.enumerate() {
-                debug!(
-                    "processing envelopes patch, batch {}/{}",
-                    batch_num + 1,
-                    patch_chunks_len
-                );
+                    progress(BackendSyncProgressEvent::ProcessEnvelopeHunk(
+                        hunk.to_string(),
+                    ))?;
 
-                batch.par_iter().try_for_each(|hunks| {
-                    for hunk in hunks {
-                        trace!("processing hunk: {hunk:#?}");
-                        progress(BackendSyncProgressEvent::ProcessEnvelopeHunk(
-                            hunk.to_string(),
-                        ))?;
-
-                        match process_hunk(hunk) {
-                            Ok(()) => (),
-                            Err(err) => {
-                                warn!(
-                                    "error while processing hunk {:?}, skipping it: {:?}",
-                                    hunk, err
-                                );
-                            }
+                    match process_hunk(hunk) {
+                        Ok(()) => (),
+                        Err(err) => {
+                            warn!(
+                                "error while processing hunk {:?}, skipping it: {:?}",
+                                hunk, err
+                            );
                         }
                     }
+                }
 
-                    Result::Ok(())
-                })?;
-            }
+                Result::Ok(())
+            })?;
         }
 
         Ok(patch)

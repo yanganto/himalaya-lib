@@ -271,17 +271,21 @@ impl<'a> ImapBackend<'a> {
     }
 
     pub fn session(&self) -> Result<MutexGuard<ImapSession>> {
-        let mut cursor = self
-            .sessions_pool_cursor
-            .lock()
-            .map_err(|err| Error::LockSessionsPoolCursorError(err.to_string()))?;
-        let session = self
-            .sessions_pool
-            .get(*cursor)
-            .ok_or(Error::FindSessionByCursorError(*cursor))?;
-        // TODO: find a way to get the next available connection
-        // instead of the next one in the list
-        *cursor = (*cursor + 1) % self.sessions_pool_size;
+        let session = {
+            let mut cursor = self
+                .sessions_pool_cursor
+                .lock()
+                .map_err(|err| Error::LockSessionsPoolCursorError(err.to_string()))?;
+            let session = self
+                .sessions_pool
+                .get(*cursor)
+                .ok_or(Error::FindSessionByCursorError(*cursor))?;
+            // TODO: find a way to get the next available connection
+            // instead of the next one in the list
+            *cursor = (*cursor + 1) % self.sessions_pool_size;
+            session
+        };
+
         session
             .lock()
             .map_err(|err| Error::LockSessionError(err.to_string()))
