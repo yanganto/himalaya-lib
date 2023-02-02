@@ -1,8 +1,4 @@
-use rusqlite::Connection;
 pub use rusqlite::Error;
-use std::path::PathBuf;
-
-use crate::AccountConfig;
 
 use super::{FoldersName, Result};
 
@@ -31,33 +27,21 @@ const SELECT_FOLDERS: &str = "
     WHERE account = ?
 ";
 
-pub struct Cache<'a> {
-    account_config: &'a AccountConfig,
-    db_path: PathBuf,
-}
+pub struct Cache;
 
-impl<'a> Cache<'a> {
+impl Cache {
     const LOCAL_SUFFIX: &str = ":cache";
 
-    fn db(&self) -> Result<rusqlite::Connection> {
-        let db = Connection::open(&self.db_path)?;
-        db.execute(CREATE_FOLDERS_TABLE, [])?;
-        Ok(db)
+    pub fn init(conn: &mut rusqlite::Connection) -> Result<()> {
+        conn.execute(CREATE_FOLDERS_TABLE, ())?;
+        Ok(())
     }
 
-    pub fn new(account_config: &'a AccountConfig) -> Result<Self> {
-        Ok(Self {
-            account_config,
-            db_path: account_config.sync_dir()?.join(".database.sqlite"),
-        })
-    }
-
-    fn list_folders<A>(&self, account: A) -> Result<FoldersName>
+    fn list_folders<A>(conn: &mut rusqlite::Connection, account: A) -> Result<FoldersName>
     where
         A: AsRef<str>,
     {
-        let db = self.db()?;
-        let mut stmt = db.prepare(SELECT_FOLDERS)?;
+        let mut stmt = conn.prepare(SELECT_FOLDERS)?;
         let folders: Vec<String> = stmt
             .query_map([account.as_ref()], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -65,65 +49,86 @@ impl<'a> Cache<'a> {
         Ok(FoldersName::from_iter(folders))
     }
 
-    pub fn list_local_folders(&self) -> Result<FoldersName> {
-        self.list_folders(self.account_config.name.clone() + Self::LOCAL_SUFFIX)
+    pub fn list_local_folders<A>(conn: &mut rusqlite::Connection, account: A) -> Result<FoldersName>
+    where
+        A: ToString,
+    {
+        Self::list_folders(conn, account.to_string() + Self::LOCAL_SUFFIX)
     }
 
-    pub fn list_remote_folders(&self) -> Result<FoldersName> {
-        self.list_folders(&self.account_config.name)
+    pub fn list_remote_folders<A>(
+        conn: &mut rusqlite::Connection,
+        account: A,
+    ) -> Result<FoldersName>
+    where
+        A: AsRef<str>,
+    {
+        Self::list_folders(conn, account)
     }
 
-    fn insert_folder<A, F>(&self, account: A, folder: F) -> Result<()>
+    fn insert_folder<A, F>(tx: &rusqlite::Transaction, account: A, folder: F) -> Result<()>
     where
         A: AsRef<str>,
         F: AsRef<str>,
     {
-        self.db()?
-            .execute(INSERT_FOLDER, [account.as_ref(), folder.as_ref()])?;
+        tx.execute(INSERT_FOLDER, [account.as_ref(), folder.as_ref()])?;
         Ok(())
     }
 
-    pub fn insert_local_folder<F>(&self, folder: F) -> Result<()>
+    pub fn insert_local_folder<A, F>(
+        tx: &rusqlite::Transaction,
+        account: A,
+        folder: F,
+    ) -> Result<()>
     where
+        A: ToString,
         F: AsRef<str>,
     {
-        self.insert_folder(
-            self.account_config.name.clone() + Self::LOCAL_SUFFIX,
-            folder,
-        )
+        Self::insert_folder(tx, account.to_string() + Self::LOCAL_SUFFIX, folder)
     }
 
-    pub fn insert_remote_folder<F>(&self, folder: F) -> Result<()>
-    where
-        F: AsRef<str>,
-    {
-        self.insert_folder(&self.account_config.name, folder)
-    }
-
-    fn delete_folder<A, F>(&self, account: A, folder: F) -> Result<()>
+    pub fn insert_remote_folder<A, F>(
+        tx: &rusqlite::Transaction,
+        account: A,
+        folder: F,
+    ) -> Result<()>
     where
         A: AsRef<str>,
         F: AsRef<str>,
     {
-        self.db()?
-            .execute(DELETE_FOLDER, [account.as_ref(), folder.as_ref()])?;
+        Self::insert_folder(tx, account, folder)
+    }
+
+    fn delete_folder<A, F>(tx: &rusqlite::Transaction, account: A, folder: F) -> Result<()>
+    where
+        A: AsRef<str>,
+        F: AsRef<str>,
+    {
+        tx.execute(DELETE_FOLDER, [account.as_ref(), folder.as_ref()])?;
         Ok(())
     }
 
-    pub fn delete_local_folder<F>(&self, folder: F) -> Result<()>
+    pub fn delete_local_folder<A, F>(
+        tx: &rusqlite::Transaction,
+        account: A,
+        folder: F,
+    ) -> Result<()>
     where
+        A: ToString,
         F: AsRef<str>,
     {
-        self.delete_folder(
-            self.account_config.name.clone() + Self::LOCAL_SUFFIX,
-            folder,
-        )
+        Self::delete_folder(tx, account.to_string() + Self::LOCAL_SUFFIX, folder)
     }
 
-    pub fn delete_remote_folder<F>(&self, folder: F) -> Result<()>
+    pub fn delete_remote_folder<A, F>(
+        tx: &rusqlite::Transaction,
+        account: A,
+        folder: F,
+    ) -> Result<()>
     where
+        A: AsRef<str>,
         F: AsRef<str>,
     {
-        self.delete_folder(&self.account_config.name, folder)
+        Self::delete_folder(tx, account, folder)
     }
 }

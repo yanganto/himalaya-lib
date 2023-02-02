@@ -4,7 +4,7 @@ use tempfile::tempdir;
 
 use himalaya_lib::{
     envelope, folder, AccountConfig, Backend, BackendSyncBuilder, CompilerBuilder, Flag, Flags,
-    ImapBackendBuilder, ImapConfig, MaildirBackendBuilder, MaildirConfig, TplBuilder,
+    ImapBackendBuilder, ImapConfig, MaildirBackend, MaildirConfig, TplBuilder,
     DEFAULT_INBOX_FOLDER,
 };
 
@@ -14,12 +14,14 @@ fn test_sync() {
 
     // set up account
 
-    let sync_dir = tempdir().unwrap();
+    // let sync_dir = tempdir().unwrap().path().join("sync-dir");
+    let sync_dir = std::env::temp_dir().join("sync-dir");
+    if let Err(_) = std::fs::remove_dir_all(&sync_dir) {};
 
     let account = AccountConfig {
         name: "account".into(),
         sync: true,
-        sync_dir: Some(sync_dir.path().to_owned()),
+        sync_dir: Some(sync_dir.clone()),
         ..AccountConfig::default()
     };
 
@@ -140,15 +142,13 @@ fn test_sync() {
 
     // set up maildir reader
 
-    let mdir = MaildirBackendBuilder::new()
-        .db_path(sync_dir.path().join(&account.name).join(".database.sqlite"))
-        .build(
-            Cow::Borrowed(&account),
-            Cow::Owned(MaildirConfig {
-                root_dir: sync_dir.path().join(&account.name),
-            }),
-        )
-        .unwrap();
+    let mdir = MaildirBackend::new(
+        Cow::Borrowed(&account),
+        Cow::Owned(MaildirConfig {
+            root_dir: sync_dir.clone(),
+        }),
+    )
+    .unwrap();
 
     // sync imap account twice in a row to see if all work as expected
     // without duplicate items
@@ -204,28 +204,34 @@ fn test_sync() {
 
     // check folders cache integrity
 
-    let cache = folder::sync::Cache::new(&account).unwrap();
+    let mut conn = rusqlite::Connection::open(sync_dir.join(".sync.sqlite")).unwrap();
 
-    let local_folders_cached = cache.list_local_folders().unwrap();
+    let local_folders_cached =
+        folder::sync::Cache::list_local_folders(&mut conn, &account.name).unwrap();
     assert!(local_folders_cached.contains("INBOX"));
     assert!(local_folders_cached.contains("[Gmail]/Sent"));
 
-    let remote_folders_cached = cache.list_remote_folders().unwrap();
+    let remote_folders_cached =
+        folder::sync::Cache::list_remote_folders(&mut conn, &account.name).unwrap();
     assert!(remote_folders_cached.contains("INBOX"));
     assert!(remote_folders_cached.contains("[Gmail]/Sent"));
 
     // check envelopes cache integrity
 
-    let cache = envelope::sync::Cache::new(&account).unwrap();
-
-    let mdir_inbox_envelopes_cached = cache.list_local_envelopes("INBOX").unwrap();
-    let imap_inbox_envelopes_cached = cache.list_remote_envelopes("INBOX").unwrap();
+    let mdir_inbox_envelopes_cached =
+        envelope::sync::Cache::list_local_envelopes(&mut conn, &account.name, "INBOX").unwrap();
+    let imap_inbox_envelopes_cached =
+        envelope::sync::Cache::list_remote_envelopes(&mut conn, &account.name, "INBOX").unwrap();
 
     assert_eq!(mdir_inbox_envelopes, mdir_inbox_envelopes_cached);
     assert_eq!(imap_inbox_envelopes, imap_inbox_envelopes_cached);
 
-    let mdir_sent_envelopes_cached = cache.list_local_envelopes("[Gmail]/Sent").unwrap();
-    let imap_sent_envelopes_cached = cache.list_remote_envelopes("[Gmail]/Sent").unwrap();
+    let mdir_sent_envelopes_cached =
+        envelope::sync::Cache::list_local_envelopes(&mut conn, &account.name, "[Gmail]/Sent")
+            .unwrap();
+    let imap_sent_envelopes_cached =
+        envelope::sync::Cache::list_remote_envelopes(&mut conn, &account.name, "[Gmail]/Sent")
+            .unwrap();
 
     assert_eq!(mdir_sent_envelopes, mdir_sent_envelopes_cached);
     assert_eq!(imap_sent_envelopes, imap_sent_envelopes_cached);
@@ -256,10 +262,12 @@ fn test_sync() {
     let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();
     assert_eq!(imap_envelopes, mdir_envelopes);
 
-    let cached_mdir_envelopes = cache.list_local_envelopes("INBOX").unwrap();
+    let cached_mdir_envelopes =
+        envelope::sync::Cache::list_local_envelopes(&mut conn, &account.name, "INBOX").unwrap();
     assert_eq!(cached_mdir_envelopes, mdir_envelopes);
 
-    let cached_imap_envelopes = cache.list_remote_envelopes("INBOX").unwrap();
+    let cached_imap_envelopes =
+        envelope::sync::Cache::list_remote_envelopes(&mut conn, &account.name, "INBOX").unwrap();
     assert_eq!(cached_imap_envelopes, imap_envelopes);
 
     imap.close().unwrap();

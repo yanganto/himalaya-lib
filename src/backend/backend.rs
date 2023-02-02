@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     account, backend, email, envelope, folder, id_mapper, AccountConfig, BackendConfig, Emails,
-    Envelope, Envelopes, Flags, Folders, ImapBackendBuilder, MaildirBackendBuilder, MaildirConfig,
+    Envelope, Envelopes, Flags, Folders, ImapBackendBuilder, MaildirConfig,
 };
 
 #[cfg(feature = "maildir-backend")]
@@ -37,6 +37,8 @@ pub enum Error {
     SyncFoldersError(#[from] folder::sync::Error),
     #[error(transparent)]
     SyncEnvelopesError(#[from] envelope::sync::Error),
+    #[error(transparent)]
+    SqliteError(#[from] rusqlite::Error),
 
     #[cfg(feature = "imap-backend")]
     #[error(transparent)]
@@ -204,31 +206,38 @@ impl<'a> BackendSyncBuilder<'a> {
         &self,
         remote: &dyn Backend,
     ) -> Result<(folder::sync::Patch, envelope::sync::Patch)> {
-        let name = &self.account_config.name;
+        let account = &self.account_config.name;
         if !self.account_config.sync {
-            return Err(Error::SyncNotEnabled(name.clone()));
+            return Err(Error::SyncNotEnabled(account.clone()));
         }
 
         info!("starting synchronization");
         let progress = &self.on_progress;
         let sync_dir = self.account_config.sync_dir()?;
-        let lock_path = LockPath::Tmp(format!("himalaya-sync-{}.lock", name));
+        let lock_path = LockPath::Tmp(format!("himalaya-sync-{}.lock", account));
         let guard =
-            lock(&lock_path).map_err(|err| Error::SyncAccountLockError(err, name.to_owned()))?;
+            lock(&lock_path).map_err(|err| Error::SyncAccountLockError(err, account.to_owned()))?;
 
-        let local = MaildirBackendBuilder::new()
-            .db_path(sync_dir.join(name).join(".database.sqlite"))
-            .build(
-                Cow::Borrowed(self.account_config),
-                Cow::Owned(MaildirConfig {
-                    root_dir: sync_dir.join(name),
-                }),
-            )?;
+        // init SQLite cache
+
+        let mut conn = rusqlite::Connection::open(sync_dir.join(".sync.sqlite"))?;
+
+        folder::sync::Cache::init(&mut conn)?;
+        envelope::sync::Cache::init(&mut conn)?;
+
+        // init local Maildir
+
+        let local = MaildirBackend::new(
+            Cow::Borrowed(self.account_config),
+            Cow::Owned(MaildirConfig {
+                root_dir: sync_dir.clone(),
+            }),
+        )?;
 
         let (folders_patch, folders) = folder::SyncBuilder::new(self.account_config)
             .on_progress(|data| Ok(progress(data).map_err(Box::new)?))
             .dry_run(self.dry_run)
-            .sync(&local, remote)?;
+            .sync(&mut conn, &local, remote)?;
 
         let mut envelopes_patch: envelope::sync::Patch = vec![];
         let envelopes = envelope::SyncBuilder::new(self.account_config)
@@ -241,7 +250,7 @@ impl<'a> BackendSyncBuilder<'a> {
                 folder_num + 1,
                 folders.len(),
             ))?;
-            envelopes_patch.extend(envelopes.sync(folder, &local, remote)?);
+            envelopes_patch.extend(envelopes.sync(folder, &mut conn, &local, remote)?);
         }
 
         drop(guard);
@@ -289,7 +298,7 @@ impl<'a> BackendBuilder {
             BackendConfig::Imap(_) => Ok(Box::new(MaildirBackend::new(
                 Cow::Borrowed(account_config),
                 Cow::Owned(MaildirConfig {
-                    root_dir: account_config.sync_dir()?.join(&account_config.name),
+                    root_dir: account_config.sync_dir()?,
                 }),
             )?)),
             #[cfg(feature = "maildir-backend")]

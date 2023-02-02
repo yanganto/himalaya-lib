@@ -7,9 +7,9 @@ use crate::{account, backend};
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    ConfigError(#[from] account::config::Error),
+    SqliteError(#[from] rusqlite::Error),
     #[error(transparent)]
-    CacheError(#[from] rusqlite::Error),
+    ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     BackendError(#[from] Box<backend::Error>),
 }

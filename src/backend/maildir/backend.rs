@@ -105,7 +105,18 @@ impl<'a> MaildirBackend<'a> {
         account_config: Cow<'a, AccountConfig>,
         backend_config: Cow<'a, MaildirConfig>,
     ) -> Result<Self> {
-        MaildirBackendBuilder::new().build(account_config, backend_config)
+        let path = &backend_config.root_dir;
+        let mdir = Maildir::from(path.clone());
+        let db_path = mdir.path().join(".id-mapper.sqlite");
+
+        mdir.create_dirs()
+            .map_err(|err| Error::InitFoldersStructureError(err, path.clone()))?;
+
+        Ok(Self {
+            account_config,
+            mdir,
+            db_path,
+        })
     }
 
     fn validate_mdir_path(&self, mdir_path: PathBuf) -> Result<PathBuf> {
@@ -801,45 +812,5 @@ impl<'a> Backend for MaildirBackend<'a> {
 
     fn as_any(&'static self) -> &(dyn Any) {
         self
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct MaildirBackendBuilder {
-    db_path: Option<PathBuf>,
-}
-
-impl MaildirBackendBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn db_path<P>(mut self, path: P) -> Self
-    where
-        P: Into<PathBuf>,
-    {
-        self.db_path = Some(path.into());
-        self
-    }
-
-    pub fn build<'a>(
-        self,
-        account_config: Cow<'a, AccountConfig>,
-        backend_config: Cow<'a, MaildirConfig>,
-    ) -> Result<MaildirBackend> {
-        let path = &backend_config.root_dir;
-        let mdir = Maildir::from(path.clone());
-        let db_path = self
-            .db_path
-            .unwrap_or_else(|| mdir.path().join(".database.sqlite"));
-
-        mdir.create_dirs()
-            .map_err(|err| Error::InitFoldersStructureError(err, path.clone()))?;
-
-        Ok(MaildirBackend {
-            account_config,
-            mdir,
-            db_path,
-        })
     }
 }

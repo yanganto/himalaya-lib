@@ -9,8 +9,7 @@ use tempfile::tempdir;
 
 #[cfg(feature = "maildir-backend")]
 use himalaya_lib::{
-    AccountConfig, Backend, CompilerBuilder, Flag, Flags, MaildirBackendBuilder, MaildirConfig,
-    TplBuilder,
+    AccountConfig, Backend, CompilerBuilder, Flag, Flags, MaildirBackend, MaildirConfig, TplBuilder,
 };
 
 #[cfg(feature = "maildir-backend")]
@@ -28,33 +27,27 @@ fn test_maildir_backend() {
     if let Err(_) = fs::remove_dir_all(mdir_sub.path()) {}
     mdir_sub.create_dirs().unwrap();
 
-    let db_path = mdir.path().join(".database.sqlite");
-
     let account_config = AccountConfig {
         name: "account".into(),
         folder_aliases: HashMap::from_iter([("subdir".into(), "Subdir".into())]),
         ..AccountConfig::default()
     };
 
-    let mdir = MaildirBackendBuilder::new()
-        .db_path(db_path.clone())
-        .build(
-            Cow::Borrowed(&account_config),
-            Cow::Owned(MaildirConfig {
-                root_dir: mdir.path().to_owned(),
-            }),
-        )
-        .unwrap();
+    let mdir = MaildirBackend::new(
+        Cow::Borrowed(&account_config),
+        Cow::Owned(MaildirConfig {
+            root_dir: mdir.path().to_owned(),
+        }),
+    )
+    .unwrap();
 
-    let submdir = MaildirBackendBuilder::new()
-        .db_path(db_path.clone())
-        .build(
-            Cow::Borrowed(&account_config),
-            Cow::Owned(MaildirConfig {
-                root_dir: mdir_sub.path().to_owned(),
-            }),
-        )
-        .unwrap();
+    let submdir = MaildirBackend::new(
+        Cow::Borrowed(&account_config),
+        Cow::Owned(MaildirConfig {
+            root_dir: mdir_sub.path().to_owned(),
+        }),
+    )
+    .unwrap();
 
     // check that a message can be built and added
     let email = TplBuilder::default()

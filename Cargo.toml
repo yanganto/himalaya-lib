@@ -50,3 +50,7 @@ maildir = { version = "=0.6.3", optional = true }
 md5 = { version = "0.7.0", optional = true }
 notmuch = { version = "=0.8.0", optional = true }
 utf7-imap = { version = "=0.3.2", optional = true }
+
+[[bench]]
+name = "sync"
+harness = false

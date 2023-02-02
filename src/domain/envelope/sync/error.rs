@@ -8,11 +8,17 @@ use crate::{account, backend, email};
 pub enum Error {
     #[error("cannot find email by internal id {0}")]
     FindEmailError(String),
+    #[error("cannot find email by internal id {0}")]
+    LockConnectionPoolCursorError(String),
+    #[error("cannot find email by internal id {0}")]
+    FindConnectionByCursorError(usize),
+    #[error("cannot find email by internal id {0}")]
+    LockConnectionError(String),
 
     #[error(transparent)]
-    ConfigError(#[from] account::config::Error),
+    SqliteError(#[from] rusqlite::Error),
     #[error(transparent)]
-    CacheError(#[from] rusqlite::Error),
+    ConfigError(#[from] account::config::Error),
     #[error(transparent)]
     EmailError(#[from] email::Error),
     #[error(transparent)]

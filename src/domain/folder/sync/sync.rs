@@ -74,18 +74,18 @@ impl<'a> SyncBuilder<'a> {
 
     pub fn sync(
         &self,
+        conn: &mut rusqlite::Connection,
         local: &MaildirBackend,
         remote: &dyn Backend,
     ) -> Result<(Patch, FoldersName)> {
-        info!("starting folders sync");
+        let account = &self.account_config.name;
+        info!("starting folders synchronization of account {account}");
 
         let progress = &self.on_progress;
-        let cache = Cache::new(self.account_config)?;
-
         progress(BackendSyncProgressEvent::GetLocalCachedFolders)?;
 
         let local_folders_cached: FoldersName =
-            HashSet::from_iter(cache.list_local_folders()?.iter().cloned());
+            HashSet::from_iter(Cache::list_local_folders(conn, account)?.iter().cloned());
 
         trace!("local folders cached: {:#?}", local_folders_cached);
 
@@ -104,7 +104,7 @@ impl<'a> SyncBuilder<'a> {
         progress(BackendSyncProgressEvent::GetRemoteCachedFolders)?;
 
         let remote_folders_cached: FoldersName =
-            HashSet::from_iter(cache.list_remote_folders()?.iter().cloned());
+            HashSet::from_iter(Cache::list_remote_folders(conn, account)?.iter().cloned());
 
         trace!("remote folders cached: {:#?}", remote_folders_cached);
 
@@ -137,6 +137,7 @@ impl<'a> SyncBuilder<'a> {
             info!("dry run enabled, skipping folders patch");
         } else {
             let patch_len = patch.len();
+            let tx = conn.transaction()?;
 
             for (hunk_num, hunk) in patch.iter().enumerate() {
                 debug!(
@@ -153,31 +154,33 @@ impl<'a> SyncBuilder<'a> {
 
                 match hunk {
                     Hunk::CreateFolder(ref folder, HunkKind::LocalCache) => {
-                        cache.insert_local_folder(folder)?;
+                        Cache::insert_local_folder(&tx, account, folder)?;
                     }
                     Hunk::CreateFolder(ref folder, HunkKind::Local) => {
                         local.add_folder(folder).map_err(Box::new)?;
                     }
                     Hunk::CreateFolder(ref folder, HunkKind::RemoteCache) => {
-                        cache.insert_remote_folder(folder)?;
+                        Cache::insert_remote_folder(&tx, account, folder)?;
                     }
                     Hunk::CreateFolder(ref folder, HunkKind::Remote) => {
                         remote.add_folder(&folder).map_err(Box::new)?;
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::LocalCache) => {
-                        cache.delete_local_folder(folder)?;
+                        Cache::delete_local_folder(&tx, account, folder)?;
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::Local) => {
                         local.delete_folder(folder).map_err(Box::new)?;
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::RemoteCache) => {
-                        cache.delete_remote_folder(folder)?;
+                        Cache::delete_remote_folder(&tx, account, folder)?;
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::Remote) => {
                         remote.delete_folder(&folder).map_err(Box::new)?;
                     }
                 }
             }
+
+            tx.commit()?;
         }
 
         let folders = folders

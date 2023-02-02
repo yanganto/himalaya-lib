@@ -10,4 +10,5 @@ pub mod sync;
 
 pub use self::envelope::*;
 pub use self::envelopes::*;
+pub use self::sync::Cache;
 pub use self::sync::SyncBuilder;

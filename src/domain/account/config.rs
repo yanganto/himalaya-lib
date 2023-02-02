@@ -262,7 +262,8 @@ impl AccountConfig {
                 warn!("sync dir not set or invalid, falling back to $XDG_DATA_HOME/himalaya");
                 let sync_dir = data_dir()
                     .map(|dir| dir.join("himalaya"))
-                    .ok_or(Error::GetXdgDataDirError)?;
+                    .ok_or(Error::GetXdgDataDirError)?
+                    .join(&self.name);
                 fs::create_dir_all(&sync_dir).map_err(Error::CreateXdgDataDirsError)?;
                 Ok(sync_dir)
             }
