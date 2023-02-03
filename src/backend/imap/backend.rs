@@ -205,7 +205,7 @@ impl<'a> ImapBackendBuilder {
         imap_config: Cow<'a, ImapConfig>,
     ) -> Result<ImapBackend<'a>> {
         let passwd = imap_config.passwd()?;
-        let sessions_pool: Vec<_> = (0..self.sessions_pool_size).collect();
+        let sessions_pool: Vec<_> = (0..=self.sessions_pool_size).collect();
         let backend = ImapBackend {
             account_config,
             imap_config: imap_config.clone(),
@@ -329,7 +329,7 @@ impl<'a> ImapBackend<'a> {
             let uids: Vec<u32> = self
                 .search_new_msgs(&mut session, &self.imap_config.notify_query())?
                 .into_iter()
-                .filter(|uid| -> bool { msgs_set.get(uid).is_none() })
+                .filter(|uid| msgs_set.get(uid).is_none())
                 .collect();
             debug!("found {} new messages not in hashset", uids.len());
             trace!("messages hashet: {:?}", msgs_set);
@@ -590,7 +590,7 @@ impl<'a> Backend for ImapBackend<'a> {
                 .uid_sort(&sort, imap::extensions::sort::SortCharset::Utf8, query)
                 .map_err(|err| Error::SortEnvelopesError(err, folder.to_owned(), query.to_owned()))?
                 .iter()
-                .map(|seq| seq.to_string())
+                .map(|uid| uid.to_string())
                 .collect()
         };
         trace!("uids: {uids:?}");
@@ -600,9 +600,13 @@ impl<'a> Backend for ImapBackend<'a> {
         }
 
         let uid_range = if page_size > 0 {
-            let begin = uids.len().min(page * page_size + 1);
+            let begin = uids.len().min(page * page_size);
             let end = begin + uids.len().min(page_size);
-            uids[begin..end].join(",")
+            if end > begin + 1 {
+                uids[begin..end].join(",")
+            } else {
+                uids[0].to_string()
+            }
         } else {
             uids.join(",")
         };
