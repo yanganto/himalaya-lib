@@ -1,4 +1,5 @@
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
+use rayon::prelude::*;
 use std::{collections::HashSet, fmt};
 
 use crate::{AccountConfig, Backend, BackendSyncProgressEvent, MaildirBackend};
@@ -9,12 +10,19 @@ pub type FoldersName = HashSet<FolderName>;
 pub type FolderName = String;
 pub type Patch = Vec<Hunk>;
 pub type Target = HunkKind;
+pub type TargetRestricted = HunkKindRestricted;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HunkKind {
     LocalCache,
     Local,
     RemoteCache,
+    Remote,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HunkKindRestricted {
+    Local,
     Remote,
 }
 
@@ -44,10 +52,16 @@ impl fmt::Display for Hunk {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CacheHunk {
+    CreateFolder(FolderName, TargetRestricted),
+    DeleteFolder(FolderName, TargetRestricted),
+}
+
 pub struct SyncBuilder<'a> {
     account_config: &'a AccountConfig,
     dry_run: bool,
-    on_progress: Box<dyn Fn(BackendSyncProgressEvent) -> Result<()> + 'a>,
+    on_progress: Box<dyn Fn(BackendSyncProgressEvent) -> Result<()> + Sync + Send + 'a>,
 }
 
 impl<'a> SyncBuilder<'a> {
@@ -66,7 +80,7 @@ impl<'a> SyncBuilder<'a> {
 
     pub fn on_progress<F>(mut self, f: F) -> Self
     where
-        F: Fn(BackendSyncProgressEvent) -> Result<()> + 'a,
+        F: Fn(BackendSyncProgressEvent) -> Result<()> + Sync + Send + 'a,
     {
         self.on_progress = Box::new(f);
         self
@@ -136,50 +150,92 @@ impl<'a> SyncBuilder<'a> {
         if self.dry_run {
             info!("dry run enabled, skipping folders patch");
         } else {
-            let patch_len = patch.len();
-            let tx = conn.transaction()?;
-
-            for (hunk_num, hunk) in patch.iter().enumerate() {
-                debug!(
-                    "applying folders patch, hunk {}/{}",
-                    hunk_num + 1,
-                    patch_len
-                );
-
-                trace!("processing hunk: {hunk:#?}");
-
-                progress(BackendSyncProgressEvent::ProcessFolderHunk(
-                    hunk.to_string(),
-                ))?;
-
-                match hunk {
-                    Hunk::CreateFolder(ref folder, HunkKind::LocalCache) => {
-                        Cache::insert_local_folder(&tx, account, folder)?;
+            let process_hunk = |hunk: &Hunk| {
+                Result::Ok(match hunk {
+                    Hunk::CreateFolder(folder, HunkKind::LocalCache) => {
+                        vec![CacheHunk::CreateFolder(
+                            folder.clone(),
+                            TargetRestricted::Local,
+                        )]
                     }
                     Hunk::CreateFolder(ref folder, HunkKind::Local) => {
                         local.add_folder(folder).map_err(Box::new)?;
+                        vec![]
                     }
                     Hunk::CreateFolder(ref folder, HunkKind::RemoteCache) => {
-                        Cache::insert_remote_folder(&tx, account, folder)?;
+                        vec![CacheHunk::CreateFolder(
+                            folder.clone(),
+                            TargetRestricted::Remote,
+                        )]
                     }
                     Hunk::CreateFolder(ref folder, HunkKind::Remote) => {
                         remote.add_folder(&folder).map_err(Box::new)?;
+                        vec![]
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::LocalCache) => {
-                        Cache::delete_local_folder(&tx, account, folder)?;
+                        vec![CacheHunk::DeleteFolder(
+                            folder.clone(),
+                            TargetRestricted::Local,
+                        )]
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::Local) => {
                         local.delete_folder(folder).map_err(Box::new)?;
+                        vec![]
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::RemoteCache) => {
-                        Cache::delete_remote_folder(&tx, account, folder)?;
+                        vec![CacheHunk::DeleteFolder(
+                            folder.clone(),
+                            TargetRestricted::Remote,
+                        )]
                     }
                     Hunk::DeleteFolder(ref folder, HunkKind::Remote) => {
                         remote.delete_folder(&folder).map_err(Box::new)?;
+                        vec![]
+                    }
+                })
+            };
+
+            let cache_hunks: Vec<CacheHunk> = patch
+                .par_iter()
+                .flat_map(|hunk| {
+                    let hunk_str = hunk.to_string();
+
+                    trace!("processing hunk: {hunk:#?}");
+                    debug!("{hunk_str}");
+
+                    let progress = progress(BackendSyncProgressEvent::ProcessFolderHunk(hunk_str));
+
+                    if let Err(err) = progress {
+                        warn!("error while emitting progress event: {err}");
+                    }
+
+                    match process_hunk(hunk) {
+                        Ok(cache_hunks) => cache_hunks,
+                        Err(err) => {
+                            warn!("error while processing hunk {hunk:?}, skipping it: {err:?}");
+                            vec![]
+                        }
+                    }
+                })
+                .collect();
+
+            let tx = conn.transaction()?;
+            for hunk in cache_hunks {
+                match hunk {
+                    CacheHunk::CreateFolder(folder, TargetRestricted::Local) => {
+                        Cache::insert_local_folder(&tx, account, folder)?;
+                    }
+                    CacheHunk::CreateFolder(folder, TargetRestricted::Remote) => {
+                        Cache::insert_remote_folder(&tx, account, folder)?;
+                    }
+                    CacheHunk::DeleteFolder(folder, TargetRestricted::Local) => {
+                        Cache::delete_local_folder(&tx, account, folder)?;
+                    }
+                    CacheHunk::DeleteFolder(folder, TargetRestricted::Remote) => {
+                        Cache::delete_remote_folder(&tx, account, folder)?;
                     }
                 }
             }
-
             tx.commit()?;
         }
 

@@ -4,8 +4,7 @@ use tempfile::tempdir;
 
 use himalaya_lib::{
     envelope, folder, AccountConfig, Backend, BackendSyncBuilder, CompilerBuilder, Flag, Flags,
-    ImapBackendBuilder, ImapConfig, MaildirBackend, MaildirConfig, TplBuilder,
-    DEFAULT_INBOX_FOLDER,
+    ImapBackend, ImapConfig, MaildirBackend, MaildirConfig, TplBuilder,
 };
 
 #[test]
@@ -14,9 +13,7 @@ fn test_sync() {
 
     // set up account
 
-    // let sync_dir = tempdir().unwrap().path().join("sync-dir");
-    let sync_dir = std::env::temp_dir().join("sync-dir");
-    if let Err(_) = std::fs::remove_dir_all(&sync_dir) {};
+    let sync_dir = tempdir().unwrap().path().join("sync-dir");
 
     let account = AccountConfig {
         name: "account".into(),
@@ -27,31 +24,22 @@ fn test_sync() {
 
     // set up imap backend
 
-    let imap = ImapBackendBuilder::new()
-        .pool_size(1)
-        .build(
-            Cow::Borrowed(&account),
-            Cow::Owned(ImapConfig {
-                host: "localhost".into(),
-                port: 3143,
-                ssl: Some(false),
-                starttls: Some(false),
-                insecure: Some(true),
-                login: "bob@localhost".into(),
-                passwd_cmd: "echo 'password'".into(),
-                ..ImapConfig::default()
-            }),
-        )
-        .unwrap();
+    let imap = ImapBackend::new(
+        Cow::Borrowed(&account),
+        Cow::Owned(ImapConfig {
+            host: "localhost".into(),
+            port: 3143,
+            ssl: Some(false),
+            starttls: Some(false),
+            insecure: Some(true),
+            login: "bob@localhost".into(),
+            passwd_cmd: "echo 'password'".into(),
+            ..ImapConfig::default()
+        }),
+    )
+    .unwrap();
 
-    // reset folders
-
-    for folder in imap.list_folders().unwrap().iter() {
-        match folder.name.as_str() {
-            DEFAULT_INBOX_FOLDER => imap.purge_folder(&folder.name).unwrap(),
-            folder => imap.delete_folder(folder).unwrap(),
-        }
-    }
+    // set up folders
 
     imap.add_folder("[Gmail]/Sent").unwrap();
 
@@ -270,5 +258,9 @@ fn test_sync() {
         envelope::sync::Cache::list_remote_envelopes(&mut conn, &account.name, "INBOX").unwrap();
     assert_eq!(cached_imap_envelopes, imap_envelopes);
 
+    // clean up
+
+    imap.purge_folder("INBOX").unwrap();
+    imap.delete_folder("[Gmail]/Sent").unwrap();
     imap.close().unwrap();
 }

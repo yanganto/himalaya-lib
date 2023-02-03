@@ -62,4 +62,9 @@ fn test_smtp_sender() {
     let envelope = envelopes.first().unwrap();
     assert_eq!("alice@localhost", envelope.from.addr);
     assert_eq!("Plain message!", envelope.subject);
+
+    // clean up
+
+    imap.purge_folder("INBOX").unwrap();
+    imap.close().unwrap();
 }

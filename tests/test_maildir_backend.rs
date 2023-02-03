@@ -33,10 +33,11 @@ fn test_maildir_backend() {
         ..AccountConfig::default()
     };
 
+    let mdir_path = mdir.path().to_owned();
     let mdir = MaildirBackend::new(
         Cow::Borrowed(&account_config),
         Cow::Owned(MaildirConfig {
-            root_dir: mdir.path().to_owned(),
+            root_dir: mdir_path.clone(),
         }),
     )
     .unwrap();

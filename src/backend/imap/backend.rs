@@ -205,7 +205,7 @@ impl<'a> ImapBackendBuilder {
         imap_config: Cow<'a, ImapConfig>,
     ) -> Result<ImapBackend<'a>> {
         let passwd = imap_config.passwd()?;
-        let sessions_pool: Vec<_> = (0..=self.sessions_pool_size).collect();
+        let sessions_pool: Vec<_> = (0..self.sessions_pool_size).collect();
         let backend = ImapBackend {
             account_config,
             imap_config: imap_config.clone(),

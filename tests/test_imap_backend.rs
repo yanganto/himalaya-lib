@@ -121,5 +121,10 @@ fn test_imap_backend() {
     imap.delete_emails("Отправленные", vec![&id]).unwrap();
     assert!(imap.get_emails("Отправленные", vec![&id]).is_err());
 
-    if let Err(_) = imap.close() {};
+    // clean up
+
+    imap.purge_folder("INBOX").unwrap();
+    imap.delete_folder("Sent").unwrap();
+    imap.delete_folder("Отправленные").unwrap();
+    imap.close().unwrap();
 }

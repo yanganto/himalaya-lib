@@ -100,6 +100,8 @@ pub struct MaildirBackend<'a> {
     db_path: PathBuf,
 }
 
+const ID_MAPPER_DB_FILE_NAME: &str = ".id-mapper.sqlite";
+
 impl<'a> MaildirBackend<'a> {
     pub fn new(
         account_config: Cow<'a, AccountConfig>,
@@ -107,16 +109,36 @@ impl<'a> MaildirBackend<'a> {
     ) -> Result<Self> {
         let path = &backend_config.root_dir;
         let mdir = Maildir::from(path.clone());
-        let db_path = mdir.path().join(".id-mapper.sqlite");
+
+        let mut db_path = mdir.path().join(ID_MAPPER_DB_FILE_NAME);
+        let mut db_parent_dir = mdir.path().parent();
+
+        while !db_path.is_file() {
+            match db_parent_dir {
+                Some(dir) => {
+                    db_path = dir.join(ID_MAPPER_DB_FILE_NAME);
+                    db_parent_dir = dir.parent();
+                }
+                None => {
+                    db_path = mdir.path().join(ID_MAPPER_DB_FILE_NAME);
+                    break;
+                }
+            }
+        }
 
         mdir.create_dirs()
             .map_err(|err| Error::InitFoldersStructureError(err, path.clone()))?;
 
-        Ok(Self {
+        let maildir_backend = Self {
             account_config,
             mdir,
             db_path,
-        })
+        };
+
+        // spawns a fake id mapper to init the database
+        maildir_backend.id_mapper(DEFAULT_INBOX_FOLDER)?;
+
+        Ok(maildir_backend)
     }
 
     fn validate_mdir_path(&self, mdir_path: PathBuf) -> Result<PathBuf> {
