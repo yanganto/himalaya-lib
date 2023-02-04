@@ -119,6 +119,16 @@ command `git send-email`.
 You can also contact me directly on [Matrix](https://matrix.org/) at
 [@soywod:matrix.org](https://matrix.to/#/@soywod:matrix.org).
 
+## Credits
+
+[![nlnet](https://nlnet.nl/logo/banner-160x60.png)](https://nlnet.nl/project/Himalaya/index.html)
+
+Special thanks to the
+[nlnet](https://nlnet.nl/project/Himalaya/index.html) foundation that
+helped Himalaya to receive financial support from the [NGI
+Assure](https://www.ngi.eu/ngi-projects/ngi-assure/) program of the
+European Commission in September, 2022.
+
 ## Sponsoring
 
 [![GitHub](https://img.shields.io/badge/-GitHub%20Sponsors-fafbfc?logo=GitHub%20Sponsors&style=flat-square)](https://github.com/sponsors/soywod)
