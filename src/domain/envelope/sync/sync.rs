@@ -101,6 +101,12 @@ impl fmt::Display for BackendHunk {
 
 pub type Patch = Vec<Vec<BackendHunk>>;
 
+#[derive(Debug, Default)]
+pub struct SyncReport {
+    pub patch: Vec<(BackendHunk, Option<Error>)>,
+    pub cache_patch: (Vec<CacheHunk>, Option<Error>),
+}
+
 pub struct SyncBuilder<'a> {
     account_config: &'a AccountConfig,
     dry_run: bool,
@@ -129,13 +135,20 @@ impl<'a> SyncBuilder<'a> {
         self
     }
 
+    fn try_progress(&self, evt: BackendSyncProgressEvent) {
+        let progress = &self.on_progress;
+        if let Err(err) = progress(evt.clone()) {
+            warn!("error while emitting event {evt}: {err}");
+        }
+    }
+
     pub fn sync<F>(
         &self,
         folder: F,
         conn: &mut rusqlite::Connection,
         local: &MaildirBackend,
         remote: &dyn Backend,
-    ) -> Result<Patch>
+    ) -> Result<SyncReport>
     where
         F: ToString,
     {
@@ -143,8 +156,7 @@ impl<'a> SyncBuilder<'a> {
         let folder = folder.to_string();
         info!("synchronizing {folder} envelopes of account {account}");
 
-        let progress = &self.on_progress;
-        progress(BackendSyncProgressEvent::GetLocalCachedEnvelopes)?;
+        self.try_progress(BackendSyncProgressEvent::GetLocalCachedEnvelopes);
 
         let local_envelopes_cached: Envelopes = HashMap::from_iter(
             Cache::list_local_envelopes(conn, account, &folder)?
@@ -154,7 +166,7 @@ impl<'a> SyncBuilder<'a> {
 
         trace!("local envelopes cached: {:#?}", local_envelopes_cached);
 
-        progress(BackendSyncProgressEvent::GetLocalEnvelopes)?;
+        self.try_progress(BackendSyncProgressEvent::GetLocalEnvelopes);
 
         let local_envelopes: Envelopes = HashMap::from_iter(
             local
@@ -177,7 +189,7 @@ impl<'a> SyncBuilder<'a> {
 
         trace!("local envelopes: {:#?}", local_envelopes);
 
-        progress(BackendSyncProgressEvent::GetRemoteCachedEnvelopes)?;
+        self.try_progress(BackendSyncProgressEvent::GetRemoteCachedEnvelopes);
 
         let remote_envelopes_cached: Envelopes = HashMap::from_iter(
             Cache::list_remote_envelopes(conn, account, &folder)?
@@ -187,7 +199,7 @@ impl<'a> SyncBuilder<'a> {
 
         trace!("remote envelopes cached: {:#?}", remote_envelopes_cached);
 
-        progress(BackendSyncProgressEvent::GetRemoteEnvelopes)?;
+        self.try_progress(BackendSyncProgressEvent::GetRemoteEnvelopes);
 
         let remote_envelopes: Envelopes = HashMap::from_iter(
             remote
@@ -210,7 +222,7 @@ impl<'a> SyncBuilder<'a> {
 
         trace!("remote envelopes: {:#?}", remote_envelopes);
 
-        progress(BackendSyncProgressEvent::BuildEnvelopesPatch)?;
+        self.try_progress(BackendSyncProgressEvent::BuildEnvelopesPatch);
 
         let patch = build_patch(
             &folder,
@@ -220,12 +232,14 @@ impl<'a> SyncBuilder<'a> {
             remote_envelopes,
         );
 
-        progress(BackendSyncProgressEvent::ProcessEnvelopesPatch(patch.len()))?;
+        self.try_progress(BackendSyncProgressEvent::ProcessEnvelopesPatch(patch.len()));
 
         debug!("envelopes patch: {:#?}", patch);
 
+        let mut report = SyncReport::default();
+
         if self.dry_run {
-            info!("dry run activated, skipping envelopes patch");
+            info!("dry run enabled, skipping envelopes patch");
         } else {
             let process_hunk = |hunk: &BackendHunk| {
                 Result::Ok(match hunk {
@@ -393,55 +407,70 @@ impl<'a> SyncBuilder<'a> {
                 })
             };
 
-            let cache_hunks: Vec<CacheHunk> = patch
+            report = patch
                 .par_iter()
-                .flat_map(|hunks| {
-                    hunks.iter().fold(vec![], |mut cache_hunks, hunk| {
+                .fold(SyncReport::default, |report, hunks| {
+                    hunks.iter().fold(report, |mut report, hunk| {
                         let hunk_str = hunk.to_string();
 
                         trace!("processing hunk: {hunk:#?}");
                         debug!("{hunk_str}");
 
-                        let progress =
-                            progress(BackendSyncProgressEvent::ProcessEnvelopeHunk(hunk_str));
-
-                        if let Err(err) = progress {
-                            warn!("error while emitting progress event: {err}");
-                        }
+                        self.try_progress(BackendSyncProgressEvent::ProcessEnvelopeHunk(hunk_str));
 
                         match process_hunk(hunk) {
-                            Ok(hunks) => cache_hunks.extend(hunks),
+                            Ok(cache_hunks) => {
+                                report.patch.push((hunk.clone(), None));
+                                report.cache_patch.0.extend(cache_hunks);
+                            }
                             Err(err) => {
                                 warn!("error while processing hunk {hunk:?}, skipping it: {err:?}");
+                                report.patch.push((hunk.clone(), Some(err)));
                             }
                         };
 
-                        cache_hunks
+                        report
                     })
                 })
-                .collect();
+                .reduce(SyncReport::default, |mut r1, r2| {
+                    r1.patch.extend(r2.patch);
+                    r1.cache_patch.0.extend(r2.cache_patch.0);
+                    r1
+                });
 
-            let tx = conn.transaction()?;
-            for hunk in cache_hunks {
-                match hunk {
-                    CacheHunk::InsertEnvelope(folder, envelope, TargetRestricted::Local) => {
-                        Cache::insert_local_envelope(&tx, account, folder, envelope)?
-                    }
-                    CacheHunk::InsertEnvelope(folder, envelope, TargetRestricted::Remote) => {
-                        Cache::insert_remote_envelope(&tx, account, folder, envelope)?
-                    }
-                    CacheHunk::DeleteEnvelope(folder, internal_id, TargetRestricted::Local) => {
-                        Cache::delete_local_envelope(&tx, account, folder, internal_id)?
-                    }
-                    CacheHunk::DeleteEnvelope(folder, internal_id, TargetRestricted::Remote) => {
-                        Cache::delete_remote_envelope(&tx, account, folder, internal_id)?
+            let mut process_cache_patch = || {
+                let tx = conn.transaction()?;
+                for hunk in &report.cache_patch.0 {
+                    match hunk {
+                        CacheHunk::InsertEnvelope(folder, envelope, TargetRestricted::Local) => {
+                            Cache::insert_local_envelope(&tx, account, folder, envelope.clone())?
+                        }
+                        CacheHunk::InsertEnvelope(folder, envelope, TargetRestricted::Remote) => {
+                            Cache::insert_remote_envelope(&tx, account, folder, envelope.clone())?
+                        }
+                        CacheHunk::DeleteEnvelope(folder, internal_id, TargetRestricted::Local) => {
+                            Cache::delete_local_envelope(&tx, account, folder, internal_id)?
+                        }
+                        CacheHunk::DeleteEnvelope(
+                            folder,
+                            internal_id,
+                            TargetRestricted::Remote,
+                        ) => Cache::delete_remote_envelope(&tx, account, folder, internal_id)?,
                     }
                 }
+                tx.commit()?;
+                Result::Ok(())
+            };
+
+            if let Err(err) = process_cache_patch() {
+                warn!("error while processing cache patch: {err}");
+                report.cache_patch.1 = Some(err);
             }
-            tx.commit()?;
         }
 
-        Ok(patch)
+        trace!("sync report: {:#?}", report);
+
+        Ok(report)
     }
 }
 

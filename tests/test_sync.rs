@@ -1,5 +1,5 @@
 use env_logger;
-use std::{borrow::Cow, thread, time::Duration};
+use std::{borrow::Cow, collections::HashSet, thread, time::Duration};
 use tempfile::tempdir;
 
 use himalaya_lib::{
@@ -244,7 +244,11 @@ fn test_sync() {
     )
     .unwrap();
 
-    sync_builder.sync(&imap).unwrap();
+    let report = sync_builder.sync(&imap).unwrap();
+    assert_eq!(
+        report.folders,
+        HashSet::from_iter(["INBOX".into(), "[Gmail]/Sent".into()])
+    );
 
     let imap_envelopes = imap.list_envelopes("INBOX", 0, 0).unwrap();
     let mdir_envelopes = mdir.list_envelopes("INBOX", 0, 0).unwrap();

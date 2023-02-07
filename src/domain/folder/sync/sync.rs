@@ -4,7 +4,7 @@ use std::{collections::HashSet, fmt};
 
 use crate::{AccountConfig, Backend, BackendSyncProgressEvent, MaildirBackend};
 
-use super::{Cache, Result};
+use super::{Cache, Error, Result};
 
 pub type FoldersName = HashSet<FolderName>;
 pub type FolderName = String;
@@ -58,6 +58,13 @@ pub enum CacheHunk {
     DeleteFolder(FolderName, TargetRestricted),
 }
 
+#[derive(Debug, Default)]
+pub struct SyncReport {
+    pub folders: FoldersName,
+    pub patch: Vec<(Hunk, Option<Error>)>,
+    pub cache_patch: (Vec<CacheHunk>, Option<Error>),
+}
+
 pub struct SyncBuilder<'a> {
     account_config: &'a AccountConfig,
     dry_run: bool,
@@ -86,24 +93,30 @@ impl<'a> SyncBuilder<'a> {
         self
     }
 
+    fn try_progress(&self, evt: BackendSyncProgressEvent) {
+        let progress = &self.on_progress;
+        if let Err(err) = progress(evt.clone()) {
+            warn!("error while emitting event {evt:?}: {err}");
+        }
+    }
+
     pub fn sync(
         &self,
         conn: &mut rusqlite::Connection,
         local: &MaildirBackend,
         remote: &dyn Backend,
-    ) -> Result<(Patch, FoldersName)> {
+    ) -> Result<SyncReport> {
         let account = &self.account_config.name;
         info!("starting folders synchronization of account {account}");
 
-        let progress = &self.on_progress;
-        progress(BackendSyncProgressEvent::GetLocalCachedFolders)?;
+        self.try_progress(BackendSyncProgressEvent::GetLocalCachedFolders);
 
         let local_folders_cached: FoldersName =
             HashSet::from_iter(Cache::list_local_folders(conn, account)?.iter().cloned());
 
         trace!("local folders cached: {:#?}", local_folders_cached);
 
-        progress(BackendSyncProgressEvent::GetLocalFolders)?;
+        self.try_progress(BackendSyncProgressEvent::GetLocalFolders);
 
         let local_folders: FoldersName = HashSet::from_iter(
             local
@@ -115,14 +128,14 @@ impl<'a> SyncBuilder<'a> {
 
         trace!("local folders: {:#?}", local_folders);
 
-        progress(BackendSyncProgressEvent::GetRemoteCachedFolders)?;
+        self.try_progress(BackendSyncProgressEvent::GetRemoteCachedFolders);
 
         let remote_folders_cached: FoldersName =
             HashSet::from_iter(Cache::list_remote_folders(conn, account)?.iter().cloned());
 
         trace!("remote folders cached: {:#?}", remote_folders_cached);
 
-        progress(BackendSyncProgressEvent::GetRemoteFolders)?;
+        self.try_progress(BackendSyncProgressEvent::GetRemoteFolders);
 
         let remote_folders: FoldersName = HashSet::from_iter(
             remote
@@ -134,18 +147,22 @@ impl<'a> SyncBuilder<'a> {
 
         trace!("remote folders: {:#?}", remote_folders);
 
-        progress(BackendSyncProgressEvent::BuildFoldersPatch)?;
+        self.try_progress(BackendSyncProgressEvent::BuildFoldersPatch);
 
-        let (patch, folders) = build_patch(
+        let (backend_patch, folders) = build_patch(
             local_folders_cached,
             local_folders,
             remote_folders_cached,
             remote_folders,
         );
 
-        progress(BackendSyncProgressEvent::ProcessFoldersPatch(patch.len()))?;
+        self.try_progress(BackendSyncProgressEvent::ProcessFoldersPatch(
+            backend_patch.len(),
+        ));
 
-        debug!("folders patch: {:#?}", patch);
+        debug!("folders patch: {:#?}", backend_patch);
+
+        let mut report = SyncReport::default();
 
         if self.dry_run {
             info!("dry run enabled, skipping folders patch");
@@ -195,51 +212,64 @@ impl<'a> SyncBuilder<'a> {
                 })
             };
 
-            let cache_hunks: Vec<CacheHunk> = patch
+            report = backend_patch
                 .par_iter()
-                .flat_map(|hunk| {
+                .fold(SyncReport::default, |mut report, hunk| {
                     let hunk_str = hunk.to_string();
 
                     trace!("processing hunk: {hunk:#?}");
                     debug!("{hunk_str}");
 
-                    let progress = progress(BackendSyncProgressEvent::ProcessFolderHunk(hunk_str));
-
-                    if let Err(err) = progress {
-                        warn!("error while emitting progress event: {err}");
-                    }
+                    self.try_progress(BackendSyncProgressEvent::ProcessFolderHunk(hunk_str));
 
                     match process_hunk(hunk) {
-                        Ok(cache_hunks) => cache_hunks,
+                        Ok(cache_hunks) => {
+                            report.patch.push((hunk.clone(), None));
+                            report.cache_patch.0.extend(cache_hunks);
+                        }
                         Err(err) => {
                             warn!("error while processing hunk {hunk:?}, skipping it: {err:?}");
-                            vec![]
+                            report.patch.push((hunk.clone(), Some(err)));
+                        }
+                    };
+
+                    report
+                })
+                .reduce(SyncReport::default, |mut r1, r2| {
+                    r1.patch.extend(r2.patch);
+                    r1.cache_patch.0.extend(r2.cache_patch.0);
+                    r1
+                });
+
+            let mut process_cache_patch = || {
+                let tx = conn.transaction()?;
+                for hunk in &report.cache_patch.0 {
+                    match hunk {
+                        CacheHunk::CreateFolder(folder, TargetRestricted::Local) => {
+                            Cache::insert_local_folder(&tx, account, folder)?;
+                        }
+                        CacheHunk::CreateFolder(folder, TargetRestricted::Remote) => {
+                            Cache::insert_remote_folder(&tx, account, folder)?;
+                        }
+                        CacheHunk::DeleteFolder(folder, TargetRestricted::Local) => {
+                            Cache::delete_local_folder(&tx, account, folder)?;
+                        }
+                        CacheHunk::DeleteFolder(folder, TargetRestricted::Remote) => {
+                            Cache::delete_remote_folder(&tx, account, folder)?;
                         }
                     }
-                })
-                .collect();
-
-            let tx = conn.transaction()?;
-            for hunk in cache_hunks {
-                match hunk {
-                    CacheHunk::CreateFolder(folder, TargetRestricted::Local) => {
-                        Cache::insert_local_folder(&tx, account, folder)?;
-                    }
-                    CacheHunk::CreateFolder(folder, TargetRestricted::Remote) => {
-                        Cache::insert_remote_folder(&tx, account, folder)?;
-                    }
-                    CacheHunk::DeleteFolder(folder, TargetRestricted::Local) => {
-                        Cache::delete_local_folder(&tx, account, folder)?;
-                    }
-                    CacheHunk::DeleteFolder(folder, TargetRestricted::Remote) => {
-                        Cache::delete_remote_folder(&tx, account, folder)?;
-                    }
                 }
-            }
-            tx.commit()?;
-        }
+                tx.commit()?;
+                Result::Ok(())
+            };
 
-        let folders = folders
+            if let Err(err) = process_cache_patch() {
+                warn!("error while processing cache patch: {err}");
+                report.cache_patch.1 = Some(err);
+            }
+        };
+
+        report.folders = folders
             .into_iter()
             .map(|folder| {
                 urlencoding::decode(&folder)
@@ -248,9 +278,9 @@ impl<'a> SyncBuilder<'a> {
             })
             .collect();
 
-        trace!("folders: {:#?}", folders);
+        trace!("sync report: {:#?}", report);
 
-        Ok((patch, folders))
+        Ok(report)
     }
 }
 

@@ -28,7 +28,7 @@ html-escape = "0.2"
 lettre = { version = "=0.10.1", features = ["serde"] }
 log = "0.4"
 mailparse = "0.14"
-mime-msg-builder = { git = "https://git.sr.ht/~soywod/mime-msg-builder", branch = "master" }
+mime-msg-builder = "0.1"
 native-tls = "0.2"
 ouroboros = "0.15"
 proc-lock = "0.4"

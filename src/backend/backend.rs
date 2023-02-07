@@ -5,7 +5,7 @@
 
 use log::info;
 use proc_lock::{lock, LockPath};
-use std::{any::Any, borrow::Cow, io, result};
+use std::{any::Any, borrow::Cow, fmt, io, result};
 use thiserror::Error;
 
 use crate::{
@@ -174,6 +174,38 @@ pub enum BackendSyncProgressEvent {
     ProcessEnvelopeHunk(String),
 }
 
+impl fmt::Display for BackendSyncProgressEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::GetLocalCachedFolders => write!(f, "Getting local cached folders"),
+            Self::GetLocalFolders => write!(f, "Getting local folders"),
+            Self::GetRemoteCachedFolders => write!(f, "Getting remote cached folders"),
+            Self::GetRemoteFolders => write!(f, "Getting remote folders"),
+            Self::BuildFoldersPatch => write!(f, "Building folders patch"),
+            Self::ProcessFoldersPatch(n) => write!(f, "Processing {n} hunks of folders patch"),
+            Self::ProcessFolderHunk(s) => write!(f, "Processing folder hunk: {s}"),
+
+            Self::StartEnvelopesSync(_, _, _) => write!(f, "Starting envelopes synchronization"),
+            Self::GetLocalCachedEnvelopes => write!(f, "Getting local cached envelopes"),
+            Self::GetLocalEnvelopes => write!(f, "Getting local envelopes"),
+            Self::GetRemoteCachedEnvelopes => write!(f, "Getting remote cached envelopes"),
+            Self::GetRemoteEnvelopes => write!(f, "Getting remote envelopes"),
+            Self::BuildEnvelopesPatch => write!(f, "Building envelopes patch"),
+            Self::ProcessEnvelopesPatch(n) => write!(f, "Processing {n} hunks of envelopes patch"),
+            Self::ProcessEnvelopeHunk(s) => write!(f, "Processing envelope hunk: {s}"),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct BackendSyncReport {
+    pub folders: folder::sync::FoldersName,
+    pub folders_patch: Vec<(folder::sync::Hunk, Option<folder::sync::Error>)>,
+    pub folders_cache_patch: (Vec<folder::sync::CacheHunk>, Option<folder::sync::Error>),
+    pub envelopes_patch: Vec<(envelope::sync::BackendHunk, Option<envelope::sync::Error>)>,
+    pub envelopes_cache_patch: (Vec<envelope::sync::CacheHunk>, Vec<envelope::sync::Error>),
+}
+
 pub struct BackendSyncBuilder<'a> {
     account_config: &'a AccountConfig,
     on_progress: Box<dyn Fn(BackendSyncProgressEvent) -> Result<()> + Sync + Send + 'a>,
@@ -202,10 +234,7 @@ impl<'a> BackendSyncBuilder<'a> {
         self
     }
 
-    pub fn sync(
-        &self,
-        remote: &dyn Backend,
-    ) -> Result<(folder::sync::Patch, envelope::sync::Patch)> {
+    pub fn sync(&self, remote: &dyn Backend) -> Result<BackendSyncReport> {
         let account = &self.account_config.name;
         if !self.account_config.sync {
             return Err(Error::SyncNotEnabled(account.clone()));
@@ -234,28 +263,41 @@ impl<'a> BackendSyncBuilder<'a> {
             }),
         )?;
 
-        let (folders_patch, folders) = folder::SyncBuilder::new(self.account_config)
+        let folders_sync_report = folder::SyncBuilder::new(self.account_config)
             .on_progress(|data| Ok(progress(data).map_err(Box::new)?))
             .dry_run(self.dry_run)
             .sync(&mut conn, &local, remote)?;
 
-        let mut envelopes_patch: envelope::sync::Patch = vec![];
         let envelopes = envelope::SyncBuilder::new(self.account_config)
             .on_progress(|data| Ok(progress(data).map_err(Box::new)?))
             .dry_run(self.dry_run);
 
-        for (folder_num, folder) in folders.iter().enumerate() {
+        let mut envelopes_patch = Vec::new();
+        let mut envelopes_cache_patch = (Vec::new(), Vec::new());
+
+        for (folder_num, folder) in folders_sync_report.folders.iter().enumerate() {
             progress(BackendSyncProgressEvent::StartEnvelopesSync(
                 folder.clone(),
                 folder_num + 1,
-                folders.len(),
+                folders_sync_report.folders.len(),
             ))?;
-            envelopes_patch.extend(envelopes.sync(folder, &mut conn, &local, remote)?);
+            let report = envelopes.sync(folder, &mut conn, &local, remote)?;
+            envelopes_patch.extend(report.patch);
+            envelopes_cache_patch.0.extend(report.cache_patch.0);
+            if let Some(err) = report.cache_patch.1 {
+                envelopes_cache_patch.1.push(err);
+            }
         }
 
         drop(guard);
 
-        Ok((folders_patch, envelopes_patch))
+        Ok(BackendSyncReport {
+            folders: folders_sync_report.folders,
+            folders_patch: folders_sync_report.patch,
+            folders_cache_patch: folders_sync_report.cache_patch,
+            envelopes_patch,
+            envelopes_cache_patch,
+        })
     }
 }
 
