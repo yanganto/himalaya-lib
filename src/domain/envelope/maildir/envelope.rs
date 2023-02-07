@@ -1,73 +1,66 @@
-use chrono::DateTime;
+use chrono::{Local, NaiveDateTime};
 use log::trace;
+use mailparse::MailAddr;
 
 use crate::{
     backend::maildir::{Error, Result},
     domain::flag::maildir::flags,
-    from_slice_to_addrs, Addr, Envelope,
+    envelope::Mailbox,
+    Envelope,
 };
 
 /// Represents the raw envelope returned by the `maildir` crate.
 pub type RawEnvelope = maildir::MailEntry;
 
 pub fn from_raw(mut entry: RawEnvelope) -> Result<Envelope> {
-    trace!(">> build envelope from maildir parsed mail");
-
     let mut envelope = Envelope::default();
 
     envelope.internal_id = entry.id().to_owned();
-    envelope.id = format!("{:x}", md5::compute(&envelope.internal_id));
     envelope.flags = flags::from_raw(&entry);
 
     let parsed_mail = entry.parsed().map_err(Error::ParseMsgError)?;
 
-    trace!(">> parse headers");
-    for h in parsed_mail.get_headers() {
-        let k = h.get_key();
-        trace!("header key: {:?}", k);
+    for header in parsed_mail.get_headers() {
+        let key = header.get_key();
+        trace!("header key: {}", key);
 
-        let v = rfc2047_decoder::Decoder::new()
-            .skip_encoded_word_length(true)
-            .decode(h.get_value_raw())
-            .map_err(|err| Error::DecodeHeaderError(err, k.to_owned()))?;
-        trace!("header value: {:?}", v);
+        let val = header.get_value();
+        trace!("header value: {}", val);
 
-        match k.to_lowercase().as_str() {
-            "date" => {
-                envelope.date =
-                    DateTime::parse_from_rfc2822(v.split_at(v.find(" (").unwrap_or(v.len())).0)
-                        .map(|date| date.naive_local().to_string())
-                        .ok()
+        match key.to_lowercase().as_str() {
+            "message-id" => {
+                envelope.message_id = val.trim().into();
             }
             "subject" => {
-                envelope.subject = v.into();
+                envelope.subject = val.into();
             }
             "from" => {
-                envelope.sender = from_slice_to_addrs(v)
-                    .map_err(|err| Error::ParseHeaderError(err, k.to_owned()))?
-                    .and_then(|senders| {
-                        if senders.is_empty() {
-                            None
-                        } else {
-                            Some(senders)
-                        }
-                    })
-                    .map(|senders| match &senders[0] {
-                        Addr::Single(mailparse::SingleInfo { display_name, addr }) => {
-                            display_name.as_ref().unwrap_or_else(|| addr).to_owned()
-                        }
-                        Addr::Group(mailparse::GroupInfo { group_name, .. }) => {
-                            group_name.to_owned()
-                        }
-                    })
-                    .ok_or_else(|| Error::FindSenderError)?;
+                envelope.from = {
+                    let addrs = mailparse::addrparse_header(header)
+                        .map_err(|err| Error::ParseHeaderError(err, key.to_owned()))?;
+                    match addrs.first() {
+                        Some(MailAddr::Single(single)) => Ok(Mailbox::new(
+                            single.display_name.clone(),
+                            single.addr.clone(),
+                        )),
+                        // TODO
+                        Some(MailAddr::Group(_)) => Err(Error::FindSenderError),
+                        None => Err(Error::FindSenderError),
+                    }?
+                }
+            }
+            "date" => {
+                let timestamp = mailparse::dateparse(&val)
+                    .map_err(|err| Error::ParseTimestampFromMaildirEnvelopeError(err, val))?;
+                let date = NaiveDateTime::from_timestamp_opt(timestamp, 0)
+                    .and_then(|date| date.and_local_timezone(Local).earliest());
+                envelope.date = date.unwrap_or_default()
             }
             _ => (),
         }
     }
-    trace!("<< parse headers");
 
-    trace!("envelope: {:?}", envelope);
-    trace!("<< build envelope from maildir parsed mail");
+    trace!("maildir envelope: {:?}", envelope);
+
     Ok(envelope)
 }

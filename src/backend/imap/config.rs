@@ -79,29 +79,33 @@ impl ImapConfig {
     }
 
     /// Runs the IMAP notify command.
-    pub fn run_notify_cmd<S: AsRef<str>>(&self, subject: S, sender: S) -> Result<()> {
-        let subject = subject.as_ref();
-        let sender = sender.as_ref();
-
-        let default_cmd = format!(r#"notify-send "New message from {}" "{}""#, sender, subject);
+    pub fn run_notify_cmd<S: AsRef<str>>(&self, id: u32, subject: S, sender: S) -> Result<()> {
         let cmd = self
             .notify_cmd
             .as_ref()
-            .map(|cmd| format!(r#"{} {:?} {:?}"#, cmd, subject, sender))
-            .unwrap_or(default_cmd);
+            .map(|cmd| {
+                cmd.replace("<id>", &id.to_string())
+                    .replace("<subject>", subject.as_ref())
+                    .replace("<sender>", sender.as_ref())
+            })
+            .unwrap_or_else(|| String::from("notify-send \"📫 <sender>\" \"<subject>\""));
 
         process::run(&cmd, &[]).map_err(Error::StartNotifyModeError)?;
+
         Ok(())
     }
 
     pub fn notify_query(&self) -> String {
         self.notify_query
             .as_ref()
-            .unwrap_or(&String::from("NEW"))
-            .to_owned()
+            .cloned()
+            .unwrap_or_else(|| String::from("NEW"))
     }
 
     pub fn watch_cmds(&self) -> Vec<String> {
-        self.watch_cmds.as_ref().unwrap_or(&vec![]).to_owned()
+        self.watch_cmds
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| Vec::new())
     }
 }

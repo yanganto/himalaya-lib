@@ -7,29 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2023-02-07
+
+### Added
+
+* Made backend functions accept a vector of id instead of a single id
+  [#20].
+* Added function `Backend::purge_folder` that removes all emails
+  inside a folder.
+* Added new `Backend` functions using the internal id:
+  * `get_envelope_internal`: gets an envelope by its internal id
+  * `add_email_internal`: adds an email and returns its internal id
+  * `get_emails_internal`: gets emails by their internal id
+  * `copy_emails_internal`: copies emails by their internal id
+  * `move_emails_internal`: copies emails by their internal id
+  * `delete_emails_internal`: copies emails by their internal id
+  * `add_flags_internal`: adds emails flags by their internal id
+  * `set_flags_internal`: set emails flags by their internal id
+  * `remove_flags_internal`: removes emails flags by their internal id
+* Added emails synchronization feature. Backends that implement the
+  `ThreadSafeBackend` trait inherit the `sync` function that
+  synchronizes all folders and emails with a local `Maildir` instance.
+* Added `Backend::sync` function and link `ThreadSafeBackend::sync` to
+  it for the IMAP and the Maildir backends.
+* Added the ability to URL encode Maildir folders (in order to fix
+  path collisions, for eg `[Gmail]/Sent`). Also added a
+  `MaildirBackendBuilder` to facilitate the usage of the
+  `url_encoded_folders` option.
+* Added a process lock for `ThreadSafeBackend::sync`, this way only
+  one synchronization can be performed at a time (for a same account).
+
+### Fixed
+
+* Used native IMAP commands `copy` and `mv`.
+* Fixed maildir date envelope parsing.
+* Fixed inline attachments not collected.
+
+### Changed
+
+* Improved `Backend` method names. Also replaced the `self mut` by a
+  `RefCell`.
+* Simplified the `Email` struct: there is no custom implementation
+  with custom fields. Now, the `Email` struct is just a wrapper around
+  `mailparse::ParsedMail`.
+* Improved `Flag` structures.
+* Changed `Backend` trait functions due to [#20]:
+  * `list_envelope` => `list_envelopes`
+  * `search_envelope` => `search_envelopes`
+  * `get_email` => `get_emails`, takes now `ids: Vec<&str>` and
+    returns an `Emails` structure instead of an `Email`)
+  * `copy_email` => `copy_emails`, takes now `ids: Vec<&str>`.
+  * `move_email` => `move_emails`, takes now `ids: Vec<&str>`.
+  * `delete_email` => `delete_emails`, takes now `ids: Vec<&str>`.
+  * `add_flags` takes now `ids: Vec<&str>` and `flags: &Flags`.
+  * `set_flags` takes now `ids: Vec<&str>` and `flags: &Flags`.
+  * `remove_flags` takes now `ids: Vec<&str>` and `flags: &Flags`.
+
+### Removed
+
+* The `email::Tpl` structure moved to its [own
+  repository](https://git.sr.ht/~soywod/mime-msg-builder).
+* Encryption and signed moved with the `email::Tpl` in its own
+  repository.
+
 ## [0.4.0] - 2022-10-12
 
 ### Added
 
-* Added pipe support for `(imap|smtp)-passwd-cmd` [github#373].
+* Added pipe support for `(imap|smtp)-passwd-cmd`.
 * Added `imap-ssl` and `smtp-ssl` options to be able to disable
-  encryption [github#347].
-* Implemented sendmail sender [github#351].
-* Fixed `process` module for `MINGW*` [github#254].
+  encryption.
+* Implemented sendmail sender.
+* Fixed `process` module for `MINGW*`.
 
 ### Changed
 
 * Moved `Email::fold_text_plain_parts` to `Parts::to_readable`. It
   take now a `PartsReaderOptions` as parameter:
-  
   * `plain_first`: shows plain texts first, switch to html if empty.
-  
   * `sanitize`: sanitizes or not text bodies (both plain and html).
 
 ### Fixed
 
-* Fixed long subject decoding issue [github#380].
-* Fixed bad mailbox name encoding from UTF7-IMAP [github#370].
+* Fixed long subject decoding issue.
+* Fixed bad mailbox name encoding from UTF7-IMAP.
 
 ## [0.3.1] - 2022-10-10
 
@@ -96,9 +157,12 @@ repository.
 
 [patch#1]: https://lists.sr.ht/~soywod/himalaya-lib/%3C20220929084520.98165-1-me%40paulrouget.com%3E
 
-[github#254]: https://github.com/soywod/himalaya/issues/254
-[github#347]: https://github.com/soywod/himalaya/issues/347
-[github#351]: https://github.com/soywod/himalaya/issues/351
-[github#370]: https://github.com/soywod/himalaya/issues/370
-[github#373]: https://github.com/soywod/himalaya/issues/373
-[github#380]: https://github.com/soywod/himalaya/issues/380
+[#20]: https://todo.sr.ht/~soywod/pimalaya/20
+
+[0.5.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.5.0
+[0.4.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.4.0
+[0.3.1]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.3.1
+[0.3.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.3.0
+[0.2.1]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.2.1
+[0.2.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.2.0
+[0.1.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.1.0

@@ -1,13 +1,24 @@
 use serde::Serialize;
-use std::{fmt, ops};
+use std::{collections::HashSet, ops};
 
 use crate::Flag;
 
 /// Represents the list of flags.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-pub struct Flags(pub Vec<Flag>);
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct Flags(pub HashSet<Flag>);
 
 impl Flags {
+    pub fn clone_without_customs(&self) -> Self {
+        Self::from_iter(
+            self.iter()
+                .filter(|f| match f {
+                    Flag::Custom(_) => false,
+                    _ => true,
+                })
+                .cloned(),
+        )
+    }
+
     /// Builds a symbols string.
     pub fn to_symbols_string(&self) -> String {
         let mut flags = String::new();
@@ -30,8 +41,23 @@ impl Flags {
     }
 }
 
+impl ToString for Flags {
+    fn to_string(&self) -> String {
+        let mut flags = String::default();
+        let mut glue = "";
+
+        for flag in &self.0 {
+            flags.push_str(glue);
+            flags.push_str(&flag.to_string());
+            glue = " ";
+        }
+
+        flags
+    }
+}
+
 impl ops::Deref for Flags {
-    type Target = Vec<Flag>;
+    type Target = HashSet<Flag>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -41,28 +67,6 @@ impl ops::Deref for Flags {
 impl ops::DerefMut for Flags {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
-    }
-}
-
-impl fmt::Display for Flags {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut glue = "";
-
-        for flag in &self.0 {
-            write!(f, "{}", glue)?;
-            match flag {
-                Flag::Seen => write!(f, "\\Seen")?,
-                Flag::Answered => write!(f, "\\Answered")?,
-                Flag::Flagged => write!(f, "\\Flagged")?,
-                Flag::Deleted => write!(f, "\\Deleted")?,
-                Flag::Draft => write!(f, "\\Draft")?,
-                Flag::Recent => write!(f, "\\Recent")?,
-                Flag::Custom(flag) => write!(f, "{}", flag)?,
-            }
-            glue = " ";
-        }
-
-        Ok(())
     }
 }
 
@@ -80,9 +84,7 @@ impl From<&str> for Flags {
 impl FromIterator<Flag> for Flags {
     fn from_iter<T: IntoIterator<Item = Flag>>(iter: T) -> Self {
         let mut flags = Flags::default();
-        for flag in iter {
-            flags.push(flag);
-        }
+        flags.extend(iter);
         flags
     }
 }

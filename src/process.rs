@@ -38,25 +38,27 @@ pub fn run(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
 
     for cmd in cmd.split('|') {
         debug!("running command: {}", cmd);
-        output = pipe(cmd.trim(), &output)?;
+        (output, _) = pipe(cmd.trim(), &output)?;
     }
 
     Ok(output)
 }
 
 /// Runs the given command in a pipeline and returns the raw output.
-pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
+pub fn pipe(cmd: &str, input: &[u8]) -> Result<(Vec<u8>, usize)> {
     let mut output = Vec::new();
 
-    let pipeline = if cfg!(target_os = "windows")
+    let windows = cfg!(target_os = "windows")
         && env::var("MSYSTEM")
             .map(|env| !env.starts_with("MINGW"))
-            .unwrap_or_default()
-    {
+            .unwrap_or_default();
+
+    let pipeline = if windows {
         Command::new("cmd")
             .args(&["/C", cmd])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
     } else {
         Command::new("sh")
@@ -64,6 +66,7 @@ pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
             .arg(cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
     }
     .map_err(|err| Error::SpawnProcessError(err, cmd.to_string()))?;
@@ -74,11 +77,11 @@ pub fn pipe(cmd: &str, input: &[u8]) -> Result<Vec<u8>> {
         .write_all(input)
         .map_err(Error::WriteStdinError)?;
 
-    pipeline
+    let exit_code = pipeline
         .stdout
         .ok_or_else(|| Error::GetStdoutError)?
         .read_to_end(&mut output)
         .map_err(Error::ReadStdoutError)?;
 
-    Ok(output)
+    Ok((output, exit_code))
 }

@@ -1,143 +1,132 @@
-//! Id mapper module.
-//!
-//! This module contains the representation of the backend id
-//! mapper. The aim of the id mapper is to map internal email ids
-//! (which can be unfriendly to manipulate depending on the backend)
-//! to uuids (which are easier to manipulate).
-
-use std::{
-    collections, fs,
-    io::{self, prelude::*},
-    ops, path, result,
-};
+use log::{debug, info, trace};
+use std::result;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("cannot parse id mapper cache line {0}")]
-    ParseLineError(String),
-    #[error("cannot find message id from short hash {0}")]
-    FindFromShortHashError(String),
-    #[error("the short hash {0} matches more than one hash: {1}")]
-    MatchShortHashError(String, String),
-
-    #[error("cannot open id mapper file: {1}")]
-    OpenHashMapFileError(#[source] io::Error, path::PathBuf),
-    #[error("cannot write id mapper file: {1}")]
-    WriteHashMapFileError(#[source] io::Error, path::PathBuf),
-    #[error("cannot read line from id mapper file")]
-    ReadHashMapFileLineError(#[source] io::Error),
+    #[error("cannot get internal id from id {0}")]
+    GetInternalIdFromId(String),
+    #[error(transparent)]
+    SqliteError(#[from] rusqlite::Error),
 }
 
-type Result<T> = result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug, Default)]
 pub struct IdMapper {
-    /// Represents the path of the id mapper file.
-    path: path::PathBuf,
-    /// Represents the actual hash map of internal ids ⋄ uuids.
-    map: collections::HashMap<String, String>,
-    /// Represents the minimum size the uuids can be shown without
-    /// conflicts. This way only short hashes (uuid subset) can be
-    /// used.
-    short_hash_len: usize,
+    account: String,
+    folder: String,
+    db: rusqlite::Connection,
 }
 
 impl IdMapper {
-    pub fn new(dir: &path::Path) -> Result<Self> {
-        let mut mapper = Self::default();
-        mapper.path = dir.join(".himalaya-id-map");
-
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&mapper.path)
-            .map_err(|err| Error::OpenHashMapFileError(err, mapper.path.to_owned()))?;
-        let reader = io::BufReader::new(file);
-        for line in reader.lines() {
-            let line = line.map_err(Error::ReadHashMapFileLineError)?;
-            if mapper.short_hash_len == 0 {
-                mapper.short_hash_len = 2.max(line.parse().unwrap_or(2));
-            } else {
-                let (hash, id) = line
-                    .split_once(' ')
-                    .ok_or_else(|| Error::ParseLineError(line.to_owned()))?;
-                mapper.insert(hash.to_owned(), id.to_owned());
-            }
-        }
-
-        Ok(mapper)
+    fn build_table_name<A, F>(account: A, folder: F) -> String
+    where
+        A: AsRef<str>,
+        F: AsRef<str>,
+    {
+        let hash = md5::compute(account.as_ref().to_owned() + folder.as_ref());
+        format!("id_mapper_{hash:x}")
     }
 
-    pub fn find(&self, short_hash: &str) -> Result<String> {
-        let matching_hashes: Vec<_> = self
-            .keys()
-            .filter(|hash| hash.starts_with(short_hash))
-            .collect();
-        if matching_hashes.len() == 0 {
-            Err(Error::FindFromShortHashError(short_hash.to_owned()))
-        } else if matching_hashes.len() > 1 {
-            Err(Error::MatchShortHashError(
-                short_hash.to_owned(),
-                matching_hashes
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ))
-        } else {
-            Ok(self.get(matching_hashes[0]).unwrap().to_owned())
-        }
+    pub fn new<A, F>(db: rusqlite::Connection, account: A, folder: F) -> Result<Self>
+    where
+        A: AsRef<str> + ToString,
+        F: AsRef<str> + ToString,
+    {
+        info!(
+            "creating a new id mapper for account {} and folder {}",
+            account.as_ref(),
+            folder.as_ref(),
+        );
+
+        let create_table = format!(
+            "CREATE TABLE IF NOT EXISTS {} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                internal_id TEXT UNIQUE
+            )",
+            Self::build_table_name(account.as_ref(), folder.as_ref())
+        );
+
+        db.execute(&create_table, [])?;
+
+        Ok(Self {
+            account: account.to_string(),
+            folder: folder.to_string(),
+            db,
+        })
     }
 
-    pub fn append(&mut self, lines: Vec<(String, String)>) -> Result<usize> {
-        self.extend(lines);
-
-        let mut entries = String::new();
-        let mut short_hash_len = self.short_hash_len;
-
-        for (hash, id) in self.iter() {
-            loop {
-                let short_hash = &hash[0..short_hash_len];
-                let conflict_found = self
-                    .map
-                    .keys()
-                    .find(|cached_hash| cached_hash.starts_with(short_hash) && cached_hash != &hash)
-                    .is_some();
-                if short_hash_len > 32 || !conflict_found {
-                    break;
-                }
-                short_hash_len += 1;
-            }
-            entries.push_str(&format!("{} {}\n", hash, id));
-        }
-
-        self.short_hash_len = short_hash_len;
-
-        fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&self.path)
-            .map_err(|err| Error::OpenHashMapFileError(err, self.path.to_owned()))?
-            .write(format!("{}\n{}", short_hash_len, entries).as_bytes())
-            .map_err(|err| Error::WriteHashMapFileError(err, self.path.to_owned()))?;
-
-        Ok(short_hash_len)
+    fn table_name(&self) -> String {
+        Self::build_table_name(&self.account, &self.folder)
     }
-}
 
-impl ops::Deref for IdMapper {
-    type Target = collections::HashMap<String, String>;
+    pub fn insert<I>(&self, internal_id: I) -> Result<String>
+    where
+        I: AsRef<str>,
+    {
+        info!(
+            "inserting internal id {} to id mapper",
+            internal_id.as_ref()
+        );
 
-    fn deref(&self) -> &Self::Target {
-        &self.map
+        self.db.execute(
+            &format!(
+                "INSERT OR IGNORE INTO {} (internal_id) VALUES (?)",
+                self.table_name(),
+            ),
+            [internal_id.as_ref()],
+        )?;
+
+        let id = self.db.last_insert_rowid().to_string();
+        debug!("last inserted id: {id}");
+
+        Ok(id)
     }
-}
 
-impl ops::DerefMut for IdMapper {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.map
+    pub fn get_id<I>(&self, internal_id: I) -> Result<String>
+    where
+        I: AsRef<str> + ToString,
+    {
+        info!("getting id from internal id {}", internal_id.as_ref());
+
+        let mut stmt = self.db.prepare(&format!(
+            "SELECT id FROM {} WHERE internal_id = ?",
+            self.table_name()
+        ))?;
+
+        let ids: Vec<usize> = stmt
+            .query_map([internal_id.as_ref()], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let id = match ids.first() {
+            Some(id) => id.to_string(),
+            None => self.insert(internal_id)?,
+        };
+        debug!("id: {id}");
+
+        Ok(id)
+    }
+
+    pub fn get_internal_id<I>(&self, id: I) -> Result<String>
+    where
+        I: AsRef<str> + ToString,
+    {
+        info!("getting internal id from id {}", id.as_ref());
+
+        let mut stmt = self.db.prepare(&format!(
+            "SELECT internal_id FROM {} WHERE id = ?",
+            self.table_name()
+        ))?;
+
+        let internal_ids: Vec<String> = stmt
+            // TODO: id should be a usize instead of a string
+            .query_map([id.as_ref().parse::<usize>().unwrap()], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let internal_id = internal_ids
+            .first()
+            .ok_or_else(|| Error::GetInternalIdFromId(id.to_string()))?
+            .to_string();
+        trace!("interal id: {internal_id}");
+
+        Ok(internal_id)
     }
 }

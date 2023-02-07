@@ -4,6 +4,8 @@ pub mod flags;
 pub mod imap;
 #[cfg(feature = "maildir-backend")]
 pub mod maildir;
+pub mod sync;
 
 pub use self::flag::*;
 pub use self::flags::*;
+pub use self::sync::sync_all;

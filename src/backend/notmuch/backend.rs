@@ -1,14 +1,34 @@
-use log::{debug, info, trace};
-use std::{any::Any, fs, io, result};
+use lettre::address::AddressError;
+use log::{info, trace};
+use std::{any::Any, borrow::Cow, fs, io, path::PathBuf, result};
 use thiserror::Error;
 
 use crate::{
-    account, backend, email, envelope::notmuch::envelopes, id_mapper, AccountConfig, Backend,
-    Email, Envelopes, Folder, Folders, IdMapper, MaildirBackend, MaildirConfig, NotmuchConfig,
+    account, backend, email,
+    envelope::notmuch::{envelope, envelopes},
+    id_mapper, AccountConfig, Backend, Emails, Envelope, Envelopes, Flag, Flags, Folder, Folders,
+    IdMapper, NotmuchConfig,
 };
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("cannot get default notmuch database path")]
+    GetDefaultDatabasePathError(#[source] notmuch::Error),
+    #[error("cannot store notmuch email")]
+    StoreWithFlagsError(maildir::MaildirError),
+    #[error("cannot find notmuch email")]
+    FindMaildirEmailById,
+    #[error("cannot parse notmuch envelope date {1}")]
+    ParseTimestampFromEnvelopeError(#[source] mailparse::MailParseError, String),
+    #[error("cannot parse notmuch sender {1}")]
+    ParseSenderError(#[source] mailparse::MailParseError, String),
+    #[error("cannot open notmuch database at {1}")]
+    OpenDatabaseError(#[source] rusqlite::Error, PathBuf),
+    #[error("cannot find notmuch email")]
+    FindEmailError(#[source] notmuch::Error),
+    #[error("cannot remove tags from notmuch email {1}")]
+    RemoveAllTagsError(#[source] notmuch::Error, String),
+
     #[error("cannot get notmuch backend from config")]
     GetBackendFromConfigError,
     #[error("cannot get notmuch inner maildir backend")]
@@ -22,9 +42,13 @@ pub enum Error {
     #[error("cannot find notmuch message sender")]
     FindSenderError,
     #[error("cannot parse notmuch message senders {1}")]
-    ParseSendersError(#[source] mailparse::MailParseError, String),
-    #[error("cannot open notmuch database")]
-    OpenDbError(#[source] notmuch::Error),
+    ParseSendersError(#[source] AddressError, String),
+    #[error("cannot open default notmuch database")]
+    OpenDefaultNotmuchDatabaseError(#[source] notmuch::Error),
+    #[error("cannot open notmuch database at {1}")]
+    OpenNotmuchDatabaseError(#[source] notmuch::Error, PathBuf),
+    #[error("cannot close notmuch database")]
+    CloseDatabaseError(#[source] notmuch::Error),
     #[error("cannot build notmuch query")]
     BuildQueryError(#[source] notmuch::Error),
     #[error("cannot search notmuch envelopes")]
@@ -33,16 +57,16 @@ pub enum Error {
     GetEnvelopesOutOfBoundsError(usize),
     #[error("cannot add notmuch mailbox: feature not implemented")]
     AddMboxUnimplementedError,
+    #[error("cannot purge notmuch folder: feature not implemented")]
+    PurgeFolderUnimplementedError,
     #[error("cannot delete notmuch mailbox: feature not implemented")]
-    DelMboxUnimplementedError,
+    DeleteFolderUnimplementedError,
     #[error("cannot copy notmuch message: feature not implemented")]
     CopyMsgUnimplementedError,
     #[error("cannot move notmuch message: feature not implemented")]
     MoveMsgUnimplementedError,
     #[error("cannot index notmuch message")]
     IndexFileError(#[source] notmuch::Error),
-    #[error("cannot find notmuch message")]
-    FindMsgError(#[source] notmuch::Error),
     #[error("cannot find notmuch message")]
     FindMsgEmptyError,
     #[error("cannot read notmuch raw message from file")]
@@ -54,7 +78,7 @@ pub enum Error {
     #[error("cannot add notmuch tag")]
     AddTagError(#[source] notmuch::Error),
     #[error("cannot delete notmuch tag")]
-    DelTagError(#[source] notmuch::Error),
+    RemoveTagError(#[source] notmuch::Error),
 
     #[error(transparent)]
     ConfigError(#[from] account::config::Error),
@@ -70,94 +94,103 @@ pub type Result<T> = result::Result<T, Error>;
 
 /// Represents the Notmuch backend.
 pub struct NotmuchBackend<'a> {
-    account_config: &'a AccountConfig,
-    notmuch_config: &'a NotmuchConfig,
-    db: notmuch::Database,
+    account_config: Cow<'a, AccountConfig>,
+    backend_config: Cow<'a, NotmuchConfig>,
+    db_path: PathBuf,
+    mdir: maildir::Maildir,
 }
 
 impl<'a> NotmuchBackend<'a> {
     pub fn new(
-        account_config: &'a AccountConfig,
-        notmuch_config: &'a NotmuchConfig,
+        account_config: Cow<'a, AccountConfig>,
+        backend_config: Cow<'a, NotmuchConfig>,
     ) -> Result<Self> {
-        let db = notmuch::Database::open(
-            notmuch_config.db_path.clone(),
-            notmuch::DatabaseMode::ReadWrite,
-        )
-        .map_err(Error::OpenDbError)?;
-
-        Ok(Self {
-            account_config,
-            notmuch_config,
-            db,
-        })
+        NotmuchBackendBuilder::new().build(account_config, backend_config)
     }
 
-    fn _search_envelopes(
-        &mut self,
-        query: &str,
-        page_size: usize,
-        page: usize,
-    ) -> Result<Envelopes> {
-        // Gets envelopes matching the given Notmuch query.
-        let query_builder = self
-            .db
-            .create_query(query)
-            .map_err(Error::BuildQueryError)?;
-        let mut envelopes = envelopes::from_raws(
-            query_builder
-                .search_messages()
-                .map_err(Error::SearchEnvelopesError)?,
-        )?;
-        debug!("envelopes len: {:?}", envelopes.len());
-        trace!("envelopes: {:?}", envelopes);
+    pub fn get_default_db_path() -> Result<PathBuf> {
+        Ok(notmuch::Database::open_with_config(
+            None as Option<PathBuf>,
+            notmuch::DatabaseMode::ReadWrite,
+            None as Option<PathBuf>,
+            None,
+        )
+        .map_err(Error::OpenDefaultNotmuchDatabaseError)?
+        .path()
+        .to_owned())
+    }
+
+    pub fn with_db<T, F>(&self, f: F) -> Result<T>
+    where
+        F: Fn(&notmuch::Database) -> Result<T>,
+    {
+        let db = notmuch::Database::open_with_config(
+            Some(&self.backend_config.db_path),
+            notmuch::DatabaseMode::ReadWrite,
+            None as Option<PathBuf>,
+            None,
+        )
+        .map_err(|err| Error::OpenNotmuchDatabaseError(err, self.backend_config.db_path.clone()))?;
+        let res = f(&db)?;
+        db.close().map_err(Error::CloseDatabaseError)?;
+        Ok(res)
+    }
+
+    pub fn id_mapper(&self) -> Result<IdMapper> {
+        let db = rusqlite::Connection::open(&self.db_path)
+            .map_err(|err| Error::OpenDatabaseError(err, self.db_path.clone()))?;
+
+        let id_mapper = IdMapper::new(db, &self.account_config.name, "all")?;
+
+        Ok(id_mapper)
+    }
+
+    fn _search_envelopes(&self, query: &str, page_size: usize, page: usize) -> Result<Envelopes> {
+        let id_mapper = self.id_mapper()?;
+        let mut envelopes = self.with_db(|db| {
+            let query_builder = db.create_query(query).map_err(Error::BuildQueryError)?;
+            envelopes::from_raws(
+                query_builder
+                    .search_messages()
+                    .map_err(Error::SearchEnvelopesError)?,
+            )
+        })?;
+        trace!("envelopes: {envelopes:#?}");
 
         // Calculates pagination boundaries.
         let page_begin = page * page_size;
-        debug!("page begin: {:?}", page_begin);
+        trace!("page begin: {:?}", page_begin);
         if page_begin > envelopes.len() {
             return Err(Error::GetEnvelopesOutOfBoundsError(page_begin + 1))?;
         }
         let page_end = envelopes.len().min(page_begin + page_size);
-        debug!("page end: {:?}", page_end);
+        trace!("page end: {:?}", page_end);
 
-        // Sorts envelopes by most recent date.
         envelopes.sort_by(|a, b| b.date.partial_cmp(&a.date).unwrap());
-
-        // Applies pagination boundaries.
-        envelopes.0 = envelopes[page_begin..page_end].to_owned();
-
-        // Appends envelopes hash to the id mapper cache file and
-        // calculates the new short hash length. The short hash length
-        // represents the minimum hash length possible to avoid
-        // conflicts.
-        let short_hash_len = {
-            let mut mapper = IdMapper::new(&self.notmuch_config.db_path)?;
-            let entries = envelopes
-                .iter()
-                .map(|env| (env.id.to_owned(), env.internal_id.to_owned()))
-                .collect();
-            mapper.append(entries)?
-        };
-        debug!("short hash length: {:?}", short_hash_len);
-
-        // Shorten envelopes hash.
-        envelopes
-            .iter_mut()
-            .for_each(|env| env.id = env.id[0..short_hash_len].to_owned());
+        *envelopes = envelopes[page_begin..page_end]
+            .iter()
+            .map(|envelope| {
+                Ok(Envelope {
+                    id: id_mapper.get_id(&envelope.internal_id)?,
+                    ..envelope.clone()
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(envelopes)
     }
 }
 
-impl<'a> Backend<'a> for NotmuchBackend<'a> {
-    fn folder_add(&mut self, _mbox: &str) -> backend::Result<()> {
+impl<'a> Backend for NotmuchBackend<'a> {
+    fn name(&self) -> String {
+        self.account_config.name.clone()
+    }
+
+    fn add_folder(&self, _folder: &str) -> backend::Result<()> {
         Err(Error::AddMboxUnimplementedError)?
     }
 
-    fn folder_list(&mut self) -> backend::Result<Folders> {
-        trace!(">> get notmuch virtual folders");
-
+    fn list_folders(&self) -> backend::Result<Folders> {
         let mut mboxes = Folders::default();
         for (name, desc) in &self.account_config.folder_aliases {
             mboxes.push(Folder {
@@ -172,261 +205,596 @@ impl<'a> Backend<'a> for NotmuchBackend<'a> {
         Ok(mboxes)
     }
 
-    fn folder_delete(&mut self, _mbox: &str) -> backend::Result<()> {
-        Err(Error::DelMboxUnimplementedError)?
+    fn purge_folder(&self, _folder: &str) -> backend::Result<()> {
+        Err(Error::PurgeFolderUnimplementedError)?
     }
 
-    fn envelope_list(
-        &mut self,
-        virt_mbox: &str,
+    fn delete_folder(&self, _folder: &str) -> backend::Result<()> {
+        Err(Error::DeleteFolderUnimplementedError)?
+    }
+
+    fn get_envelope(&self, _folder: &str, id: &str) -> backend::Result<Envelope> {
+        info!("getting notmuch envelope by id {id}");
+
+        let internal_id = self.id_mapper()?.get_internal_id(id)?;
+        trace!("internal id: {internal_id}");
+
+        let envelope = self.with_db(|db| {
+            envelope::from_raw(
+                db.find_message(&internal_id)
+                    .map_err(Error::FindEmailError)?
+                    .ok_or_else(|| Error::FindMsgEmptyError)?,
+            )
+        })?;
+        trace!("envelope: {envelope:#?}");
+
+        Ok(envelope)
+    }
+
+    fn get_envelope_internal(&self, _folder: &str, internal_id: &str) -> backend::Result<Envelope> {
+        info!("getting notmuch envelope by internal id {internal_id}");
+
+        let envelope = self.with_db(|db| {
+            envelope::from_raw(
+                db.find_message(&internal_id)
+                    .map_err(Error::FindEmailError)?
+                    .ok_or_else(|| Error::FindMsgEmptyError)?,
+            )
+        })?;
+        trace!("envelope: {envelope:#?}");
+
+        Ok(envelope)
+    }
+
+    fn list_envelopes(
+        &self,
+        virtual_folder: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        info!(">> get notmuch envelopes");
-        debug!("virtual folder: {:?}", virt_mbox);
-        debug!("page size: {:?}", page_size);
-        debug!("page: {:?}", page);
+        info!("listing notmuch envelopes from virtual folder {virtual_folder}");
 
         let query = self
             .account_config
-            .folder_alias(virt_mbox)
+            .folder_alias(virtual_folder)
             .unwrap_or_else(|_| String::from("all"));
-        debug!("query: {:?}", query);
-        let envelopes = self._search_envelopes(&query, page_size, page)?;
+        trace!("query: {query}");
 
-        info!("<< get notmuch envelopes");
+        let envelopes = self._search_envelopes(&query, page_size, page)?;
+        trace!("envelopes: {envelopes:#?}");
+
         Ok(envelopes)
     }
 
-    fn envelope_search(
-        &mut self,
-        virt_mbox: &str,
+    fn search_envelopes(
+        &self,
+        virtual_folder: &str,
         query: &str,
         _sort: &str,
         page_size: usize,
         page: usize,
     ) -> backend::Result<Envelopes> {
-        info!(">> search notmuch envelopes");
-        debug!("virtual folder: {:?}", virt_mbox);
-        debug!("query: {:?}", query);
-        debug!("page size: {:?}", page_size);
-        debug!("page: {:?}", page);
+        info!("searching notmuch envelopes from virtual folder {virtual_folder}");
 
         let query = if query.is_empty() {
             self.account_config
-                .folder_alias(virt_mbox)
+                .folder_alias(virtual_folder)
                 .unwrap_or_else(|_| String::from("all"))
         } else {
             query.to_owned()
         };
-        debug!("final query: {:?}", query);
-        let envelopes = self._search_envelopes(&query, page_size, page)?;
+        trace!("query: {query}");
 
-        info!("<< search notmuch envelopes");
+        let envelopes = self._search_envelopes(&query, page_size, page)?;
+        trace!("envelopes: {envelopes:#?}");
+
         Ok(envelopes)
     }
 
-    fn email_add(&mut self, _: &str, msg: &[u8], tags: &str) -> backend::Result<String> {
-        info!(">> add notmuch envelopes");
-        debug!("tags: {:?}", tags);
+    fn add_email(&self, _folder: &str, email: &[u8], flags: &Flags) -> backend::Result<String> {
+        info!(
+            "adding notmuch email with flags {flags}",
+            flags = flags.to_string()
+        );
 
-        let dir = &self.notmuch_config.db_path;
+        let mdir_internal_id = self
+            .mdir
+            .store_cur_with_flags(email, "")
+            .map_err(Error::StoreWithFlagsError)?;
+        trace!("added email internal maildir id: {mdir_internal_id}");
 
-        // Adds the message to the maildir folder and gets its hash.
-        let mdir_config = MaildirConfig {
-            root_dir: self.notmuch_config.db_path.clone(),
-        };
-        // TODO: find a way to move this to the Backend::connect method.
-        let mut mdir = MaildirBackend::new(self.account_config, &mdir_config);
-        let hash = mdir.email_add("", msg, "seen")?;
-        debug!("hash: {:?}", hash);
+        let entry = self
+            .mdir
+            .find(&mdir_internal_id)
+            .ok_or(Error::FindMaildirEmailById)?;
+        let path = entry.path();
+        trace!("path: {path:?}");
 
-        // Retrieves the file path of the added message by its maildir
-        // identifier.
-        let mut mapper = IdMapper::new(dir)?;
-        let id = mapper.find(&hash)?;
-        debug!("id: {:?}", id);
-        let file_path = dir.join("cur").join(format!("{}:2,S", id));
-        debug!("file path: {:?}", file_path);
+        let email = self.with_db(|db| db.index_file(path, None).map_err(Error::IndexFileError))?;
+        let internal_id = email.id();
+        let id = self.id_mapper()?.insert(&internal_id)?;
+        self.add_flags("INBOX", vec![&id], &flags)?;
 
-        // Adds the message to the notmuch database by indexing it.
-        let id = self
-            .db
-            .index_file(file_path, None)
-            .map_err(Error::IndexFileError)?
-            .id()
-            .to_string();
-        let hash = format!("{:x}", md5::compute(&id));
-
-        // Appends hash entry to the id mapper cache file.
-        mapper.append(vec![(hash.clone(), id.clone())])?;
-
-        // Attaches tags to the notmuch message.
-        self.flags_add("", &hash, tags)?;
-
-        info!("<< add notmuch envelopes");
-        Ok(hash)
+        Ok(id)
     }
 
-    fn email_get(&mut self, _: &str, short_hash: &str) -> backend::Result<Email> {
-        info!(">> add notmuch envelopes");
-        debug!("short hash: {:?}", short_hash);
+    fn add_email_internal(
+        &self,
+        _folder: &str,
+        email: &[u8],
+        flags: &Flags,
+    ) -> backend::Result<String> {
+        info!(
+            "adding notmuch email with flags {flags}",
+            flags = flags.to_string()
+        );
 
-        let dir = &self.notmuch_config.db_path;
-        let id = IdMapper::new(dir)?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        let msg_file_path = self
-            .db
-            .find_message(&id)
-            .map_err(Error::FindMsgError)?
-            .ok_or_else(|| Error::FindMsgEmptyError)?
-            .filename()
-            .to_owned();
-        debug!("message file path: {:?}", msg_file_path);
-        let raw_msg = fs::read(&msg_file_path).map_err(Error::ReadMsgError)?;
-        let msg = mailparse::parse_mail(&raw_msg).map_err(Error::ParseMsgError)?;
-        let msg = Email::from_parsed_mail(msg, &self.account_config)?;
-        trace!("message: {:?}", msg);
+        let mdir_internal_id = self
+            .mdir
+            .store_cur_with_flags(email, "")
+            .map_err(Error::StoreWithFlagsError)?;
+        trace!("added email internal maildir id: {mdir_internal_id}");
 
-        info!("<< get notmuch message");
-        Ok(msg)
+        let entry = self
+            .mdir
+            .find(&mdir_internal_id)
+            .ok_or(Error::FindMaildirEmailById)?;
+        let path = entry.path();
+        trace!("path: {path:?}");
+
+        let email = self.with_db(|db| db.index_file(path, None).map_err(Error::IndexFileError))?;
+        let internal_id = email.id();
+        self.id_mapper()?.insert(&internal_id)?;
+        self.add_flags_internal("INBOX", vec![&internal_id], &flags)?;
+
+        Ok(internal_id.to_string())
     }
 
-    fn email_copy(
-        &mut self,
-        _dir_src: &str,
-        _dir_dst: &str,
-        _short_hash: &str,
+    fn preview_emails(&self, _folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
+        info!(
+            "previewing notmuch emails by ids {ids}",
+            ids = ids.join(", ")
+        );
+
+        let id_mapper = self.id_mapper()?;
+        let internal_ids: Vec<String> = ids
+            .into_iter()
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        trace!("internal ids: {internal_ids:?}");
+
+        let emails: Emails = self
+            .with_db(|db| {
+                internal_ids
+                    .iter()
+                    .map(|internal_id| {
+                        let email_filepath = db
+                            .find_message(&internal_id)
+                            .map_err(Error::FindEmailError)?
+                            .ok_or_else(|| Error::FindMsgEmptyError)?
+                            .filename()
+                            .to_owned();
+                        fs::read(&email_filepath).map_err(Error::ReadMsgError)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })?
+            .into();
+
+        Ok(emails)
+    }
+
+    fn preview_emails_internal(
+        &self,
+        _folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<Emails> {
+        info!(
+            "previewing notmuch emails by internal ids {ids}",
+            ids = internal_ids.join(", ")
+        );
+
+        let emails: Emails = self
+            .with_db(|db| {
+                internal_ids
+                    .iter()
+                    .map(|internal_id| {
+                        let email_filepath = db
+                            .find_message(&internal_id)
+                            .map_err(Error::FindEmailError)?
+                            .ok_or_else(|| Error::FindMsgEmptyError)?
+                            .filename()
+                            .to_owned();
+                        fs::read(&email_filepath).map_err(Error::ReadMsgError)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })?
+            .into();
+
+        Ok(emails)
+    }
+
+    fn get_emails(&self, folder: &str, ids: Vec<&str>) -> backend::Result<Emails> {
+        info!("getting notmuch emails by ids {ids}", ids = ids.join(", "));
+        let emails = self.preview_emails(folder, ids.clone())?;
+        self.add_flags("INBOX", ids, &Flags::from_iter([Flag::Seen]))?;
+        Ok(emails)
+    }
+
+    fn get_emails_internal(
+        &self,
+        folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<Emails> {
+        info!(
+            "getting notmuch emails by internal ids {ids}",
+            ids = internal_ids.join(", ")
+        );
+        let emails = self.preview_emails_internal(folder, internal_ids.clone())?;
+        self.add_flags_internal("INBOX", internal_ids, &Flags::from_iter([Flag::Seen]))?;
+        Ok(emails)
+    }
+
+    fn copy_emails(
+        &self,
+        _from_dir: &str,
+        _to_dir: &str,
+        _short_hashes: Vec<&str>,
     ) -> backend::Result<()> {
-        info!(">> copy notmuch message");
-        info!("<< copy notmuch message");
+        // How to deal with duplicate Message-ID?
         Err(Error::CopyMsgUnimplementedError)?
     }
 
-    fn email_move(
-        &mut self,
-        _dir_src: &str,
-        _dir_dst: &str,
-        _short_hash: &str,
+    fn copy_emails_internal(
+        &self,
+        _from_dir: &str,
+        _to_dir: &str,
+        _internal_ids: Vec<&str>,
     ) -> backend::Result<()> {
-        info!(">> move notmuch message");
-        info!("<< move notmuch message");
+        // How to deal with duplicate Message-ID?
+        Err(Error::CopyMsgUnimplementedError)?
+    }
+
+    fn move_emails(
+        &self,
+        _from_dir: &str,
+        _to_dir: &str,
+        _short_hashes: Vec<&str>,
+    ) -> backend::Result<()> {
         Err(Error::MoveMsgUnimplementedError)?
     }
 
-    fn email_delete(&mut self, _virt_mbox: &str, short_hash: &str) -> backend::Result<()> {
-        info!(">> delete notmuch message");
-        debug!("short hash: {:?}", short_hash);
-
-        let dir = &self.notmuch_config.db_path;
-        let id = IdMapper::new(dir)?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        let msg_file_path = self
-            .db
-            .find_message(&id)
-            .map_err(Error::FindMsgError)?
-            .ok_or_else(|| Error::FindMsgEmptyError)?
-            .filename()
-            .to_owned();
-        debug!("message file path: {:?}", msg_file_path);
-        self.db
-            .remove_message(msg_file_path)
-            .map_err(Error::DelMsgError)?;
-
-        info!("<< delete notmuch message");
-        Ok(())
-    }
-
-    fn flags_add(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
-        info!(">> add notmuch message flags");
-        debug!("tags: {:?}", tags);
-
-        let dir = &self.notmuch_config.db_path;
-        let id = IdMapper::new(dir)?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        let query = format!("id:{}", id);
-        debug!("query: {:?}", query);
-        let tags: Vec<_> = tags.split_whitespace().collect();
-        let query_builder = self
-            .db
-            .create_query(&query)
-            .map_err(Error::BuildQueryError)?;
-        let msgs = query_builder
-            .search_messages()
-            .map_err(Error::SearchEnvelopesError)?;
-
-        for msg in msgs {
-            for tag in tags.iter() {
-                msg.add_tag(*tag).map_err(Error::AddTagError)?;
-            }
-        }
-
-        info!("<< add notmuch message flags");
-        Ok(())
-    }
-
-    fn flags_set(&mut self, _virt_mbox: &str, short_hash: &str, tags: &str) -> backend::Result<()> {
-        info!(">> set notmuch message flags");
-        debug!("tags: {:?}", tags);
-
-        let dir = &self.notmuch_config.db_path;
-        let id = IdMapper::new(dir)?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        let query = format!("id:{}", id);
-        debug!("query: {:?}", query);
-        let tags: Vec<_> = tags.split_whitespace().collect();
-        let query_builder = self
-            .db
-            .create_query(&query)
-            .map_err(Error::BuildQueryError)?;
-        let msgs = query_builder
-            .search_messages()
-            .map_err(Error::SearchEnvelopesError)?;
-        for msg in msgs {
-            msg.remove_all_tags().map_err(Error::DelTagError)?;
-
-            for tag in tags.iter() {
-                msg.add_tag(*tag).map_err(Error::AddTagError)?;
-            }
-        }
-
-        info!("<< set notmuch message flags");
-        Ok(())
-    }
-
-    fn flags_delete(
-        &mut self,
-        _virt_mbox: &str,
-        short_hash: &str,
-        tags: &str,
+    fn move_emails_internal(
+        &self,
+        _from_dir: &str,
+        _to_dir: &str,
+        _internal_ids: Vec<&str>,
     ) -> backend::Result<()> {
-        info!(">> delete notmuch message flags");
-        debug!("tags: {:?}", tags);
+        Err(Error::MoveMsgUnimplementedError)?
+    }
 
-        let dir = &self.notmuch_config.db_path;
-        let id = IdMapper::new(dir)?.find(short_hash)?;
-        debug!("id: {:?}", id);
-        let query = format!("id:{}", id);
-        debug!("query: {:?}", query);
-        let tags: Vec<_> = tags.split_whitespace().collect();
-        let query_builder = self
-            .db
-            .create_query(&query)
-            .map_err(Error::BuildQueryError)?;
-        let msgs = query_builder
-            .search_messages()
-            .map_err(Error::SearchEnvelopesError)?;
-        for msg in msgs {
-            for tag in tags.iter() {
-                msg.remove_tag(*tag).map_err(Error::DelTagError)?;
+    fn delete_emails(&self, _folder: &str, ids: Vec<&str>) -> backend::Result<()> {
+        info!("deleting notmuch emails by ids {ids}", ids = ids.join(", "));
+
+        let id_mapper = self.id_mapper()?;
+        let internal_ids: Vec<String> = ids
+            .into_iter()
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        trace!("internal ids: {internal_ids:?}");
+
+        self.with_db(|db| {
+            internal_ids.iter().try_for_each(|internal_id| {
+                let path = db
+                    .find_message(&internal_id)
+                    .map_err(Error::FindEmailError)?
+                    .ok_or_else(|| Error::FindMsgEmptyError)?
+                    .filename()
+                    .to_owned();
+                db.remove_message(path).map_err(Error::DelMsgError)
+            })
+        })?;
+
+        Ok(())
+    }
+
+    fn delete_emails_internal(
+        &self,
+        _folder: &str,
+        internal_ids: Vec<&str>,
+    ) -> backend::Result<()> {
+        info!(
+            "deleting notmuch emails by internal ids {ids}",
+            ids = internal_ids.join(", ")
+        );
+
+        self.with_db(|db| {
+            internal_ids.iter().try_for_each(|internal_id| {
+                let path = db
+                    .find_message(&internal_id)
+                    .map_err(Error::FindEmailError)?
+                    .ok_or_else(|| Error::FindMsgEmptyError)?
+                    .filename()
+                    .to_owned();
+                db.remove_message(path).map_err(Error::DelMsgError)
+            })
+        })?;
+
+        Ok(())
+    }
+
+    fn add_flags(
+        &self,
+        _virtual_folder: &str,
+        ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        info!(
+            "adding notmuch flags {flags} by ids {ids}",
+            flags = flags.to_string(),
+            ids = ids.join(", "),
+        );
+
+        let id_mapper = self.id_mapper()?;
+        let internal_ids: Vec<String> = ids
+            .into_iter()
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        trace!("internal ids: {internal_ids:?}");
+
+        let query = format!("mid:\"/^({})$/\"", internal_ids.join("|"));
+        trace!("query: {query}");
+
+        self.with_db(|db| {
+            let query_builder = db.create_query(&query).map_err(Error::BuildQueryError)?;
+            let emails = query_builder
+                .search_messages()
+                .map_err(Error::SearchEnvelopesError)?;
+
+            for email in emails {
+                for flag in flags.iter() {
+                    email
+                        .add_tag(&flag.to_string())
+                        .map_err(Error::AddTagError)?;
+                }
             }
-        }
 
-        info!("<< delete notmuch message flags");
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    fn add_flags_internal(
+        &self,
+        _folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        info!(
+            "adding notmuch flags {flags} by internal_ids {ids}",
+            flags = flags.to_string(),
+            ids = internal_ids.join(", "),
+        );
+
+        let query = format!("mid:\"/^({})$/\"", internal_ids.join("|"));
+        trace!("query: {query}");
+
+        self.with_db(|db| {
+            let query_builder = db.create_query(&query).map_err(Error::BuildQueryError)?;
+            let emails = query_builder
+                .search_messages()
+                .map_err(Error::SearchEnvelopesError)?;
+
+            for email in emails {
+                for flag in flags.iter() {
+                    email
+                        .add_tag(&flag.to_string())
+                        .map_err(Error::AddTagError)?;
+                }
+            }
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    fn set_flags(&self, _folder: &str, ids: Vec<&str>, flags: &Flags) -> backend::Result<()> {
+        info!(
+            "setting notmuch flags {flags} by ids {ids}",
+            flags = flags.to_string(),
+            ids = ids.join(", "),
+        );
+
+        let id_mapper = self.id_mapper()?;
+        let internal_ids: Vec<String> = ids
+            .into_iter()
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        trace!("internal ids: {internal_ids:?}");
+
+        let query = format!("mid:\"/^({})$/\"", internal_ids.join("|"));
+        trace!("query: {query}");
+
+        self.with_db(|db| {
+            let query_builder = db.create_query(&query).map_err(Error::BuildQueryError)?;
+            let emails = query_builder
+                .search_messages()
+                .map_err(Error::SearchEnvelopesError)?;
+
+            for email in emails {
+                email
+                    .remove_all_tags()
+                    .map_err(|err| Error::RemoveAllTagsError(err, email.id().to_string()))?;
+
+                for flag in flags.iter() {
+                    email
+                        .add_tag(&flag.to_string())
+                        .map_err(Error::AddTagError)?;
+                }
+            }
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    fn set_flags_internal(
+        &self,
+        _folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        info!(
+            "setting notmuch flags {flags} by internal_ids {ids}",
+            flags = flags.to_string(),
+            ids = internal_ids.join(", "),
+        );
+
+        let query = format!("mid:\"/^({})$/\"", internal_ids.join("|"));
+        trace!("query: {query}");
+
+        self.with_db(|db| {
+            let query_builder = db.create_query(&query).map_err(Error::BuildQueryError)?;
+            let emails = query_builder
+                .search_messages()
+                .map_err(Error::SearchEnvelopesError)?;
+
+            for email in emails {
+                email
+                    .remove_all_tags()
+                    .map_err(|err| Error::RemoveAllTagsError(err, email.id().to_string()))?;
+
+                for flag in flags.iter() {
+                    email
+                        .add_tag(&flag.to_string())
+                        .map_err(Error::AddTagError)?;
+                }
+            }
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    fn remove_flags(
+        &self,
+        _virtual_folder: &str,
+        ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        info!(
+            "removing notmuch flags {flags} by ids {ids}",
+            flags = flags.to_string(),
+            ids = ids.join(", "),
+        );
+
+        let id_mapper = self.id_mapper()?;
+        let internal_ids: Vec<String> = ids
+            .into_iter()
+            .map(|id| Ok(id_mapper.get_internal_id(id)?))
+            .collect::<Result<_>>()?;
+        trace!("internal ids: {internal_ids:?}");
+
+        let query = format!("mid:\"/^({})$/\"", internal_ids.join("|"));
+        trace!("query: {query}");
+
+        self.with_db(|db| {
+            let query_builder = db.create_query(&query).map_err(Error::BuildQueryError)?;
+            let emails = query_builder
+                .search_messages()
+                .map_err(Error::SearchEnvelopesError)?;
+
+            for email in emails {
+                for flag in flags.iter() {
+                    email
+                        .remove_tag(&flag.to_string())
+                        .map_err(Error::RemoveTagError)?;
+                }
+            }
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    fn remove_flags_internal(
+        &self,
+        _folder: &str,
+        internal_ids: Vec<&str>,
+        flags: &Flags,
+    ) -> backend::Result<()> {
+        info!(
+            "removing notmuch flags {flags} by internal_ids {ids}",
+            flags = flags.to_string(),
+            ids = internal_ids.join(", "),
+        );
+
+        let query = format!("mid:\"/^({})$/\"", internal_ids.join("|"));
+        trace!("query: {query}");
+
+        self.with_db(|db| {
+            let query_builder = db.create_query(&query).map_err(Error::BuildQueryError)?;
+            let emails = query_builder
+                .search_messages()
+                .map_err(Error::SearchEnvelopesError)?;
+
+            for email in emails {
+                for flag in flags.iter() {
+                    email
+                        .remove_tag(&flag.to_string())
+                        .map_err(Error::RemoveTagError)?;
+                }
+            }
+
+            Ok(())
+        })?;
+
         Ok(())
     }
 
     fn as_any(&self) -> &(dyn Any + 'a) {
         self
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NotmuchBackendBuilder {
+    db_path: Option<PathBuf>,
+}
+
+impl NotmuchBackendBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn db_path<P>(mut self, path: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        self.db_path = Some(path.into());
+        self
+    }
+
+    pub fn build<'a>(
+        self,
+        account_config: Cow<'a, AccountConfig>,
+        backend_config: Cow<'a, NotmuchConfig>,
+    ) -> Result<NotmuchBackend> {
+        let mdir = maildir::Maildir::from(backend_config.db_path.clone());
+
+        let db_path = self
+            .db_path
+            .unwrap_or_else(|| backend_config.db_path.join(".database.sqlite"));
+
+        Ok(NotmuchBackend {
+            account_config,
+            backend_config,
+            db_path,
+            mdir,
+        })
     }
 }
