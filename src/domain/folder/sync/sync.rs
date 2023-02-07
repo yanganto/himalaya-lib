@@ -149,23 +149,22 @@ impl<'a> SyncBuilder<'a> {
 
         self.try_progress(BackendSyncProgressEvent::BuildFoldersPatch);
 
-        let (backend_patch, folders) = build_patch(
+        let (patch, folders) = build_patch(
             local_folders_cached,
             local_folders,
             remote_folders_cached,
             remote_folders,
         );
 
-        self.try_progress(BackendSyncProgressEvent::ProcessFoldersPatch(
-            backend_patch.len(),
-        ));
+        self.try_progress(BackendSyncProgressEvent::ProcessFoldersPatch(patch.len()));
 
-        debug!("folders patch: {:#?}", backend_patch);
+        debug!("folders patch: {:#?}", patch);
 
         let mut report = SyncReport::default();
 
         if self.dry_run {
             info!("dry run enabled, skipping folders patch");
+            report.patch = patch.into_iter().map(|patch| (patch, None)).collect();
         } else {
             let process_hunk = |hunk: &Hunk| {
                 Result::Ok(match hunk {
@@ -212,7 +211,7 @@ impl<'a> SyncBuilder<'a> {
                 })
             };
 
-            report = backend_patch
+            report = patch
                 .par_iter()
                 .fold(SyncReport::default, |mut report, hunk| {
                     let hunk_str = hunk.to_string();

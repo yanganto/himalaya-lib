@@ -240,6 +240,11 @@ impl<'a> SyncBuilder<'a> {
 
         if self.dry_run {
             info!("dry run enabled, skipping envelopes patch");
+            report.patch = patch
+                .into_iter()
+                .flatten()
+                .map(|patch| (patch, None))
+                .collect();
         } else {
             let process_hunk = |hunk: &BackendHunk| {
                 Result::Ok(match hunk {
