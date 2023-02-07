@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2023-02-07
+
 ### Added
 
 * Made backend functions accept a vector of id instead of a single id
@@ -82,9 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Moved `Email::fold_text_plain_parts` to `Parts::to_readable`. It
   take now a `PartsReaderOptions` as parameter:
-  
   * `plain_first`: shows plain texts first, switch to html if empty.
-  
   * `sanitize`: sanitizes or not text bodies (both plain and html).
 
 ### Fixed
@@ -157,4 +157,12 @@ repository.
 
 [patch#1]: https://lists.sr.ht/~soywod/himalaya-lib/%3C20220929084520.98165-1-me%40paulrouget.com%3E
 
-[#20]: https://todo.sr.ht/~soywod/himalaya/20
+[#20]: https://todo.sr.ht/~soywod/pimalaya/20
+
+[0.5.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.5.0
+[0.4.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.4.0
+[0.3.1]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.3.1
+[0.3.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.3.0
+[0.2.1]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.2.1
+[0.2.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.2.0
+[0.1.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.1.0
