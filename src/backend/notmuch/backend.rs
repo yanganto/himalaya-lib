@@ -783,7 +783,7 @@ impl NotmuchBackendBuilder {
         self,
         account_config: Cow<'a, AccountConfig>,
         backend_config: Cow<'a, NotmuchConfig>,
-    ) -> Result<NotmuchBackend> {
+    ) -> Result<NotmuchBackend<'a>> {
         let mdir = maildir::Maildir::from(backend_config.db_path.clone());
 
         let db_path = self

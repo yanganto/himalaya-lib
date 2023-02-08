@@ -1,4 +1,4 @@
-# 📫 Himalaya
+# 📫 Himalaya lib
 
 Rust library for email management.
 
@@ -27,8 +27,8 @@ let imap_config = ImapConfig {
 };
 let backend_config = BackendConfig::Imap(&imap_config);
 
-let mut backend = BackendBuilder::build(&account_config, &backend_config).unwrap();
-backend.list_envelope("INBOX", 10, 0).unwrap();
+let mut backend = BackendBuilder::new().build(&account_config, &backend_config).unwrap();
+backend.list_envelopes("INBOX", 10, 0).unwrap();
 backend.move_email("INBOX", "Archives", "21").unwrap();
 backend.delete_email("INBOX", "42").unwrap();
 
@@ -42,19 +42,20 @@ before the `v1.0.0`.*
 
 ## Introduction
 
-The role of this library is to extract and expose an
-<abbr title="application programming interface">API</abbr> for
-managing emails. This way, you can build clients that match the best
-your workflow without reiventing the wheel. Here the list of available
+The role of this library is to extract and expose an <abbr
+title="application programming interface">API</abbr> for managing
+emails. This way, you can build clients that match the best your
+workflow without reiventing the wheel. Here the list of available
 clients built by the community:
 
-- [<abbr title="command-line interface">CLI</abbr>](https://github.com/soywod/himalaya)
-- [Vim plugin](https://git.sr.ht/~soywod/himalaya-vim)
-- [Emacs plugin](https://git.sr.ht/~soywod/himalaya-emacs) (beta)
-- <abbr title="graphical user interface">GUI</abbr> (coming soon)
-- <abbr title="text-based user interfaces">TUI</abbr>
-- Web server
-- …
+* [<abbr title="command-line
+  interface">CLI</abbr>](https://github.com/soywod/himalaya)
+* [Vim plugin](https://git.sr.ht/~soywod/himalaya-vim)
+* [Emacs plugin](https://github.com/dantecatalfamo/himalaya-emacs)
+* <abbr title="graphical user interface">GUI</abbr> (coming soon)
+* <abbr title="text-based user interfaces">TUI</abbr>
+* Web server
+* …
 
 ## Features
 
@@ -70,7 +71,8 @@ clients built by the community:
 - Multi-accounting
 - Folder aliases
 - <abbr title="Pretty Good Privacy">PGP</abbr> end-to-end encryption
-- <abbr title="Internet Message Access Protocol">IMAP</abbr> IDLE mode for real-time notifications
+- <abbr title="Internet Message Access Protocol">IMAP</abbr> IDLE mode
+  for real-time notifications
 - …
 
 ## Development
@@ -80,15 +82,11 @@ The development environment is managed by
 a shell with everything you need to get started with the lib: `cargo`,
 `cargo-watch`, `rust-bin`, `rust-analyzer`, `notmuch`…
 
-####### Starts a Nix shell
-
 ```shell-session
+# Starts a Nix shell
 $ nix-shell
-```
 
-####### Then builds the lib
-
-```shell-session
+# then builds the lib
 $ cargo build
 ```
 
@@ -109,15 +107,30 @@ $ cargo test
 
 ## Contributing
 
-If you find a bug, feel free to open an issue at
-[~soywod/himalaya-lib](https://todo.sr.ht/~soywod/himalaya-lib).
+If you find a **bug**, please send an email at
+[~soywod/pimalaya@todo.sr.ht](mailto:~soywod/pimalaya@todo.sr.ht).
 
-If you have a feature in mind, feel free to send a patchset at
-https://git.sr.ht/~soywod/himalaya-lib/send-email or using the
-command `git send-email`.
+If you have a **question**, please send an email at
+[~soywod/pimalaya@lists.sr.ht](mailto:~soywod/pimalaya@lists.sr.ht).
 
-You can also contact me directly on [Matrix](https://matrix.org/) at
-[@soywod:matrix.org](https://matrix.to/#/@soywod:matrix.org).
+If you want to **propose a feature** or **fix a bug**, please send a
+patch at
+[~soywod/pimalaya@lists.sr.ht](mailto:~soywod/pimalaya@lists.sr.ht)
+using [git send-email](https://git-scm.com/docs/git-send-email) (see
+[this guide](https://git-send-email.io/) on how to configure it).
+
+If you want to **subscribe** to the mailing list, please send an email
+at
+[~soywod/pimalaya+subscribe@lists.sr.ht](mailto:~soywod/pimalaya+subscribe@lists.sr.ht).
+
+If you want to **unsubscribe** to the mailing list, please send an
+email at
+[~soywod/pimalaya+unsubscribe@lists.sr.ht](mailto:~soywod/pimalaya+unsubscribe@lists.sr.ht).
+
+If you want to **discuss** about the project, feel free to join the
+[Matrix](https://matrix.org/) workspace
+[#pimalaya](https://matrix.to/#/#pimalaya:matrix.org) or contact me
+directly [@soywod](https://matrix.to/#/@soywod:matrix.org).
 
 ## Credits
 

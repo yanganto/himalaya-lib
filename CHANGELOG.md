@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2023-02-08
+
+### Fixed
+
+* Fixed `notmuch` backend compilation error on rustc `v1.67+`.
+
 ## [0.5.0] - 2023-02-07
 
 ### Added
@@ -159,6 +165,7 @@ repository.
 
 [#20]: https://todo.sr.ht/~soywod/pimalaya/20
 
+[0.5.1]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.5.1
 [0.5.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.5.0
 [0.4.0]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.4.0
 [0.3.1]: https://git.sr.ht/~soywod/himalaya-lib/refs/v0.3.1
