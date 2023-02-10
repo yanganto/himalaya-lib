@@ -2,6 +2,9 @@
 use concat_with::concat_line;
 #[cfg(feature = "imap-backend")]
 use std::borrow::Cow;
+use std::process::{Child, Command};
+use std::thread::sleep;
+use std::time::{Duration, SystemTime};
 
 #[cfg(feature = "imap-backend")]
 use himalaya_lib::{
@@ -9,10 +12,62 @@ use himalaya_lib::{
     DEFAULT_INBOX_FOLDER,
 };
 
+struct ImapTestServer {
+    child: Child,
+}
+
+impl ImapTestServer {
+    fn setup() -> Self {
+        Self {
+            child: Command::new("java")
+                .args(&[
+                    "-Dgreenmail.setup.test.all",
+                    "-Dgreenmail.hostname=0.0.0.0",
+                    "-Dgreenmail.auth.disabled",
+                    "-jar",
+                    "tests/assets/greenmail-standalone-1.6.13.jar",
+                ])
+                .spawn()
+                .expect("fail to swapn imap test server"),
+        }
+    }
+
+    fn wait_for_ready(&self, timeout: u64) -> Result<(), ()> {
+        let start = SystemTime::now();
+        let mut now = SystemTime::now();
+
+        while now.duration_since(start).expect("clock go backwards") < Duration::from_secs(timeout)
+        {
+            if reqwest::blocking::get("http://127.0.0.1:8080")
+                .map(|s| s.status() == 200)
+                .unwrap_or_default()
+            {
+                return Ok(());
+            }
+            sleep(Duration::from_secs(1));
+            now = SystemTime::now();
+        }
+        Err(())
+    }
+}
+
+impl Drop for ImapTestServer {
+    fn drop(&mut self) {
+        self.child
+            .kill()
+            .expect("test server alreay crash without expected");
+    }
+}
+
 #[cfg(feature = "imap-backend")]
+#[test_with::executable(java, gpg)]
 #[test]
 fn test_imap_backend() {
     env_logger::builder().is_test(true).init();
+    let test_server = ImapTestServer::setup();
+    test_server
+        .wait_for_ready(10)
+        .expect("imap test server prepare too long");
 
     let config = AccountConfig {
         email_reading_decrypt_cmd: Some(String::from(
@@ -127,4 +182,6 @@ fn test_imap_backend() {
     imap.delete_folder("Sent").unwrap();
     imap.delete_folder("Отправленные").unwrap();
     imap.close().unwrap();
+
+    drop(test_server)
 }

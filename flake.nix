@@ -36,6 +36,9 @@
               # Email tools
               notmuch
               msmtp
+
+              gnupg
+              openjdk17-bootstrap
             ];
           };
         }
